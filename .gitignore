@@ -32,3 +32,5 @@ venv/
 # Local tooling state
 ruvector.db
 
+agentdb.rvf
+agentdb.rvf.lock
