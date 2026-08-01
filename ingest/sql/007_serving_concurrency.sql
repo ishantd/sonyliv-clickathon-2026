@@ -111,11 +111,31 @@ COMMENT 'Live concurrency at 10-second grain. Best-effort: rebuilt continuously 
 --
 --    0  ungrouped                          the headline exact peak
 --    1  platform                           exact peak per platform
+--    2  country                            exact peak per country
+--    3  platform + country                 named by the problem statement
 --    4  content_id                         exact peak per title
+--    5  platform + content                 named by the problem statement
 --    8  video_type                         exact peak per VOD/live
+--    9  platform + video_type
+--   12  content + video_type
+--   15  platform + country + content + video_type
 --   16  app_version                        exact peak per build
 --   32  category                           exact peak per catalogue category
---   63  all five at once (full grain)      arbitrary filter combinations
+--   63  all six at once (full grain)       arbitrary filter combinations
+--
+-- 0/1/2/3/4/5/8/9/12/15 are the ten masks solution/policy.yaml:118-134 specifies;
+-- 16, 32 and 63 extend it with app_version, category and the full grain.
+--
+-- The combinations are the point, not padding. An exact peak has to be computed AT
+-- the grouping it is reported for: measured on the hot hour, ANDROID_PHONE peaks at
+-- 1,461 read from mask 1, while max() over mask 63 rows grouped by platform gives
+-- 223 — understating it 6.5x, because a maximum of finer-grain peaks is not the peak
+-- of the coarser grouping. The problem statement names platform+content and
+-- platform+country as exactly this trap.
+--
+-- Combinations NOT in the list (platform + app_version, say) still get exact
+-- averages and exact instantaneous counts from mask 63, because active_ms and
+-- ending_concurrency are additive; only their peak degrades to an upper bound.
 --
 -- Mask 63 is what makes the dashboard's filters compose. Under a combined
 -- filter, sum(active_ms) and sum(ending_concurrency) stay exact; max(minute_peak)
@@ -137,7 +157,7 @@ CREATE TABLE IF NOT EXISTS {{db}}.serving_concurrency_minute
         COMMENT 'Left edge of a 1-minute bucket, half-open [minute_start, +60s). Bucketed on absolute time, so an interval crossing midnight lands in both days without a clipping step',
 
     dim_mask            UInt16
-        COMMENT 'platform=1, country=2, content_id=4, video_type=8, app_version=16, category=32. Materialized: 0, 1, 4, 8, 16, 32, 63',
+        COMMENT 'platform=1, country=2, content_id=4, video_type=8, app_version=16, category=32. Materialized: 0,1,2,3,4,5,8,9,12,15,16,32,63 — the ten policy masks plus app_version, category and full grain',
 
     content_id          Int64,
     platform            LowCardinality(String) COMMENT 'Empty string when not selected by dim_mask',

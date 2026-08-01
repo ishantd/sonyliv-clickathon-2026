@@ -11,9 +11,9 @@
 -- reasoning is documented there rather than repeated here. Three things differ:
 --
 --   * 60-second buckets instead of 10;
---   * seven dimension masks instead of two, so every single-dimension exact peak
---     is available and mask 63 carries the full grain that arbitrary dashboard
---     filters compose against;
+--   * thirteen dimension masks instead of two, so every grouping the benchmark
+--     asks about has an exact peak precomputed AT that grouping, and mask 63
+--     carries the full grain that arbitrary dashboard filters compose against;
 --   * session counts, which the live layer has no use for.
 --
 -- concurrency/sql/090_validate_serving.sql cross-checks the two layers against
@@ -107,8 +107,25 @@ WITH
             opened_here,
             closed_here
         FROM bounds
-        ARRAY JOIN [toUInt16(0), toUInt16(1), toUInt16(4), toUInt16(8),
-                    toUInt16(16), toUInt16(32), toUInt16(63)] AS m
+        -- The ten masks solution/policy.yaml:118-134 specifies, plus three
+        -- extensions. Only the fan-out list changes to add a mask: the blanking
+        -- above is driven by bitAnd, so it already handles any bit combination.
+        --
+        --   policy    0  1  2  3  4  5  8  9  12  15
+        --   extended  16 (app_version)  32 (category)  63 (full grain)
+        --
+        -- The COMBINATIONS are why this list is not just the single bits. The
+        -- problem statement calls it out directly: "a dimension like platform and a
+        -- content might peak at one minute, while a combination like platform +
+        -- country might reach its peak at an entirely different minute". A peak for
+        -- a grouping has to be computed AT that grouping — measured on the hot hour,
+        -- ANDROID_PHONE peaks at 1,461 read from mask 1, but taking max() over
+        -- mask 63 rows grouped by platform gives 223, understating it 6.5x, because
+        -- a maximum of finer-grain peaks is not the peak of the coarser grouping.
+        ARRAY JOIN [toUInt16(0),  toUInt16(1),  toUInt16(2),  toUInt16(3),
+                    toUInt16(4),  toUInt16(5),  toUInt16(8),  toUInt16(9),
+                    toUInt16(12), toUInt16(15), toUInt16(16), toUInt16(32),
+                    toUInt16(63)] AS m
         WHERE e_ms > s_ms
     ),
 
