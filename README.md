@@ -15,7 +15,9 @@ concurrent `docs/` / `prototype/` draft untouched for end-of-session comparison.
 Current verified reference result for the supplied source hashes and policy
 `sonyliv-active-v1`: 31,947 active intervals; exact hot-hour peak 2,305 and
 time-weighted average 855.578199 sessions. These are correctness-oracle outputs,
-not ClickHouse Cloud latency claims.
+not ClickHouse Cloud latency claims. The executable late-pause test also proves
+that touched-session corrections converge exactly with a fresh full-source
+rebuild and reject duplicate publication retries.
 
 ## Team
 

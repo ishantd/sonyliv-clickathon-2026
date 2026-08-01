@@ -171,6 +171,16 @@ minute cache, exact bucket query, and publication gates. Under policy
   intervals, negative prefix points, unbalanced days, global/platform delta
   mismatches, and content misses are all zero. Cache active-milliseconds equal
   clipped reference interval milliseconds (`6,018,191,556`) for July 26.
+- A deterministic late pause at `2026-07-26 10:27:46.358 UTC` dirties exactly
+  one session and emits 320 unique compensating rows (160 session, 160 user)
+  with signed row sum zero. The current state table, corrected serving curve,
+  and a fresh full-source rebuild each produce exactly `6,404,143,590` active
+  milliseconds.
+- The corrected generation passes exact per-minute parity and all full-source
+  gates, changing the hot-hour result to peak 2,304 and average 855.041077.
+  Republishing the same adjustment batch and rebuilding the same generation are
+  both rejected; a partial-minute cache request is also rejected for exact-query
+  routing.
 
 These are correctness results from embedded ClickHouse, not target-Cloud latency
 claims. The full record is `evidence/embedded-verification.json`.

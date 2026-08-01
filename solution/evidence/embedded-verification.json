@@ -12,23 +12,28 @@
     "event_users": 9618,
     "used_content_ids": 3357
   },
-  "intervals": {
-    "count": 31947,
+  "initial_build": {
+    "dirty_operations": 10866,
+    "touched_sessions": 10866,
+    "candidate_sessions": 10866,
+    "candidates_without_active_intervals": 18,
+    "intervals": 31947,
     "active_sessions": 10848,
     "active_session_hours": 1779.502796,
-    "cross_day_active_intervals": 0
-  },
-  "boundaries": {
-    "adjustment_rows_all_10_masks_both_entities": 1268514,
+    "boundary_adjustment_rows": 1268514,
     "session_adjustments": 638940,
     "user_adjustments": 629574,
-    "unique_point_keys": 1264879
+    "unique_point_keys": 1264879,
+    "checkpointed_sessions": 10866
   },
   "hot_hour_2026_07_26_10_to_11_utc": {
     "exact_peak": 2305,
     "exact_time_weighted_average": 855.578199,
     "minute_rows": 60,
-    "endpoint_query_matches_minute_cache": true
+    "endpoint_query_matches_minute_cache": true,
+    "generation": 1,
+    "source_delta_snapshot": 1,
+    "answer_hash": "4901030C9F52D922B5021778DEFCDB84DC14A9D8FDC9C8F7811A7C6E1A169D12"
   },
   "session_independent_hot_hour": {
     "exact_minute_boundary_sample_peak": 2285,
@@ -37,7 +42,8 @@
     "maximum_overcount": 938,
     "minute_boundary_rows": 60
   },
-  "publication_gates": {
+  "initial_publication_gates": {
+    "candidate_minute_parity_failures": 0,
     "invalid_intervals": 0,
     "overlapping_intervals": 0,
     "intervals_after_first_terminal_end": 0,
@@ -45,17 +51,40 @@
     "negative_curve_points": 0,
     "global_platform_point_mismatches": 0,
     "content_dictionary_misses": 0,
-    "cached_active_ms_equals_clipped_interval_ms": true,
+    "duplicate_published_batch_rows": 0,
+    "duplicate_boundary_operations": 0,
+    "active_millisecond_conservation_failures": 0,
     "cached_active_ms": 6018191556
   },
-  "measured_local_execution_seconds": {
-    "raw_load": 0.470,
-    "interval_build": 0.770,
-    "boundary_publish": 1.314,
-    "minute_cache": 0.034,
-    "exact_bucket_query": 0.034,
-    "session_independent_baseline": 0.270,
-    "validation": 0.321
+  "late_pause_correction_fixture": {
+    "video_session_id": "F49ED5392C2F63A9FC977EED5DA171360D465B3307BA3DB08E538C46DA3AD4E0",
+    "original_interval_start": "2026-07-26 09:53:19.884",
+    "inserted_pause_time": "2026-07-26 10:27:46.358",
+    "original_interval_end": "2026-07-26 11:02:12.832",
+    "touched_sessions": 1,
+    "candidate_sessions": 1,
+    "checkpointed_sessions": 1,
+    "correction_adjustment_rows": 320,
+    "session_adjustments": 160,
+    "user_adjustments": 160,
+    "unique_operations": 320,
+    "signed_row_sum": 0,
+    "current_state_active_ms": 6404143590,
+    "corrected_serving_active_ms": 6404143590,
+    "fresh_full_oracle_active_ms": 6404143590,
+    "converged": true,
+    "candidate_minute_parity_failures": 0,
+    "full_validation_failures": 0,
+    "corrected_hot_hour_peak": 2304,
+    "corrected_hot_hour_time_weighted_average": 855.041077,
+    "generation": 2,
+    "source_delta_snapshot": 2,
+    "answer_hash": "4F5A99F4AA76972391896D1EBABD59D0579AD7B49B48392961C6044CB8CB210D"
   },
-  "latency_scope_warning": "Embedded laptop timings are syntax/correctness evidence only; they are not ClickHouse Cloud benchmark claims."
+  "hard_guards": {
+    "published_adjustment_batch_retry_rejected": true,
+    "existing_minute_generation_retry_rejected": true,
+    "partial_minute_cache_request_routed_to_exact": true
+  },
+  "latency_scope_warning": "Embedded laptop execution is syntax and correctness evidence only; it is not a ClickHouse Cloud latency benchmark."
 }

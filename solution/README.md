@@ -231,6 +231,14 @@ raw-history rebuild. Independently rebuild each completed day from raw intervals
 and compare hashes, active-milliseconds, peak results, delta balance, and query
 logs before the manifest switches generation.
 
+The checked-in fixture proves the whole correction path: one late pause dirties
+one session, emits 320 unique signed rows across the ten session and ten user
+masks, and leaves a zero signed row sum. Current state, the correction-backed
+serving curve, and a fresh full-source oracle all converge to exactly
+`6,404,143,590` active milliseconds. Reusing the batch ID or minute generation
+hard-fails; a partial-minute dashboard request is rejected and routed to the
+exact endpoint query.
+
 No scheduled `OPTIMIZE FINAL`, `ALTER UPDATE`, or `ALTER DELETE` is part of the
 pipeline.
 
@@ -264,17 +272,24 @@ benchmark query through the minute serving table.
 
 ## Unseen-day runbook
 
-1. Save raw/content bytes, SHA-256, row count, schema, UTC range, and policy YAML.
-2. Load deterministic Native blocks; retain query IDs and insert manifests.
+1. Save raw/content bytes, SHA-256, row count, schema, UTC range, and
+   `policy.yaml`; allocate one stable `pipeline_run_id`.
+2. Run `00_schema.sql`, then load deterministic Native blocks using steps 01–02;
+   retain query IDs, deduplication tokens, and input manifests.
 3. Run `05_profile_loaded_data.sql`; fail on ID/type/content/contract drift.
-4. Drain touched sessions; publish signed corrections exactly once.
-5. Build minute generations for the benchmark masks.
-6. Run `40_validation.sql`, the independent full-day oracle, shuffled replay,
-   duplicate replay, and late-pause correction fixtures.
-7. Publish the manifest only after validation; run fixed queries with cold/warm
-   cache labels and capture `system.query_log` rows, bytes, memory, and latency.
-8. Sort answers deterministically and record an answer SHA plus ClickStack trace
-   IDs. This is the required pipeline evidence bundle.
+4. For each correction batch, run steps 11 → 10 (scoped) → 12 → 13 → 20 → 14.
+   A crash retry reuses the same batch ID and tokens; a published ID is never
+   recycled.
+5. Seal the published adjustment-ledger cutoff with step 25, then build each
+   required `(day,entity,mask)` candidate with step 31.
+6. Run the sealed-point per-minute parity gate in step 34 and the independent
+   raw-interval gates in step 40, including shuffled replay, duplicate replay,
+   tied-boundary, and late-pause fixtures.
+7. Run step 35 only after every gate passes. Serve aligned ranges with step 32;
+   route partial-minute/cross-day ranges to step 30.
+8. Execute fixed cold/warm queries, record deterministic answer SHA and
+   ClickStack trace IDs, and capture `system.query_log` rows, bytes, memory, and
+   latency. That bundle—not a laptop runtime—is the performance evidence.
 
 Never claim dashboard latency before running on the target ClickHouse Cloud
 service. A sensible field target is sub-second p95 warm, but the evidence must be
@@ -302,9 +317,18 @@ must record its version.
 - `sql/01_ingest_raw_csv.sql`, `02_ingest_content_csv.sql` — deterministic load.
 - `sql/05_profile_loaded_data.sql` — evidence reproduction.
 - `sql/10_reference_intervals.sql` — exact event-time state oracle/backfill.
+- `sql/11_select_touched_workset.sql` — append-only dirty-operation drain.
+- `sql/12_stage_session_candidates.sql` — includes zero-active replacements.
+- `sql/13_apply_state_differences.sql` — session/user old-new interval maps.
+- `sql/14_checkpoint_touched_batch.sql` — post-publication dirty checkpoint.
 - `sql/20_publish_boundaries.sql` — session/user maps and signed corrections.
+- `sql/25_seal_delta_snapshot.sql` — immutable correction-ledger cutoff.
 - `sql/30_exact_metrics.sql` — exact arbitrary bucket query.
 - `sql/31_refresh_minute_cache.sql`, `32_dashboard_queries.sql` — serving cache.
+- `sql/34_validate_candidate_generation.sql` — full per-minute snapshot parity.
+- `sql/35_publish_generation.sql` — answer hash and atomic manifest publication.
 - `sql/40_validation.sql` — publication gates.
 - `sql/60_session_independent_baseline.sql` — non-authoritative comparison path.
+- `tools/verify_embedded.py` — hash-locked executable correctness/correction test.
+- `evidence/embedded-verification.json` — compact checked-run evidence record.
 - `BEST_PRACTICES.md` — all 31 skill rules and five architecture decisions.
