@@ -116,7 +116,7 @@ export default function LivePage() {
       <Panel title="how to read the gap">
         <ul className="grid gap-2 text-[0.8125rem] leading-relaxed text-ink-2">
           <li>
-            <span className="text-live">Solid</span> is the fleet&apos;s own
+            <span className="text-accent">Solid</span> is the fleet&apos;s own
             record. It did not infer activity — it decided the state and wrote the
             interval down at the moment of each transition, so it is exact by
             construction.

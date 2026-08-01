@@ -91,11 +91,11 @@ export function CurveChart({
           </g>
         ))}
 
-        <path d={area} fill="var(--color-live)" opacity="0.14" />
+        <path d={area} fill="var(--color-accent)" opacity="0.14" />
         <path
           d={line}
           fill="none"
-          stroke="var(--color-live)"
+          stroke="var(--color-accent)"
           strokeWidth="1.5"
           strokeLinejoin="round"
         />
@@ -105,7 +105,7 @@ export function CurveChart({
           cx={x(points.length - 1)}
           cy={y(last.sessions)}
           r="3"
-          fill="var(--color-live)"
+          fill="var(--color-accent)"
         />
 
         <line

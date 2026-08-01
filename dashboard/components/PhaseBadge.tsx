@@ -10,9 +10,9 @@ import type { FleetPhase } from "@/lib/types";
  * miss.
  */
 const styles: Record<FleetPhase, string> = {
-  active: "border-live/50 bg-live-wash text-live",
-  paused: "border-line bg-sunken text-ink-2",
-  backgrounded: "border-line bg-sunken text-ink-2",
+  active: "border-accent/50 bg-accent-wash text-accent",
+  paused: "border-line bg-raised text-ink-2",
+  backgrounded: "border-line bg-raised text-ink-2",
   expired: "border-bad/40 bg-bad-wash text-bad",
   ended: "border-line-soft bg-sunken text-ink-3",
 };

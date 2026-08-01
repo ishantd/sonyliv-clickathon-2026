@@ -518,8 +518,8 @@ func TestRemoveEndedReclaimsCapacity(t *testing.T) {
 	}
 	cmd(t, r, views[0].ID, CmdEnd, at(time.Second))
 
-	if n := r.RemoveEnded(); n != 1 {
-		t.Fatalf("removed %d, want 1", n)
+	if got := r.RemoveEnded(); len(got) != 1 {
+		t.Fatalf("removed %v, want 1 id", got)
 	}
 	if _, total := r.List(Filter{}, 0, 50, at(time.Second)); total != 2 {
 		t.Errorf("total after removal %d, want 2", total)

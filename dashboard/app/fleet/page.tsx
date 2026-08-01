@@ -231,7 +231,7 @@ export default function FleetPage() {
                   <Th>platform</Th>
                   <Th right>events</Th>
                   <Th right>active</Th>
-                  <Th right>lease expires</Th>
+                  <Th right>expires</Th>
                 </tr>
               </thead>
               <tbody>
@@ -258,7 +258,7 @@ export default function FleetPage() {
                     <Td>
                       <Link
                         href={`/fleet/session/?id=${s.video_session_id}`}
-                        className="font-mono text-xs text-accent hover:underline"
+                        className="font-mono text-xs text-ink-2 transition-colors hover:text-accent hover:underline"
                       >
                         {s.video_session_id.slice(0, 12)}…
                       </Link>
@@ -291,7 +291,7 @@ export default function FleetPage() {
                       {seconds(s.active_ms)}
                     </Td>
                     <Td right mono>
-                      {clockTime(s.lease_expires)}
+                      {clockTime(s.expires_at)}
                     </Td>
                   </tr>
                 ))}

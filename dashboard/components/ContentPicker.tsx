@@ -79,7 +79,7 @@ export function ContentPicker({
                     onClick={() => onPick(c)}
                     className="flex w-full items-baseline gap-2 border-b border-line-soft px-2.5 py-1.5 text-left text-[0.8125rem] last:border-b-0 hover:bg-sunken"
                   >
-                    <span className={isPicked ? "text-live" : "text-ink"}>
+                    <span className={isPicked ? "text-accent" : "text-ink"}>
                       {c.title || "(untitled)"}
                     </span>
                     <span className="tnum ml-auto font-mono text-[0.6875rem] whitespace-nowrap text-ink-3">

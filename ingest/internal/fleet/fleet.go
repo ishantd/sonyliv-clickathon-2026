@@ -3,6 +3,7 @@ package fleet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sync"
 	"time"
@@ -35,6 +36,12 @@ const (
 	flushRows     = 5000
 
 	enqueueTimeout = 5 * time.Second
+
+	// saveInterval is how often changed sessions are written to the Store. Five
+	// seconds bounds what a crash can lose to five seconds of state, while keeping
+	// the write rate far below the heartbeat rate — and only dirty sessions go, so
+	// an idle fleet writes nothing at all.
+	saveInterval = 5 * time.Second
 )
 
 // ErrQueueFull is returned when the write queue cannot accept a batch in time.
@@ -54,19 +61,84 @@ type WriteStats struct {
 type Fleet struct {
 	*Registry
 
-	sink Sink
-	out  chan []model.RawEvent
+	sink  Sink
+	store Store
+	out   chan []model.RawEvent
 
 	mu    sync.Mutex
 	stats WriteStats
 }
 
 // New builds a fleet. timeout is the liveness lease; it must match the pipeline's.
-func New(sink Sink, timeout time.Duration, seed int64) *Fleet {
+//
+// store may be nil, in which case the fleet is memory-only and a restart loses its
+// sessions. That is a supported mode, not a degraded one: the stepper and the load
+// simulator have always worked that way, and a fleet driven for a five-minute demo
+// does not need a table.
+func New(sink Sink, store Store, timeout time.Duration, seed int64) *Fleet {
 	return &Fleet{
 		Registry: NewRegistry(timeout, seed),
 		sink:     sink,
+		store:    store,
 		out:      make(chan []model.RawEvent, 1024),
+	}
+}
+
+// Reconcile restores persisted sessions and catches them up to now.
+//
+// Called once at startup, before Run. Any events the catch-up produces — the
+// VideoSessionEnd of a session whose TTL elapsed while the process was down — are
+// written immediately rather than queued, because they are the reason the restored
+// state is consistent and losing them would leave sessions ClickHouse still
+// believes are open.
+func (f *Fleet) Reconcile(ctx context.Context) (int, error) {
+	if f.store == nil {
+		return 0, nil
+	}
+	rows, err := f.store.Load(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("load fleet state: %w", err)
+	}
+	events := f.Restore(rows, time.Now().UTC().Truncate(time.Millisecond))
+	if len(events) > 0 {
+		if err := f.sink.Send(ctx, events); err != nil {
+			return len(rows), fmt.Errorf("write catch-up events: %w", err)
+		}
+	}
+	// Persist whatever the catch-up changed, so a crash loop does not replay the
+	// same expiries into events_raw on every restart.
+	f.persist(ctx)
+	return len(rows), nil
+}
+
+// ClearEnded drops ended sessions and tombstones them in the store.
+//
+// Overrides the Registry method of the same name so the store cannot keep handing
+// back rows the operator already cleared — without the tombstone, the next restart
+// would resurrect every session the list was emptied of.
+func (f *Fleet) ClearEnded(ctx context.Context) int {
+	ids := f.Registry.RemoveEnded()
+	if len(ids) > 0 && f.store != nil {
+		if err := f.store.Save(ctx, removedRows(ids, time.Now().UTC())); err != nil {
+			log.Printf("fleet: tombstone %d cleared sessions: %v", len(ids), err)
+		}
+	}
+	return len(ids)
+}
+
+// persist writes changed sessions to the store, if there is one.
+func (f *Fleet) persist(ctx context.Context) {
+	if f.store == nil {
+		return
+	}
+	rows := f.snapshot()
+	if len(rows) == 0 {
+		return
+	}
+	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := f.store.Save(sctx, rows); err != nil {
+		log.Printf("fleet: persist %d sessions: %v", len(rows), err)
 	}
 }
 
@@ -100,6 +172,8 @@ func (f *Fleet) Run(ctx context.Context) {
 	defer sweep.Stop()
 	flush := time.NewTicker(flushInterval)
 	defer flush.Stop()
+	save := time.NewTicker(saveInterval)
+	defer save.Stop()
 
 	buf := make([]model.RawEvent, 0, flushRows)
 
@@ -129,7 +203,13 @@ func (f *Fleet) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			send(buf)
+			// Final persist on the way out, so a clean shutdown loses nothing.
+			f.persist(ctx)
 			return
+
+		case <-save.C:
+			f.persist(ctx)
+			continue
 
 		case <-sweep.C:
 			buf = append(buf, f.Sweep(time.Now().UTC().Truncate(time.Millisecond))...)

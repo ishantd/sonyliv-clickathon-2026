@@ -38,6 +38,7 @@ export default function CreateSessionsPage() {
   const [appVersion, setAppVersion] = useState("6.34.8");
   const [country, setCountry] = useState("india");
   const [cadence, setCadence] = useState(30);
+  const [ttl, setTtl] = useState(60);
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -69,6 +70,7 @@ export default function CreateSessionsPage() {
         app_version: appVersion,
         country,
         cadence_seconds: cadence,
+        ttl_minutes: ttl,
       });
       router.push("/fleet/");
     } catch (e) {
@@ -164,8 +166,24 @@ export default function CreateSessionsPage() {
           </div>
 
           <div className="mt-3">
+            <Field
+              label="session lifetime (minutes)"
+              hint="1 to 1440. At the end the simulator writes a real VideoSessionEnd. There is no 'never': a fleet without a lifetime keeps writing into events_raw long after anyone is watching."
+            >
+              <input
+                type="number"
+                min={1}
+                max={1440}
+                value={ttl}
+                onChange={(e) => setTtl(Math.max(0, +e.target.value))}
+              />
+            </Field>
+          </div>
+
+          <div className="mt-3">
             <StatGrid>
               <Stat label="steady rate" value={`${eventsPerSec.toFixed(1)}/s`} />
+              <Stat label="events total" value={num(Math.round(eventsPerSec * ttl * 60))} />
               <Stat
                 label="live now"
                 value={num(live)}
@@ -217,8 +235,14 @@ export default function CreateSessionsPage() {
             <span className="text-ink">silence</span> or end any one of them.
           </li>
           <li>
-            The live graph plots what the fleet recorded against what ClickHouse
-            infers from the same events.
+            After <span className="text-ink">{ttl} minutes</span> each session
+            ends itself with a real <code>VideoSessionEnd</code>, so a fleet left
+            running stops on its own.
+          </li>
+          <li>
+            State is written to <code>fleet_sessions</code>, so a restart restores
+            the fleet rather than losing it while its events stay in{" "}
+            <code>events_raw</code>.
           </li>
         </ol>
         <Caveat>

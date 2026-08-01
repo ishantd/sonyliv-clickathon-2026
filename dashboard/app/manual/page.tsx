@@ -318,8 +318,8 @@ export default function EventStepper() {
                         className="border-b border-line-soft last:border-b-0"
                       >
                         <td
-                          className={`tnum border-l-2 px-2 py-1 whitespace-nowrap ${
-                            r.active ? "border-l-live" : "border-l-transparent"
+                          className={`tnum border-l px-2 py-1 whitespace-nowrap ${
+                            r.active ? "border-l-accent" : "border-l-transparent"
                           }`}
                         >
                           {clockTime(r.event_ts)}
@@ -329,12 +329,12 @@ export default function EventStepper() {
                           {r.signal}
                         </td>
                         <td
-                          className={`px-2 py-1 ${r.foreground ? "text-live" : "text-ink-3"}`}
+                          className={`px-2 py-1 ${r.foreground ? "text-accent" : "text-ink-3"}`}
                         >
                           {r.foreground ? "fg" : "bg"}
                         </td>
                         <td
-                          className={`px-2 py-1 ${r.playing ? "text-live" : "text-ink-3"}`}
+                          className={`px-2 py-1 ${r.playing ? "text-accent" : "text-ink-3"}`}
                         >
                           {r.playing ? "play" : "stop"}
                         </td>
@@ -342,7 +342,7 @@ export default function EventStepper() {
                           {clockTime(r.lease_expires)}
                         </td>
                         <td
-                          className={`px-2 py-1 ${r.active ? "text-live" : "text-ink-3"}`}
+                          className={`px-2 py-1 ${r.active ? "text-accent" : "text-ink-3"}`}
                         >
                           {r.active ? "ACTIVE" : "—"}
                         </td>

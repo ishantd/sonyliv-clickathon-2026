@@ -105,6 +105,9 @@ function SessionDetail() {
 
   const leaseMS = now ? new Date(s.lease_expires).getTime() - now : null;
   const withinLease = leaseMS === null ? null : leaseMS > 0;
+  // Two different clocks: the lease is 120s of missed heartbeats, the lifetime is
+  // the session's TTL. Showing both stops them being mistaken for each other.
+  const ttlMS = now ? new Date(s.expires_at).getTime() - now : null;
 
   return (
     <div className="grid gap-4">
@@ -137,6 +140,9 @@ function SessionDetail() {
           <span>
             cadence <span className="text-ink-2">{s.cadence_seconds}s</span>
           </span>
+          <span>
+            expires <span className="text-ink-2">{clockTime(s.expires_at)}</span>
+          </span>
         </div>
 
         <div className="mt-4">
@@ -160,6 +166,17 @@ function SessionDetail() {
               tone={withinLease === false ? "bad" : "plain"}
             />
             <Stat label="intervals" value={num(s.intervals.length)} />
+            <Stat
+              label="lifetime left"
+              value={
+                ttlMS === null
+                  ? "—"
+                  : ttlMS > 0
+                    ? `${Math.ceil(ttlMS / 60000)}m`
+                    : "expired"
+              }
+              tone={ttlMS !== null && ttlMS <= 0 ? "muted" : "plain"}
+            />
           </StatGrid>
         </div>
       </Panel>
@@ -291,7 +308,7 @@ function Term({
   detail: string;
 }) {
   const mark = ok === null ? "·" : ok ? "✓" : "✗";
-  const tone = ok === null ? "text-ink-3" : ok ? "text-live" : "text-bad";
+  const tone = ok === null ? "text-ink-3" : ok ? "text-accent" : "text-bad";
   return (
     <li className="flex items-baseline gap-2">
       <span className={`${tone} w-3`}>{mark}</span>

@@ -161,6 +161,8 @@ export interface FleetSession {
   country: string;
   start_epoch: string;
   cadence_seconds: number;
+  /** When the simulator retires this session on its own, with a real session_end. */
+  expires_at: string;
 
   phase: FleetPhase;
   active: boolean;
@@ -269,6 +271,7 @@ export interface FleetSpec {
   app_version: string;
   country: string;
   cadence_seconds: number;
+  ttl_minutes: number;
 }
 
 export interface FleetDimensions {

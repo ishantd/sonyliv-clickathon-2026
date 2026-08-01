@@ -46,6 +46,7 @@ type View struct {
 
 	StartEpoch     time.Time `json:"start_epoch"`
 	CadenceSeconds int       `json:"cadence_seconds"`
+	ExpiresAt      time.Time `json:"expires_at"`
 
 	Phase  Phase `json:"phase"`
 	Active bool  `json:"active"`
@@ -156,6 +157,7 @@ func (r *Registry) view(s *Session, now time.Time) *View {
 		Platform: s.Platform, AppVersion: s.AppVersion, Country: s.Country,
 		StartEpoch:     s.StartEpoch,
 		CadenceSeconds: int(s.Cadence / time.Second),
+		ExpiresAt:      s.ExpiresAt,
 		Phase:          s.phase(now, r.timeout),
 		Active:         s.isActive(now, r.timeout),
 		Started:        s.started, Ended: s.ended,
@@ -203,6 +205,15 @@ func (r *Registry) Create(sp Spec, now time.Time) ([]*View, []model.RawEvent, er
 		return nil, nil, fmt.Errorf("cadence must be between %s and %s", MinCadence, MaxCadence)
 	}
 	sp.CadenceSeconds = int(cadence / time.Second)
+
+	ttl := time.Duration(sp.TTLMinutes) * time.Minute
+	if ttl == 0 {
+		ttl = DefaultTTL
+	}
+	if ttl < MinTTL || ttl > MaxTTL {
+		return nil, nil, fmt.Errorf("ttl must be between %s and %s", MinTTL, MaxTTL)
+	}
+	sp.TTLMinutes = int(ttl / time.Minute)
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -456,6 +467,17 @@ func (r *Registry) Sweep(now time.Time) []model.RawEvent {
 			continue
 		}
 		s.reconcile(now, r.timeout)
+
+		// TTL first: a session past its expiry is ended cleanly rather than left
+		// heartbeating. This is what stops a fleet nobody is watching from writing
+		// into events_raw indefinitely, and it writes a real VideoSessionEnd so the
+		// pipeline sees a closed session rather than inferring abandonment.
+		if !s.ended && s.expired(now) {
+			rows = append(rows,
+				s.apply(model.PairSessionEnd, now, r.timeout, batchID, uint32(len(rows))))
+			continue
+		}
+
 		if s.ended || !s.heartbeating || now.Before(s.nextTick) {
 			continue
 		}
@@ -499,12 +521,12 @@ func (r *Registry) Stats(now time.Time) Stats {
 // it visible, which is what was asked for. This exists because MaxLive is a hard
 // cap: without a way to reclaim ended sessions you eventually cannot create more.
 // Events already in ClickHouse are untouched.
-func (r *Registry) RemoveEnded() int {
+func (r *Registry) RemoveEnded() []string {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	kept := make([]string, 0, len(r.order))
-	removed := 0
+	removed := make([]string, 0, 16)
 	for _, id := range r.order {
 		s, ok := r.sessions[id]
 		if !ok {
@@ -512,7 +534,7 @@ func (r *Registry) RemoveEnded() int {
 		}
 		if s.ended {
 			delete(r.sessions, id)
-			removed++
+			removed = append(removed, id)
 			continue
 		}
 		kept = append(kept, id)

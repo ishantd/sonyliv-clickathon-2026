@@ -65,6 +65,7 @@ func NewServer(client *chx.Client, token, corsOrigin, selfURL string, timeoutMS 
 	// lines that has nothing to do with either implementation being wrong.
 	s.fleet = fleet.New(
 		&fleetSink{client: client, runner: runner, runID: uuid.New()},
+		&fleetStore{client: client},
 		time.Duration(timeoutMS)*time.Millisecond,
 		time.Now().UnixNano(),
 	)
@@ -77,6 +78,15 @@ func NewServer(client *chx.Client, token, corsOrigin, selfURL string, timeoutMS 
 // anyone is looking at the dashboard — that is what makes it a simulator rather
 // than a UI.
 func (s *Server) Run(ctx context.Context) { s.fleet.Run(ctx) }
+
+// ReconcileFleet restores persisted sessions and catches them up. Call before Run.
+//
+// A failure here is reported, not fatal. The fleet still works from empty, and
+// refusing to start the whole dashboard because a bookkeeping table is unreadable
+// would trade a degraded feature for an outage.
+func (s *Server) ReconcileFleet(ctx context.Context) (int, error) {
+	return s.fleet.Reconcile(ctx)
+}
 
 // Handler builds the route table.
 // UseExternalAPI points "api"-sink load runs at a sonyliv-api endpoint rather

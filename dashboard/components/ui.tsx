@@ -14,22 +14,36 @@ export function Panel({
 }: {
   title?: string;
   children: ReactNode;
-  /** Left rule colour. Semantic, so a panel can read as live or as a warning. */
+  /** Semantic state, so a panel can read as live or as a warning. */
   accent?: "accent" | "live" | "bad" | "none";
   className?: string;
 }) {
-  const rule = {
-    accent: "border-l-accent-dim",
-    live: "border-l-live",
-    bad: "border-l-bad",
-    none: "border-l-line",
+  /*
+    State is carried by the TITLE, not by a coloured left rule.
+
+    The rule was a 2px `border-l` in the brand colour on every panel — the
+    decorative-stripe habit, and the thing that made eight identical cards read
+    as eight identical cards. SonyLIV never does it: its surfaces are flat
+    fields separated by a hairline and distinguished by what is written on them.
+    The state colour now lands on the one element that names the state.
+  */
+  const titleTone = {
+    accent: "text-accent",
+    live: "text-accent",
+    bad: "text-bad",
+    none: "text-ink-3",
   }[accent];
 
   return (
     <section
-      className={`rounded border border-line border-l-2 bg-panel p-4 ${rule} ${className}`}
+      // min-w-0 is required, not defensive. Panels are grid items, and a grid
+      // item's default min-width:auto refuses to shrink below its content's
+      // min-content width — measured at 537px inside a 350px column on a 390px
+      // viewport, which pushed the whole page into horizontal scroll. Allowing the
+      // panel to shrink hands the overflow to the wrappers built to scroll it.
+      className={`min-w-0 rounded-lg border border-line bg-panel p-4 ${className}`}
     >
-      {title && <h2 className="eyebrow mb-3 text-accent">{title}</h2>}
+      {title && <h2 className={`eyebrow mb-3 ${titleTone}`}>{title}</h2>}
       {children}
     </section>
   );
@@ -64,17 +78,24 @@ export function Button({
 }: React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "default" | "primary" | "danger";
 }) {
+  /*
+    Three weights of the same idea, separated by fill rather than by hue —
+    which is how a one-colour system stays legible. Primary is the gold filled;
+    default is a hairline on the raised surface; danger is the red outlined,
+    never filled, because a destructive control should not be the loudest thing
+    on the page.
+  */
   const styles = {
-    default: "border-line bg-sunken text-ink hover:border-accent",
+    default: "border-line bg-raised text-ink hover:border-ink-3",
     primary:
-      "border-accent bg-accent text-[#1a1305] font-semibold hover:brightness-110",
-    danger: "border-bad/60 bg-sunken text-bad hover:border-bad",
+      "border-accent bg-accent font-semibold text-black hover:bg-[#ffb733] hover:border-[#ffb733]",
+    danger: "border-bad/50 bg-transparent text-bad hover:border-bad",
   }[variant];
 
   return (
     <button
       {...rest}
-      className={`rounded border px-3 py-2 text-[0.8125rem] transition-colors disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line ${styles} ${rest.className ?? ""}`}
+      className={`rounded border px-3 py-2 text-[0.8125rem] transition-colors duration-150 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-line ${styles} ${rest.className ?? ""}`}
     >
       {children}
     </button>
@@ -96,7 +117,7 @@ export function Stat({
 }) {
   const color = {
     plain: "text-ink",
-    live: "text-live",
+    live: "text-accent",
     bad: "text-bad",
     muted: "text-ink-3",
   }[tone];
@@ -104,7 +125,7 @@ export function Stat({
   return (
     <div className="rounded border border-line bg-sunken px-2.5 py-2">
       <div className="eyebrow text-ink-3">{label}</div>
-      <div className={`tnum mt-0.5 font-mono text-base ${color}`}>{value}</div>
+      <div className={`tnum mt-1 font-mono text-base ${color}`}>{value}</div>
     </div>
   );
 }
@@ -128,7 +149,7 @@ export function Flag({
   offLabel: string;
 }) {
   return (
-    <span className={on ? "text-live" : "text-ink-3"}>
+    <span className={on ? "text-accent" : "text-ink-3"}>
       {on ? onLabel : offLabel}
     </span>
   );
@@ -147,10 +168,14 @@ export function ErrorNote({ error }: { error: unknown }) {
 /**
  * A claim the reader must not mistake for the served answer. Used for the live
  * curve, which is an approximation and says so.
+ *
+ * A hairline rule, not the 2px coloured bar this used to be: at 1px it is a
+ * typographic mark that sets the note apart from body copy, which is what an
+ * aside needs. Above that it becomes the decorative stripe.
  */
 export function Caveat({ children }: { children: ReactNode }) {
   return (
-    <p className="mt-3 border-l-2 border-accent-dim pl-2.5 text-xs leading-relaxed text-ink-3">
+    <p className="mt-3 border-l border-line pl-2.5 text-xs leading-relaxed text-ink-3">
       {children}
     </p>
   );

@@ -107,6 +107,11 @@ type Session struct {
 	StartEpoch time.Time     `json:"start_epoch"`
 	Cadence    time.Duration `json:"-"`
 
+	// ExpiresAt is when the simulator retires this session on its own, by writing
+	// a real VideoSessionEnd. Without it a fleet left running heartbeats into
+	// events_raw forever — a demo quietly becoming an unattended writer.
+	ExpiresAt time.Time `json:"expires_at"`
+
 	started      bool
 	ended        bool
 	foreground   bool
@@ -128,6 +133,11 @@ type Session struct {
 	eventsSent int
 	nextTick   time.Time
 	endedAt    time.Time
+
+	// dirty marks state the store has not seen yet. Persisting every session on
+	// every tick would rewrite the whole table once a second; persisting only what
+	// changed keeps the write proportional to activity.
+	dirty bool
 }
 
 // Spec is what the create form submits.
@@ -145,6 +155,10 @@ type Spec struct {
 	// every 30s; changing it changes how fast a silenced session's lease decays
 	// relative to its ticks, which is the whole demonstration.
 	CadenceSeconds int `json:"cadence_seconds"`
+
+	// TTLMinutes is how long the session lives before the simulator ends it
+	// cleanly. Zero takes DefaultTTL.
+	TTLMinutes int `json:"ttl_minutes"`
 }
 
 // hexID mints a 64-character uppercase hex id, matching the source format.
@@ -175,8 +189,15 @@ func newSession(sp Spec, now time.Time) *Session {
 		Country:      sp.Country,
 		StartEpoch:   now,
 		Cadence:      time.Duration(sp.CadenceSeconds) * time.Second,
+		ExpiresAt:    now.Add(time.Duration(sp.TTLMinutes) * time.Minute),
 		heartbeating: true,
+		dirty:        true,
 	}
+}
+
+// expired reports whether the session has outlived its TTL.
+func (s *Session) expired(now time.Time) bool {
+	return !s.ExpiresAt.IsZero() && !now.Before(s.ExpiresAt)
 }
 
 // leaseExpiry is when the lease runs out, or the zero time if no eligible signal
@@ -300,6 +321,7 @@ func (s *Session) apply(p model.EventPair, at time.Time, timeout time.Duration, 
 	}
 
 	s.syncInterval(at, timeout)
+	s.dirty = true
 	return s.emit(p, at, batchID, seq)
 }
 
@@ -313,6 +335,9 @@ func (s *Session) reconcile(now time.Time, timeout time.Duration) {
 		return
 	}
 	s.closeInterval(s.inactiveAt(now, timeout))
+	// A lease expiry is a real state change even though no event caused it, so it
+	// has to reach the store like any other.
+	s.dirty = true
 }
 
 // syncInterval opens or closes the in-flight interval to match the state at now.

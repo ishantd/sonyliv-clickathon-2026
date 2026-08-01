@@ -252,8 +252,10 @@ func (s *Server) handleFleetDimensions(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.fleet.Dimensions())
 }
 
-func (s *Server) handleFleetClearEnded(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"removed": s.fleet.RemoveEnded()})
+func (s *Server) handleFleetClearEnded(w http.ResponseWriter, r *http.Request) {
+	// ClearEnded, not RemoveEnded: the store needs tombstones, or the next restart
+	// resurrects every session the operator just cleared.
+	writeJSON(w, http.StatusOK, map[string]any{"removed": s.fleet.ClearEnded(r.Context())})
 }
 
 // handleFleetCurve returns both lines: what the fleet recorded, and what the

@@ -127,6 +127,20 @@ func run() error {
 		// slow-loris protection.
 	}
 
+	// Reconcile before serving. Restored sessions are caught up to now — leases
+	// that lapsed while the process was down close at their real expiry, and
+	// sessions past their TTL are ended — so the fleet's ground truth agrees with
+	// what ClickHouse already holds instead of resuming as if time had stopped.
+	//
+	// A failure here is reported and survived. Refusing to start the dashboard
+	// because a bookkeeping table is unreadable trades a degraded feature for an
+	// outage.
+	if n, err := srv.ReconcileFleet(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: fleet reconcile: %v\n", err)
+	} else if n > 0 {
+		fmt.Printf("restored %d fleet sessions from fleet_sessions\n", n)
+	}
+
 	// The fleet ticks whether or not a browser is attached, so it runs for the
 	// lifetime of the process rather than being driven by requests.
 	go srv.Run(ctx)

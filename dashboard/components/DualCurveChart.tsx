@@ -15,6 +15,11 @@ import type { FleetCurvePoint } from "@/lib/types";
  * of the chart, which is why the gap is rendered as a number and not left for the
  * eye to estimate.
  *
+ * The two series are told apart by FORM, not hue: gold and solid for the fleet,
+ * white and dashed for the pipeline. This surface runs one signal colour, so a
+ * second accent would have been invented rather than measured — and gold-over-
+ * white is SonyLIV's own hierarchy, which makes the borrowed pair honest.
+ *
  * Hand-authored SVG for the same reason CurveChart is: two series and a hover
  * readout do not justify a charting dependency in a static export.
  */
@@ -123,11 +128,11 @@ export function DualCurveChart({
             </g>
           ))}
 
-          <path d={genArea} fill="var(--color-live)" opacity="0.12" />
+          <path d={genArea} fill="var(--color-accent)" opacity="0.1" />
           <path
             d={genLine}
             fill="none"
-            stroke="var(--color-live)"
+            stroke="var(--color-accent)"
             strokeWidth="1.75"
             strokeLinejoin="round"
           />
@@ -137,9 +142,10 @@ export function DualCurveChart({
               key={i}
               d={d}
               fill="none"
-              stroke="var(--color-accent)"
+              stroke="var(--color-ink)"
               strokeWidth="1.5"
               strokeDasharray="5 3"
+              opacity="0.85"
               strokeLinejoin="round"
             />
           ))}
@@ -148,14 +154,14 @@ export function DualCurveChart({
             cx={x(generator.length - 1)}
             cy={y(last.sessions)}
             r="3"
-            fill="var(--color-live)"
+            fill="var(--color-accent)"
           />
           {lastCH !== undefined && (
             <circle
               cx={x(generator.length - 1)}
               cy={y(lastCH)}
               r="3"
-              fill="var(--color-accent)"
+              fill="var(--color-ink)"
             />
           )}
 
@@ -190,13 +196,13 @@ export function DualCurveChart({
       </div>
 
       <div className="mt-2 flex flex-wrap items-center gap-x-5 gap-y-1 font-mono text-[0.6875rem]">
-        <span className="flex items-center gap-1.5 text-live">
+        <span className="flex items-center gap-1.5 text-accent">
           <svg width="18" height="3" aria-hidden="true">
             <line x1="0" y1="1.5" x2="18" y2="1.5" stroke="currentColor" strokeWidth="2" />
           </svg>
           fleet (exact)
         </span>
-        <span className="flex items-center gap-1.5 text-accent">
+        <span className="flex items-center gap-1.5 text-ink">
           <svg width="18" height="3" aria-hidden="true">
             <line
               x1="0"
@@ -239,7 +245,7 @@ function GapReadout({
   const delta = pipeline - fleet;
   const pct = fleet === 0 ? 0 : (delta / fleet) * 100;
   const tone =
-    delta === 0 ? "text-live" : Math.abs(pct) < 2 ? "text-ink-2" : "text-bad";
+    delta === 0 ? "text-accent" : Math.abs(pct) < 2 ? "text-ink-2" : "text-bad";
   return (
     <span className={tone}>
       gap: {delta > 0 ? "+" : ""}

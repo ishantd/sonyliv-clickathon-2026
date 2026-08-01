@@ -41,6 +41,36 @@ function TokenBadge() {
   );
 }
 
+/**
+ * The collaboration lockup: SONYLIV over CLICKHOUSE.
+ *
+ * Stacked rather than inline, because two brand words on one line read as a
+ * hyphenated product name; stacked with the × between them reads as two parties.
+ * Tight leading (0.95) binds the pair into one mark, and the shared left edge is
+ * what makes it a lockup rather than two labels.
+ *
+ * The × is set in the text face, not drawn — it is a typographic multiplication
+ * sign doing the job it exists for, which is the one case where a glyph is not a
+ * stand-in for an icon.
+ *
+ * Gold lands only on the ×. SonyLIV spends its single signal colour on the tick
+ * in its own logo and nowhere else in the header; putting it on both words would
+ * spend the whole budget in the corner of the screen.
+ */
+function Lockup() {
+  return (
+    <span
+      className="flex shrink-0 flex-col leading-[0.95] font-semibold tracking-[0.02em] uppercase"
+      aria-label="SonyLIV × ClickHouse"
+    >
+      <span className="text-[0.8125rem] text-ink">
+        sonyliv <span className="font-normal text-accent">×</span>
+      </span>
+      <span className="text-[0.8125rem] text-ink-2">clickhouse</span>
+    </span>
+  );
+}
+
 // Ordered by workflow, not by age: create a fleet, watch it, control it. The two
 // original dashboards come last because they answer different questions — throughput
 // for the load simulator, one-event-at-a-time semantics for the stepper.
@@ -68,12 +98,13 @@ export function Nav() {
 
   return (
     <header className="sticky top-0 z-10 border-b border-line bg-ground/90 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-[80rem] items-center gap-6 px-5 py-3">
-        <span className="font-mono text-[0.8125rem] font-semibold tracking-tight">
-          sonyliv<span className="text-accent">-mock</span>
-        </span>
+      <div className="mx-auto flex w-full max-w-[80rem] items-center gap-4 px-5 py-3 sm:gap-6">
+        <Lockup />
 
-        <nav className="flex gap-1" aria-label="Dashboards">
+        <nav
+          className="flex min-w-0 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+          aria-label="Dashboards"
+        >
           {routes.map((r) => {
             // Exact match, not startsWith: "/" is a prefix of every route, so a
             // prefix test would light up every tab everywhere.
@@ -85,7 +116,7 @@ export function Nav() {
                 key={r.href}
                 href={r.href}
                 aria-current={active ? "page" : undefined}
-                className={`rounded px-2.5 py-1 text-[0.8125rem] transition-colors ${
+                className={`rounded px-2.5 py-1 text-[0.8125rem] whitespace-nowrap transition-colors ${
                   active
                     ? "bg-accent-wash text-accent"
                     : "text-ink-2 hover:text-ink"
