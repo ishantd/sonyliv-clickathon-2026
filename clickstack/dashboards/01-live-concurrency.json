@@ -1,33 +1,46 @@
 {
   "name": "SonyLIV — Live concurrency",
-  "tags": ["sonyliv", "concurrency", "live"],
+  "tags": [
+    "sonyliv",
+    "concurrency",
+    "live"
+  ],
   "filters": [
     {
       "type": "QUERY_EXPRESSION",
       "name": "Title",
       "expression": "title",
       "sourceId": "__SOURCE_sonyliv-live-content__",
-      "appliesToSourceIds": ["__SOURCE_sonyliv-live-content__"]
+      "appliesToSourceIds": [
+        "__SOURCE_sonyliv-live-content__"
+      ]
     },
     {
       "type": "QUERY_EXPRESSION",
       "name": "Content type",
       "expression": "video_type",
       "sourceId": "__SOURCE_sonyliv-live-content__",
-      "appliesToSourceIds": ["__SOURCE_sonyliv-live-content__"]
+      "appliesToSourceIds": [
+        "__SOURCE_sonyliv-live-content__"
+      ]
     },
     {
       "type": "QUERY_EXPRESSION",
       "name": "Category",
       "expression": "category",
       "sourceId": "__SOURCE_sonyliv-live-content__",
-      "appliesToSourceIds": ["__SOURCE_sonyliv-live-content__"]
+      "appliesToSourceIds": [
+        "__SOURCE_sonyliv-live-content__"
+      ]
     }
   ],
   "tiles": [
     {
       "name": "Concurrent viewers now",
-      "x": 0, "y": 0, "w": 6, "h": 3,
+      "x": 0,
+      "y": 0,
+      "w": 6,
+      "h": 3,
       "config": {
         "displayType": "number",
         "configType": "sql",
@@ -38,7 +51,10 @@
     },
     {
       "name": "Exact peak in window — all titles",
-      "x": 6, "y": 0, "w": 6, "h": 3,
+      "x": 6,
+      "y": 0,
+      "w": 6,
+      "h": 3,
       "config": {
         "displayType": "number",
         "configType": "sql",
@@ -48,7 +64,10 @@
     },
     {
       "name": "Viewer-hours in window",
-      "x": 12, "y": 0, "w": 6, "h": 3,
+      "x": 12,
+      "y": 0,
+      "w": 6,
+      "h": 3,
       "config": {
         "displayType": "number",
         "configType": "sql",
@@ -59,7 +78,10 @@
     },
     {
       "name": "Live layer lag (seconds)",
-      "x": 18, "y": 0, "w": 6, "h": 3,
+      "x": 18,
+      "y": 0,
+      "w": 6,
+      "h": 3,
       "config": {
         "displayType": "number",
         "configType": "sql",
@@ -69,7 +91,10 @@
     },
     {
       "name": "Concurrent viewers — exact peak vs time-weighted average",
-      "x": 0, "y": 3, "w": 24, "h": 8,
+      "x": 0,
+      "y": 3,
+      "w": 24,
+      "h": 8,
       "config": {
         "displayType": "line",
         "configType": "sql",
@@ -80,7 +105,10 @@
     },
     {
       "name": "Top titles — average concurrent viewers",
-      "x": 0, "y": 11, "w": 13, "h": 8,
+      "x": 0,
+      "y": 11,
+      "w": 13,
+      "h": 8,
       "config": {
         "displayType": "line",
         "configType": "sql",
@@ -92,7 +120,10 @@
     },
     {
       "name": "Title leaderboard",
-      "x": 13, "y": 11, "w": 11, "h": 8,
+      "x": 13,
+      "y": 11,
+      "w": 11,
+      "h": 8,
       "config": {
         "displayType": "table",
         "configType": "sql",
@@ -103,10 +134,13 @@
     },
     {
       "name": "How to read this dashboard",
-      "x": 0, "y": 19, "w": 24, "h": 6,
+      "x": 0,
+      "y": 19,
+      "w": 24,
+      "h": 6,
       "config": {
         "displayType": "markdown",
-        "markdown": "### Live layer — 10-second grain, best-effort\n\nReads `serving_concurrency_live`, rebuilt every 10 seconds over a trailing window by `sonyliv-ingest concurrency --layer live --loop 10s`. It publishes **without waiting for late events**, so a late arrival can change an already-published bucket. That is the trade a \"right now\" number makes. The corrected answer is on *SonyLIV — Concurrency analytics*.\n\n**A viewer is concurrent when** the session has started, has not ended, is in the foreground, is playing, and has produced a liveness signal within the last 120s. Foreground and playing are independent — measured on the extract, 13,382 of 14,256 `AppForegrounded` events leave playback stopped, so treating them as one state overcounts. Policy `sonyliv-active-v1`; intervals are half-open `[start, end)` in UTC.\n\n**Why the peak tile ignores the Title filter.** Peaks are not additive: two titles peak at different instants, so summing per-title peaks invents viewers who were never simultaneously present. An exact peak has to be computed *at* the grouping it is reported for, so it is precomputed per grouping — the headline tile reads the all-titles rows, and exact per-title peaks are in the leaderboard. Every other tile responds to the filters, because `active_ms` and `ending_concurrency` **are** additive and stay exact under any filter combination."
+        "markdown": "### Live layer — 10-second grain, best-effort\n\nReads `serving_concurrency_live`, rebuilt every 10 seconds over a trailing window by `sonyliv-ingest concurrency --layer live --loop 10s`. It keeps **three days** at 10-second grain and nothing older, so selecting a window before that is expected to read zero rather than being a fault — the history lives on *SonyLIV — Concurrency analytics*. It publishes **without waiting for late events**, so a late arrival can change an already-published bucket. That is the trade a \"right now\" number makes. The corrected answer is on *SonyLIV — Concurrency analytics*.\n\n**A viewer is concurrent when** the session has started, has not ended, is in the foreground, is playing, and has produced a liveness signal within the last 120s. Foreground and playing are independent — measured on the extract, 13,382 of 14,256 `AppForegrounded` events leave playback stopped, so treating them as one state overcounts. Policy `sonyliv-active-v1`; intervals are half-open `[start, end)` in UTC.\n\n**Why the peak tile ignores the Title filter.** Peaks are not additive: two titles peak at different instants, so summing per-title peaks invents viewers who were never simultaneously present. An exact peak has to be computed *at* the grouping it is reported for, so it is precomputed per grouping — the headline tile reads the all-titles rows, and exact per-title peaks are in the leaderboard. Every other tile responds to the filters, because `active_ms` and `ending_concurrency` **are** additive and stay exact under any filter combination."
       }
     }
   ]
