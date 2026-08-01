@@ -13,12 +13,17 @@ CONTENT_CSV ?= $(DATA)/ch-hackathon-content-data.csv
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | column -t -s ':'
 
-## build: compile both binaries into ./bin
+## build: compile all binaries into ./bin
 build:
 	@mkdir -p $(BIN)
 	go build -o $(BIN)/sonyliv-ingest ./cmd/sonyliv-ingest
 	go build -o $(BIN)/sonyliv-gen    ./cmd/sonyliv-gen
-	@echo "built $(BIN)/sonyliv-ingest and $(BIN)/sonyliv-gen"
+	go build -o $(BIN)/sonyliv-mock   ./cmd/sonyliv-mock
+	@echo "built $(BIN)/sonyliv-ingest, $(BIN)/sonyliv-gen and $(BIN)/sonyliv-mock"
+
+## mock: serve the load simulator and the event stepper on localhost:8088
+mock: build
+	$(BIN)/sonyliv-mock
 
 ## test: run unit tests
 test:

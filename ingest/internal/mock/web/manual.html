@@ -1,0 +1,275 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Event stepper — sonyliv-mock</title>
+<style>
+  :root{
+    --bg:#0f1216; --panel:#171b21; --panel2:#141821;
+    --ink:#e7eaee; --ink2:#9aa5b2; --ink3:#6b7683;
+    --line:#262c34; --accent:#d9a047;
+    --on:#45b3bc; --off:#6b7683; --bad:#d6798f;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans)}
+  a{color:var(--accent)}
+  .wrap{max-width:1180px;margin:0 auto;padding:1.75rem 1.25rem 4rem}
+  header{display:flex;align-items:baseline;gap:1.25rem;flex-wrap:wrap;margin-bottom:.5rem}
+  h1{font-size:1.25rem;font-weight:620;letter-spacing:-.01em;margin:0}
+  nav{font-family:var(--mono);font-size:.75rem;color:var(--ink3)}
+  nav a{margin-right:.75rem}
+  .lede{color:var(--ink2);max-width:66ch;margin:0 0 1.5rem}
+  .grid{display:grid;grid-template-columns:320px minmax(0,1fr);gap:1.25rem;align-items:start}
+  @media(max-width:900px){.grid{grid-template-columns:1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:4px;padding:1rem}
+  .panel h2{font-size:.6875rem;font-family:var(--mono);letter-spacing:.12em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 .75rem}
+  label{display:block;font-size:.75rem;color:var(--ink2);margin:.625rem 0 .25rem}
+  input,select{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--ink);
+    border-radius:3px;padding:.4rem .5rem;font:13px var(--mono)}
+  input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  button{background:var(--panel2);border:1px solid var(--line);color:var(--ink);border-radius:3px;
+    padding:.45rem .7rem;font:13px var(--sans);cursor:pointer}
+  button:hover:not(:disabled){border-color:var(--accent)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  button.pri{background:var(--accent);border-color:var(--accent);color:#181206;font-weight:600}
+  .row{display:flex;gap:.4rem;flex-wrap:wrap}
+  .acts{display:grid;grid-template-columns:repeat(3,1fr);gap:.4rem;margin-top:.5rem}
+  .acts button{width:100%}
+  .results{max-height:190px;overflow-y:auto;border:1px solid var(--line);border-radius:3px;margin-top:.5rem}
+  .results div{padding:.4rem .5rem;border-bottom:1px solid var(--line);cursor:pointer;font-size:.8125rem}
+  .results div:last-child{border-bottom:0}
+  .results div:hover{background:var(--panel2)}
+  .results .cid{font-family:var(--mono);font-size:.6875rem;color:var(--ink3)}
+  .state{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:.6rem;margin-bottom:1rem}
+  .chip{background:var(--panel2);border:1px solid var(--line);border-radius:3px;padding:.55rem .65rem}
+  .chip .k{font-family:var(--mono);font-size:.625rem;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3)}
+  .chip .v{font-family:var(--mono);font-size:1rem;margin-top:.15rem}
+  .v.on{color:var(--on)} .v.off{color:var(--off)} .v.bad{color:var(--bad)}
+  table{width:100%;border-collapse:collapse;font-family:var(--mono);font-size:.75rem}
+  th{text-align:left;color:var(--ink3);font-weight:500;padding:.35rem .5rem;border-bottom:1px solid var(--line);
+    font-size:.625rem;letter-spacing:.08em;text-transform:uppercase}
+  td{padding:.3rem .5rem;border-bottom:1px solid var(--panel2);white-space:nowrap}
+  tr.active td:first-child{border-left:2px solid var(--on)}
+  tr:not(.active) td:first-child{border-left:2px solid transparent}
+  .yes{color:var(--on)} .no{color:var(--ink3)}
+  .scroll{overflow-x:auto}
+  .note{font-size:.75rem;color:var(--ink3);margin-top:.5rem;line-height:1.45}
+  .err{color:var(--bad);font-family:var(--mono);font-size:.75rem;margin-top:.5rem;white-space:pre-wrap}
+  .ivs{font-family:var(--mono);font-size:.75rem;color:var(--ink2)}
+  .ivs div{padding:.2rem 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Event stepper</h1>
+    <nav><a href="/">load simulator</a><a href="/manual">stepper</a></nav>
+  </header>
+  <p class="lede">
+    Drive one session by hand. Every state value below is computed <strong>in ClickHouse</strong>
+    by the same predicate the pipeline uses — not in this page — so what you see is the real
+    derivation, not a second implementation of it.
+  </p>
+
+  <div class="grid">
+    <div>
+      <div class="panel">
+        <h2>1 · pick content</h2>
+        <input id="q" placeholder="title, category, or content id" autocomplete="off">
+        <div class="results" id="results"></div>
+        <label>platform</label>
+        <select id="platform">
+          <option>ANDROID_PHONE</option><option>IPHONE</option><option>SONY_ANDROID_TV</option>
+          <option>JIO_ANDROID_TV</option><option>Mweb</option><option>FIRE_TV</option>
+        </select>
+        <div class="row" style="margin-top:.75rem">
+          <button class="pri" id="mint" disabled>New session</button>
+        </div>
+        <div class="note" id="picked">nothing picked yet</div>
+      </div>
+
+      <div class="panel" style="margin-top:1rem">
+        <h2>2 · advance the clock</h2>
+        <label>seconds to advance before the next event</label>
+        <input id="adv" type="number" value="5" min="0" step="1">
+        <div class="row" style="margin-top:.5rem">
+          <button data-adv="0">+0</button>
+          <button data-adv="5">+5s</button>
+          <button data-adv="45">+45s</button>
+          <button data-adv="130">+130s</button>
+        </div>
+        <div class="note">
+          The lease is 120s, so <strong>+130s</strong> expires it. A virtual clock rather than
+          wall time means you do not have to wait two minutes to see an interval close.
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>3 · send events</h2>
+        <div class="acts">
+          <button data-a="start">Start</button>
+          <button data-a="play">Play</button>
+          <button data-a="heartbeat">Heartbeat</button>
+          <button data-a="pause">Pause</button>
+          <button data-a="resume">Resume</button>
+          <button data-a="error">Error</button>
+          <button data-a="background">Background</button>
+          <button data-a="foreground">Foreground</button>
+          <button data-a="end">End</button>
+          <button data-a="adbreak">Ad break</button>
+          <button data-a="ratechange">Rate change</button>
+        </div>
+        <div class="note">
+          <strong>Ad break</strong> and <strong>Rate change</strong> are classed as liveness, not
+          pauses. Rate change sends <code>speed-pause</code> and <code>speed-resume</code> at the
+          <em>same millisecond</em>, which is what the real client does — watch that playback stays on.
+        </div>
+        <div class="err" id="err"></div>
+      </div>
+
+      <div class="panel" style="margin-top:1rem">
+        <h2>current state</h2>
+        <div class="state" id="state"></div>
+        <h2>intervals</h2>
+        <div class="ivs" id="ivs">none yet</div>
+      </div>
+
+      <div class="panel" style="margin-top:1rem">
+        <h2>timeline · state after each event</h2>
+        <div class="scroll">
+          <table>
+            <thead><tr>
+              <th>event time</th><th>event</th><th>signal</th>
+              <th>fg</th><th>playing</th><th>lease until</th><th>active</th>
+            </tr></thead>
+            <tbody id="tl"><tr><td colspan="7" class="no">no events yet</td></tr></tbody>
+          </table>
+        </div>
+        <div class="note">
+          Try <code>Start → Play → Background → Pause → Foreground</code>. The session stays
+          <em>inactive</em> after the foreground: it restores visibility but not playback. Then
+          <code>Resume</code> and it flips on.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let picked = null, session = null;
+
+const $ = id => document.getElementById(id);
+const fmt = ts => ts ? new Date(ts).toISOString().slice(11, 23) : '—';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(body.error || `${r.status} ${r.statusText}`);
+  return body;
+}
+
+function showErr(e) { $('err').textContent = e ? e.message : ''; }
+
+// ---- content picker ----
+let searchTimer;
+$('q').addEventListener('input', () => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(search, 200);
+});
+
+async function search() {
+  try {
+    const { items } = await api(`/api/content?limit=40&q=${encodeURIComponent($('q').value)}`);
+    $('results').innerHTML = (items || []).map(c =>
+      `<div data-id="${c.content_id}" data-title="${esc(c.title)}" data-vt="${esc(c.video_type)}">
+         ${esc(c.title) || '(untitled)'}
+         <span class="cid">· ${c.content_id} · ${esc(c.video_type)}</span>
+       </div>`).join('') || '<div class="cid">no matches</div>';
+  } catch (e) { showErr(e); }
+}
+
+$('results').addEventListener('click', ev => {
+  const el = ev.target.closest('div[data-id]');
+  if (!el) return;
+  picked = { content_id: +el.dataset.id, title: el.dataset.title, video_type: el.dataset.vt };
+  $('picked').textContent = `picked ${picked.title || picked.content_id} (${picked.content_id})`;
+  $('mint').disabled = false;
+});
+
+$('mint').addEventListener('click', async () => {
+  showErr(null);
+  try {
+    session = await api('/api/manual/session', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...picked, platform: $('platform').value })
+    });
+    render({ session, timeline: [], intervals: [], active_ms: 0, timeout_ms: 120000 });
+  } catch (e) { showErr(e); }
+});
+
+// ---- clock shortcuts ----
+document.querySelectorAll('button[data-adv]').forEach(b =>
+  b.addEventListener('click', () => { $('adv').value = b.dataset.adv; }));
+
+// ---- actions ----
+document.querySelectorAll('button[data-a]').forEach(b => b.addEventListener('click', async () => {
+  if (!session) { showErr(new Error('create a session first')); return; }
+  showErr(null);
+  b.disabled = true;
+  try {
+    render(await api('/api/manual/event', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        session: session.video_session_id,
+        action: b.dataset.a,
+        advance_seconds: +$('adv').value || 0
+      })
+    }));
+  } catch (e) { showErr(e); } finally { b.disabled = false; }
+}));
+
+// ---- render ----
+function render(s) {
+  session = s.session;
+  const last = (s.timeline || [])[s.timeline.length - 1];
+  const bool = (v, good) => `<span class="v ${v ? (good ? 'on' : 'bad') : 'off'}">${v ? 'yes' : 'no'}</span>`;
+
+  $('state').innerHTML = `
+    <div class="chip"><div class="k">session</div><div class="v">${session.video_session_id.slice(0,8)}…</div></div>
+    <div class="chip"><div class="k">clock</div><div class="v">${fmt(session.clock)}</div></div>
+    <div class="chip"><div class="k">events sent</div><div class="v">${session.events_sent}</div></div>
+    <div class="chip"><div class="k">foreground</div>${bool(last && last.foreground, true)}</div>
+    <div class="chip"><div class="k">playing</div>${bool(last && last.playing, true)}</div>
+    <div class="chip"><div class="k">active</div>${bool(last && last.active, true)}</div>
+    <div class="chip"><div class="k">lease until</div><div class="v">${last ? fmt(last.lease_expires) : '—'}</div></div>
+    <div class="chip"><div class="k">active total</div><div class="v">${(s.active_ms/1000).toFixed(1)}s</div></div>`;
+
+  $('ivs').innerHTML = (s.intervals || []).length
+    ? s.intervals.map((iv, i) =>
+        `<div>${i+1}. ${fmt(iv.start)} → ${fmt(iv.end)}
+         <span class="no">(${((new Date(iv.end)-new Date(iv.start))/1000).toFixed(1)}s)</span></div>`).join('')
+    : 'none yet';
+
+  $('tl').innerHTML = (s.timeline || []).length
+    ? s.timeline.map(r => `<tr class="${r.active ? 'active' : ''}">
+        <td>${fmt(r.event_ts)}</td>
+        <td>${esc(r.event)}</td>
+        <td>${esc(r.signal)}</td>
+        <td class="${r.foreground?'yes':'no'}">${r.foreground?'fg':'bg'}</td>
+        <td class="${r.playing?'yes':'no'}">${r.playing?'play':'stop'}</td>
+        <td class="no">${fmt(r.lease_expires)}</td>
+        <td class="${r.active?'yes':'no'}">${r.active?'ACTIVE':'—'}</td></tr>`).join('')
+    : '<tr><td colspan="7" class="no">no events yet</td></tr>';
+}
+
+search();
+</script>
+</body>
+</html>
