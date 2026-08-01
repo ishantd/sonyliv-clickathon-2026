@@ -29,13 +29,66 @@ export class ApiError extends Error {
     super(message);
     this.name = "ApiError";
   }
+  /** True when the server gated the request behind --token. */
+  get needsToken() {
+    return this.status === 401;
+  }
 }
 
+const TOKEN_KEY = "sonyliv-mock-token";
+
+/**
+ * The bearer token, when the server was started with --token.
+ *
+ * sessionStorage, not localStorage: the token dies with the tab, which is the
+ * right lifetime for a secret. And deliberately NOT a NEXT_PUBLIC_ build-time
+ * variable — that would bake the token into the static bundle, so anyone who can
+ * fetch the page would have it, which defeats the point of setting one.
+ */
+export function getToken(): string {
+  if (typeof window === "undefined") return "";
+  return window.sessionStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+const TOKEN_EVENT = "sonyliv-mock-token-changed";
+
+export function setToken(v: string) {
+  if (typeof window === "undefined") return;
+  if (v) window.sessionStorage.setItem(TOKEN_KEY, v);
+  else window.sessionStorage.removeItem(TOKEN_KEY);
+  window.dispatchEvent(new Event(TOKEN_EVENT));
+}
+
+/**
+ * useSyncExternalStore plumbing for the token.
+ *
+ * sessionStorage is client-only, so it cannot be read during the static
+ * prerender. Reading it in a lazy useState initializer would hydrate-mismatch
+ * whenever a token is stored, and reading it in an effect trips
+ * react-hooks/set-state-in-effect. useSyncExternalStore is the primitive built for
+ * exactly this: an explicit server snapshot, and a subscription so the field stays
+ * in sync if another component sets the token.
+ */
+export function subscribeToken(onChange: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  window.addEventListener(TOKEN_EVENT, onChange);
+  // 'storage' fires for other tabs; TOKEN_EVENT covers this one.
+  window.addEventListener("storage", onChange);
+  return () => {
+    window.removeEventListener(TOKEN_EVENT, onChange);
+    window.removeEventListener("storage", onChange);
+  };
+}
+
+export const tokenServerSnapshot = () => "";
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken();
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
   });
@@ -54,6 +107,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
+    if (res.status === 401) {
+      throw new ApiError(
+        "This server requires a bearer token. Paste it in the header field.",
+        401,
+      );
+    }
     const msg =
       typeof body === "object" && body && "error" in body
         ? String((body as { error: unknown }).error)

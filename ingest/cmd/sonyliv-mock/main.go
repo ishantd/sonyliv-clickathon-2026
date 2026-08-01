@@ -44,7 +44,12 @@ func run() error {
 	//   ssh -N -L 8088:127.0.0.1:8088 ec2-user@host
 	// and set --token before binding anywhere else.
 	listen := fs.String("listen", "127.0.0.1:8088", "address to serve on")
-	token := fs.String("token", os.Getenv("MOCK_TOKEN"), "bearer token gating /api/ (empty = no auth; only safe on loopback)")
+	// Default is empty, NOT os.Getenv here: a flag default is evaluated before
+	// fs.Parse and therefore before config.Load runs godotenv, so a token that
+	// lives only in .env would still read as empty. Resolved after the env is
+	// loaded instead — see below.
+	token := fs.String("token", "",
+		"bearer token gating /api/ (defaults to $SONYLIV_API_TOKEN; empty = no auth, only safe on loopback)")
 	envPath := fs.String("env", "", "path to .env")
 	timeoutMS := fs.Int64("heartbeat-timeout-ms", 120_000,
 		"liveness lease the stepper evaluates against; must match the pipeline's")
@@ -59,17 +64,25 @@ func run() error {
 		return err
 	}
 
-	if *token == "" && !isLoopback(*listen) {
-		return fmt.Errorf("--listen %s is not loopback and --token is empty: "+
-			"refusing to expose an unauthenticated write endpoint to ClickHouse", *listen)
-	}
-
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	// config.Load runs godotenv, so .env values are in the process environment
+	// from here on. Only now can SONYLIV_API_TOKEN be read.
 	cfg, err := config.Load(*envPath)
 	if err != nil {
 		return err
+	}
+	authToken := *token
+	if authToken == "" {
+		authToken = os.Getenv("SONYLIV_API_TOKEN")
+	}
+
+	// Checked after resolution so a token supplied via .env satisfies it.
+	if authToken == "" && !isLoopback(*listen) {
+		return fmt.Errorf("--listen %s is not loopback and no token is set: "+
+			"refusing to expose an unauthenticated write endpoint to ClickHouse "+
+			"(pass --token or set SONYLIV_API_TOKEN)", *listen)
 	}
 	client, err := chx.Open(ctx, cfg)
 	if err != nil {
@@ -91,7 +104,7 @@ func run() error {
 		selfURL = "http://127.0.0.1" + (*listen)[lastColon(*listen):]
 	}
 
-	srv := mock.NewServer(client, *token, *corsOrigin, selfURL, *timeoutMS)
+	srv := mock.NewServer(client, authToken, *corsOrigin, selfURL, *timeoutMS)
 	httpSrv := &http.Server{
 		Addr:              *listen,
 		Handler:           srv.Handler(),
@@ -106,8 +119,10 @@ func run() error {
 	go func() {
 		fmt.Printf("load simulator  http://%s/\n", *listen)
 		fmt.Printf("event stepper   http://%s/manual\n", *listen)
-		if *token == "" {
-			fmt.Println("no --token set: /api/ is unauthenticated (fine on loopback)")
+		if authToken == "" {
+			fmt.Println("no token set: /api/ is unauthenticated (fine on loopback)")
+		} else {
+			fmt.Println("/api/ requires a bearer token")
 		}
 		if *corsOrigin != "" {
 			fmt.Printf("CORS: allowing %s (for `next dev`)\n", *corsOrigin)

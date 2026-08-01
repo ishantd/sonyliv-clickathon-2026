@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { TokenField } from "./TokenField";
 
 const routes = [
   { href: "/", label: "Load simulator" },
@@ -40,9 +41,12 @@ export function Nav() {
           })}
         </nav>
 
-        <span className="ml-auto hidden font-mono text-[0.6875rem] text-ink-3 sm:block">
+        <span className="ml-auto hidden font-mono text-[0.6875rem] text-ink-3 lg:block">
           writes to events_raw · UTC
         </span>
+
+        {/* Renders nothing unless the server is token-gated. */}
+        <TokenField />
       </div>
     </header>
   );
