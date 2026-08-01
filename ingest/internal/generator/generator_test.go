@@ -84,7 +84,7 @@ func TestDeterministicForSameSeed(t *testing.T) {
 	}
 	for i := range rowsA {
 		a, b := rowsA[i], rowsB[i]
-		if a.VideoSessionID != b.VideoSessionID || a.EventTime != b.EventTime ||
+		if a.VideoSessionID != b.VideoSessionID || a.EventTimestamp != b.EventTimestamp ||
 			a.Event != b.Event || a.EventType != b.EventType ||
 			a.ContentID != b.ContentID || a.Platform != b.Platform {
 			t.Fatalf("row %d differs:\n %+v\n %+v", i, a, b)
@@ -201,8 +201,8 @@ func TestHardCutoffBoundsEventTime(t *testing.T) {
 	cutoff := cfg.StartTime.Add(cfg.Duration)
 
 	for _, r := range rows {
-		if r.EventTime.After(cutoff) {
-			t.Fatalf("event at %s is past the %s cutoff", r.EventTime, cutoff)
+		if r.EventTimestamp.After(cutoff) {
+			t.Fatalf("event at %s is past the %s cutoff", r.EventTimestamp, cutoff)
 		}
 	}
 	if sum.DroppedPastCutoff == 0 {
@@ -238,7 +238,7 @@ func TestPlaybackNeverStartsWhileBackgrounded(t *testing.T) {
 			checked++
 			if backgrounded[r.VideoSessionID] {
 				t.Fatalf("session %s started playback while backgrounded at %s",
-					r.VideoSessionID[:8], r.EventTime)
+					r.VideoSessionID[:8], r.EventTimestamp)
 			}
 		}
 	}
@@ -310,10 +310,10 @@ func TestEmitsOutOfOrderArrivals(t *testing.T) {
 	var outOfOrder int
 	var runningMax time.Time
 	for _, r := range rows {
-		if r.EventTime.Before(runningMax) {
+		if r.EventTimestamp.Before(runningMax) {
 			outOfOrder++
 		} else {
-			runningMax = r.EventTime
+			runningMax = r.EventTimestamp
 		}
 	}
 	if outOfOrder == 0 {
@@ -339,7 +339,7 @@ func TestEmitsExactDuplicates(t *testing.T) {
 	seen := make(map[key]int, len(rows))
 	var dups int
 	for _, r := range rows {
-		k := key{r.VideoSessionID, r.Event, r.EventTime.UnixMilli()}
+		k := key{r.VideoSessionID, r.Event, r.EventTimestamp.UnixMilli()}
 		seen[k]++
 		if seen[k] > 1 {
 			dups++
@@ -363,12 +363,12 @@ func TestSessionLifecycleIsWellFormed(t *testing.T) {
 	firstSeen := map[string]string{}
 	byTime := map[string]time.Time{}
 	for _, r := range rows {
-		if r.EventTime.Before(r.SessionStartTime) {
-			t.Fatalf("event at %s precedes its session start %s", r.EventTime, r.SessionStartTime)
+		if r.EventTimestamp.Before(r.SessionStartEpoch) {
+			t.Fatalf("event at %s precedes its session start %s", r.EventTimestamp, r.SessionStartEpoch)
 		}
 		if _, ok := firstSeen[r.VideoSessionID]; !ok {
 			firstSeen[r.VideoSessionID] = r.EventType
-			byTime[r.VideoSessionID] = r.EventTime
+			byTime[r.VideoSessionID] = r.EventTimestamp
 		}
 	}
 	if len(firstSeen) == 0 {

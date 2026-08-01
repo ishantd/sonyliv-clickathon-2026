@@ -44,7 +44,7 @@ type Client struct {
 //     writers and the wrong one for this pipeline: pushing an already-correct
 //     50K-row native block through the server-side buffer adds a copy and a
 //     flush delay for no benefit. The paths that DO want async buffering
-//     (sl_ingest_batches, sl_ingest_rejects) turn it back on per-query.
+//     (ingest_batches, ingest_rejects) turn it back on per-query.
 //     [official: insert-batch-size, insert-async-small-batches]
 func Open(ctx context.Context, cfg *config.Config) (*Client, error) {
 	opts := &clickhouse.Options{

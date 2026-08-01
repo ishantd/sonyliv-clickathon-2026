@@ -73,13 +73,22 @@ func TestSchemaStatementsLoad(t *testing.T) {
 	}(), "\n"))
 
 	for _, want := range []string{
-		"SL_CONTENT_DIM", "SL_CONTENT_CURRENT", "SL_CONTENT_DICT",
-		"SL_RAW_EVENTS", "SL_DIRTY_SESSIONS", "SL_RAW_TO_DIRTY_MV",
-		"SL_INGEST_BATCHES", "SL_INGEST_REJECTS",
+		"CONTENT_DIM", "CONTENT_CURRENT", "CONTENT_DICT",
+		"EVENTS_RAW", "DIRTY_SESSIONS", "EVENTS_RAW_TO_DIRTY_MV",
+		"EVENTS_CLEAN", "EVENTS_RAW_TO_CLEAN_MV", "EVENTS_DEDUP",
+		"INGEST_BATCHES", "INGEST_REJECTS",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("embedded schema is missing %s", want)
 		}
+	}
+
+	// No object may carry the old sl_ prefix. Renaming half a schema is worse
+	// than not renaming it: `schema` would create the new tables, the loader
+	// would write to them, and a stray sl_-prefixed MV would keep draining an
+	// empty one.
+	if strings.Contains(joined, "SL_") {
+		t.Error("embedded schema still contains an sl_-prefixed object name")
 	}
 
 	// Every statement must be idempotent, or `schema` stops being re-runnable.
@@ -98,6 +107,117 @@ func TestSchemaStatementsLoad(t *testing.T) {
 	}
 }
 
+// statementCreating returns the DDL statement that creates the named object.
+func statementCreating(t *testing.T, object string) string {
+	t.Helper()
+	stmts, err := SchemaStatements()
+	if err != nil {
+		t.Fatalf("SchemaStatements: %v", err)
+	}
+	for _, s := range stmts {
+		u := strings.ToUpper(s.SQL)
+		if !strings.HasPrefix(u, "CREATE") {
+			continue
+		}
+		// Match the object name as it appears after the {{db}} placeholder, so
+		// "events_raw" does not also match "events_raw_to_clean_mv".
+		if strings.Contains(s.SQL, "{{db}}."+object+"\n") ||
+			strings.Contains(s.SQL, "{{db}}."+object+"\r\n") ||
+			strings.Contains(s.SQL, "{{db}}."+object+" ") ||
+			strings.HasSuffix(strings.TrimSpace(s.SQL), "{{db}}."+object) {
+			return s.SQL
+		}
+	}
+	t.Fatalf("no CREATE statement found for %s", object)
+	return ""
+}
+
+// TestLandingZoneIsNotReplacing.
+//
+// events_raw is the evidence layer: the duplicate rate, the conflicting-payload
+// row, and the ability to re-derive events_clean under a corrected rule all
+// depend on it keeping every row it was given. A ReplacingMergeTree here would
+// make its row count drift with merge activity and delete the losing copy of a
+// conflict, and nothing downstream would notice until someone tried to explain
+// a number. Cheap to assert, impossible to spot in review six files later.
+func TestLandingZoneIsNotReplacing(t *testing.T) {
+	ddl := strings.ToUpper(statementCreating(t, "events_raw"))
+	if strings.Contains(ddl, "REPLACINGMERGETREE") {
+		t.Error("events_raw must be a plain MergeTree: it is the audit layer, and " +
+			"replacement would make its row count and its duplicate rate non-deterministic")
+	}
+	if !strings.Contains(ddl, "ENGINE = MERGETREE") {
+		t.Error("events_raw is no longer ENGINE = MergeTree")
+	}
+}
+
+// TestLandingZoneCarriesNoNormalization.
+//
+// The raw/clean split only holds if nothing normalizes on the way in. A
+// MATERIALIZED column added to events_raw for convenience would quietly become
+// a second place a rule lives, and the two would drift.
+func TestLandingZoneCarriesNoNormalization(t *testing.T) {
+	ddl := statementCreating(t, "events_raw")
+	for _, banned := range []string{"lowerUTF8", "upperUTF8", "signal", "is_periodic_ping", "_norm"} {
+		if strings.Contains(ddl, banned) {
+			t.Errorf("events_raw contains %q: normalization belongs in events_raw_to_clean_mv, "+
+				"so that every producer gets one rule instead of each client implementing it", banned)
+		}
+	}
+	// The two derived keys are the deliberate exception: they are lossless
+	// functions of an id, not a semantic correction.
+	if !strings.Contains(ddl, "sipHash64(video_session_id)") {
+		t.Error("events_raw lost the session_key derivation")
+	}
+}
+
+// TestCleanLayerIsReplacingOnTheDedupKey.
+//
+// Three things have to agree or the dedup silently stops working:
+// the engine must replace, the version column it replaces by must be the one
+// the MV computes, and the sort key must be exactly the semantic event key.
+// A sort key that drifts from the dedup key is the dangerous one — the table
+// still works, it just stops collapsing anything.
+func TestCleanLayerIsReplacingOnTheDedupKey(t *testing.T) {
+	ddl := statementCreating(t, "events_clean")
+
+	if !strings.Contains(ddl, "ENGINE = ReplacingMergeTree(row_version)") {
+		t.Error("events_clean must be ReplacingMergeTree(row_version); without it, re-delivered " +
+			"rows accumulate forever and every events_dedup read pays to group them away")
+	}
+	if !strings.Contains(ddl, "ORDER BY (session_key, event_ts, event_type, event)") {
+		t.Error("events_clean's ORDER BY must be exactly the semantic event key, or the engine " +
+			"and the events_dedup view disagree about what a duplicate is")
+	}
+	// Collapse is only total because a session cannot straddle partitions.
+	if !strings.Contains(ddl, "PARTITION BY toYYYYMMDD(session_start_ts)") {
+		t.Error("events_clean must partition by session start: ReplacingMergeTree cannot collapse " +
+			"across partitions, and partitioning by event time would split a session")
+	}
+}
+
+// TestDedupViewResolvesWithoutFinal.
+//
+// Replacement is eventual. The view is what makes the answer independent of
+// whether a merge has run, and it can only do that with argMax — a FINAL here
+// would both shift compaction cost onto every read and, on a Cloud replica that
+// has not seen the freshest parts, still not guarantee what it looks like it
+// guarantees. [official: insert-optimize-avoid-final]
+func TestDedupViewResolvesWithoutFinal(t *testing.T) {
+	ddl := statementCreating(t, "events_dedup")
+
+	if strings.Contains(strings.ToUpper(ddl), " FINAL") {
+		t.Error("events_dedup must not use FINAL; resolve with argMax by row_version")
+	}
+	if !strings.Contains(ddl, "argMax(") {
+		t.Error("events_dedup no longer resolves with argMax")
+	}
+	if !strings.Contains(ddl, "GROUP BY session_key, event_ts, event_type, event") {
+		t.Error("events_dedup must group by exactly the semantic event key, matching " +
+			"events_clean's ORDER BY")
+	}
+}
+
 // TestDedupSettingsCoverBothEngineFamilies.
 //
 // Which deduplication window a table honours is chosen by the engine, not by
@@ -113,7 +233,7 @@ func TestDedupSettingsCoverBothEngineFamilies(t *testing.T) {
 
 	// Tables that carry a deduplication guarantee, and the statement kinds that
 	// must state it for both engine families.
-	for _, table := range []string{"SL_RAW_EVENTS", "SL_CONTENT_DIM"} {
+	for _, table := range []string{"EVENTS_RAW", "CONTENT_DIM"} {
 		var stated bool
 		for _, s := range stmts {
 			u := strings.ToUpper(s.SQL)
@@ -171,7 +291,7 @@ func TestContentDictionaryKeepsASignedKey(t *testing.T) {
 			"coerced to UInt64 and every lookup of the catalogue's negative content_id throws")
 	}
 	if !strings.Contains(dict, "CONTENT_ID  INT64") {
-		t.Error("the dictionary key must stay Int64 to match sl_content_dim")
+		t.Error("the dictionary key must stay Int64 to match content_dim")
 	}
 }
 

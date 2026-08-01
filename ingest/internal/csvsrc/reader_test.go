@@ -137,11 +137,11 @@ func TestEventReaderMapsColumnsByName(t *testing.T) {
 	if ev.ContentID != 21311522 {
 		t.Errorf("content id = %d", ev.ContentID)
 	}
-	if ev.EventTime.UnixMilli() != 1785062009028 {
-		t.Errorf("event time = %d", ev.EventTime.UnixMilli())
+	if ev.EventTimestamp.UnixMilli() != 1785062009028 {
+		t.Errorf("event time = %d", ev.EventTimestamp.UnixMilli())
 	}
-	if ev.SessionStartTime.UnixMilli() != 1785062007336 {
-		t.Errorf("session start = %d", ev.SessionStartTime.UnixMilli())
+	if ev.SessionStartEpoch.UnixMilli() != 1785062007336 {
+		t.Errorf("session start = %d", ev.SessionStartEpoch.UnixMilli())
 	}
 
 	if _, _, err := r.Next(); err != io.EOF {

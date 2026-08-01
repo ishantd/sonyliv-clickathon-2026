@@ -370,7 +370,7 @@ func (g *Generator) Run(ctx context.Context, out chan<- *chx.Chunk, batchSize in
 			break
 		}
 		p := heap.Pop(&g.pending).(pendingEvent)
-		if !g.cfg.Drain && p.ev.EventTime.After(g.cutoff) {
+		if !g.cfg.Drain && p.ev.EventTimestamp.After(g.cutoff) {
 			g.summary.DroppedPastCutoff++
 			continue
 		}
@@ -446,11 +446,11 @@ func (g *Generator) throttle(ctx context.Context, wallStart time.Time, emitted i
 }
 
 func (g *Generator) observe(ev *model.RawEvent) {
-	if g.summary.FirstEventTime.IsZero() || ev.EventTime.Before(g.summary.FirstEventTime) {
-		g.summary.FirstEventTime = ev.EventTime
+	if g.summary.FirstEventTime.IsZero() || ev.EventTimestamp.Before(g.summary.FirstEventTime) {
+		g.summary.FirstEventTime = ev.EventTimestamp
 	}
-	if ev.EventTime.After(g.summary.LastEventTime) {
-		g.summary.LastEventTime = ev.EventTime
+	if ev.EventTimestamp.After(g.summary.LastEventTime) {
+		g.summary.LastEventTime = ev.EventTimestamp
 	}
 }
 

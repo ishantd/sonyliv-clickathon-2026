@@ -92,8 +92,8 @@ func TestIsRetryableStopsOnPermanentErrors(t *testing.T) {
 }
 
 func TestInsertStatement(t *testing.T) {
-	got := insertStatement("default", "sl_raw_events", []string{"a", "b", "c"})
-	if want := "INSERT INTO default.sl_raw_events (a, b, c)"; got != want {
+	got := insertStatement("default", "events_raw", []string{"a", "b", "c"})
+	if want := "INSERT INTO default.events_raw (a, b, c)"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }

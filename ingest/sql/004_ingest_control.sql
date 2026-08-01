@@ -1,5 +1,5 @@
 -- =============================================================================
--- 003_ingest_control.sql — pipeline evidence and rejected rows
+-- 004_ingest_control.sql — pipeline evidence and rejected rows
 --
 -- "No pipeline evidence, no credit." These two tables are how an answer is
 -- traced back to the run that produced it.
@@ -13,7 +13,7 @@
 -- wait_for_async_insert=1 so ClickHouse buffers server-side and still confirms
 -- durability before the call returns.
 -- [official: insert-async-small-batches]
-CREATE TABLE IF NOT EXISTS {{db}}.sl_ingest_batches
+CREATE TABLE IF NOT EXISTS {{db}}.ingest_batches
 (
     ingest_batch_id   UUID,
     run_id            UUID     COMMENT 'Groups every batch of one pipeline invocation',
@@ -41,12 +41,12 @@ ORDER BY (source, run_id, batch_ordinal)
 COMMENT 'Ingest audit log: one row per acknowledged INSERT batch.';
 
 
--- Rows the producer refused to land in sl_raw_events.
+-- Rows the producer refused to land in events_raw.
 --
 -- A malformed row is quarantined, never silently dropped: on the unseen day a
 -- non-zero, unexplained reject count is the difference between "our answer is
 -- wrong" and "our answer excludes 12 rows, here they are, here is why".
-CREATE TABLE IF NOT EXISTS {{db}}.sl_ingest_rejects
+CREATE TABLE IF NOT EXISTS {{db}}.ingest_rejects
 (
     run_id       UUID,
     source       LowCardinality(String),

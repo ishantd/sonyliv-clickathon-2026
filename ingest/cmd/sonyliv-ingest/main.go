@@ -218,11 +218,11 @@ func cmdContent(ctx context.Context, args []string) error {
 	fmt.Printf("loaded %d content rows in %s (%d rejected)\n",
 		len(rows), time.Since(started).Round(time.Millisecond), rejected)
 
-	n, err := client.CountRows(ctx, "sl_content_dim")
+	n, err := client.CountRows(ctx, "content_dim")
 	if err != nil {
 		return err
 	}
-	fmt.Printf("sl_content_dim now holds %d rows (pre-dedup; sl_content_current resolves them)\n", n)
+	fmt.Printf("content_dim now holds %d rows (pre-dedup; content_current resolves them)\n", n)
 	return nil
 }
 
@@ -352,7 +352,7 @@ func cmdEvents(ctx context.Context, args []string) error {
 			return
 		}
 		if rejected > 0 {
-			fmt.Printf("\n%d rows quarantined in sl_ingest_rejects\n", rejected)
+			fmt.Printf("\n%d rows quarantined in ingest_rejects\n", rejected)
 		}
 		readErr <- nil
 	}()
@@ -374,11 +374,11 @@ func cmdEvents(ctx context.Context, args []string) error {
 
 	fmt.Printf("\nload complete in %s\n  %s\n", time.Since(started).Round(time.Millisecond), stats)
 
-	n, err := client.CountRows(ctx, "sl_raw_events")
+	n, err := client.CountRows(ctx, "events_raw")
 	if err != nil {
 		return err
 	}
-	fmt.Printf("  sl_raw_events now holds %d rows\n", n)
+	fmt.Printf("  events_raw now holds %d rows\n", n)
 	fmt.Println("\nrun `sonyliv-ingest verify` for the integrity report")
 	return nil
 }
@@ -393,20 +393,26 @@ var verifyChecks = []struct {
 	sql  string
 }{
 	{
-		"row counts",
+		"row counts (landing zone)",
 		`SELECT
              formatReadableQuantity(count())                AS events,
              formatReadableQuantity(uniqExact(video_session_id)) AS sessions,
              formatReadableQuantity(uniqExact(user_id))     AS users,
-             min(event_time)                                AS first_event,
-             max(event_time)                                AS last_event
-         FROM {db}.sl_raw_events`,
+             min(event_timestamp)                           AS first_event,
+             max(event_timestamp)                           AS last_event
+         FROM {db}.events_raw`,
 	},
 	{
-		"exact duplicate rows (identical payload, fingerprinted on the fly)",
+		// Measured on events_raw, and only on events_raw. events_clean is a
+		// ReplacingMergeTree, so counting duplicates there reports how far
+		// behind the merges are, not how dirty the source is — the number
+		// decays toward zero on its own. The landing zone never loses a row,
+		// so this figure is stable and reproducible.
+		//
 		// The fingerprint is computed here rather than stored: a random 64-bit
 		// hash is incompressible and would be the single largest column in the
 		// table for a value nothing on the hot path reads.
+		"exact duplicate rows in events_raw (identical payload, fingerprinted on the fly)",
 		`SELECT
              count()                       AS total_rows,
              uniqExact(row_fingerprint)    AS distinct_rows,
@@ -415,36 +421,84 @@ var verifyChecks = []struct {
          FROM (
              SELECT xxHash64(concatWithSeparator('\x1F',
                         video_session_id, user_id, toString(content_id),
-                        event_type, event, toString(toUnixTimestamp64Milli(event_time)),
+                        event_type, event, toString(toUnixTimestamp64Milli(event_timestamp)),
                         platform, app_version, country,
                         audio_language, subtitle_language, player_version,
-                        toString(toUnixTimestamp64Milli(session_start_time)))) AS row_fingerprint
-             FROM {db}.sl_raw_events
+                        toString(toUnixTimestamp64Milli(session_start_epoch)))) AS row_fingerprint
+             FROM {db}.events_raw
+         )`,
+	},
+	{
+		// Two distinct numbers, and the gap between them is the point.
+		//
+		// semantic_key_excess counts rows sharing (session, ts, type, event) —
+		// which includes both the byte-identical duplicates above AND any row
+		// that conflicts on payload. events_dedup collapses all of them to one
+		// row per key, deterministically, whether or not a merge has run.
+		//
+		// clean_rows is expected to drift downward between runs as RMT merges
+		// fire. dedup_rows is not: if it moves without new data arriving,
+		// something is wrong with the resolution order.
+		"dedup layer (events_dedup must be stable regardless of merge state)",
+		`SELECT
+             (SELECT count() FROM {db}.events_raw)    AS landed_rows,
+             (SELECT count() FROM {db}.events_clean)  AS clean_rows_unmerged,
+             (SELECT count() FROM {db}.events_dedup)  AS dedup_rows,
+             (SELECT count() FROM {db}.events_clean)
+                 - (SELECT count() FROM {db}.events_dedup) AS semantic_key_excess,
+             (SELECT count() FROM {db}.events_raw)
+                 - (SELECT count() FROM {db}.events_clean) AS collapsed_by_merges`,
+	},
+	{
+		// Keys whose copies disagree on more than the lineage columns. Zero is
+		// the normal state; the supplied extract has exactly one. A non-zero
+		// number here is not an error — it is the count of rows whose payload
+		// was chosen by the documented last-write-wins rule rather than being
+		// unambiguous, and it belongs in the run report either way.
+		"conflicting-payload keys (resolved by row_version, not silently dropped)",
+		`SELECT
+             count()      AS conflicting_keys,
+             sum(copies)  AS rows_involved
+         FROM (
+             SELECT count() AS copies
+             FROM {db}.events_clean
+             GROUP BY session_key, event_ts, event_type, event
+             HAVING uniqExact((user_id, content_id, platform, app_version, country,
+                               audio_language, subtitle_language, player_version,
+                               session_start_ts)) > 1
          )`,
 	},
 	{
 		"content dictionary join coverage (must be 0 misses)",
 		`SELECT
              uniqExact(content_id) AS distinct_content_ids,
-             uniqExactIf(content_id, dictGetOrDefault({db}.sl_content_dict, 'video_type', tuple(content_id), '__miss__') = '__miss__') AS unjoinable_ids,
-             countIf(dictGetOrDefault({db}.sl_content_dict, 'video_type', tuple(content_id), '__miss__') = '__miss__') AS unjoinable_events
-         FROM {db}.sl_raw_events`,
+             uniqExactIf(content_id, dictGetOrDefault({db}.content_dict, 'video_type', tuple(content_id), '__miss__') = '__miss__') AS unjoinable_ids,
+             countIf(dictGetOrDefault({db}.content_dict, 'video_type', tuple(content_id), '__miss__') = '__miss__') AS unjoinable_events
+         FROM {db}.events_raw`,
 	},
 	{
-		"signal classification (normalized event taxonomy)",
+		// Read through events_dedup, not events_clean: a duplicate heartbeat
+		// would otherwise inflate its own signal class by one and make the
+		// percentages depend on merge timing.
+		"signal classification (normalized event taxonomy, deduplicated)",
 		`SELECT signal, count() AS events, round(100.0 * count() / sum(count()) OVER (), 2) AS pct
-         FROM {db}.sl_raw_events
+         FROM {db}.events_dedup
          GROUP BY signal
          ORDER BY events DESC`,
 	},
 	{
-		"language normalization effect",
+		// The whole point of the raw/clean split, in one row: the left column
+		// is what the source emitted, the right is what every downstream
+		// GROUP BY sees. If they are equal, the normalization MV is not
+		// running.
+		"language normalization effect (events_raw -> events_clean)",
 		`SELECT
-             uniqExact(subtitle_language)      AS raw_subtitle_values,
-             uniqExact(subtitle_language_norm) AS normalized_subtitle_values,
-             uniqExact(audio_language)         AS raw_audio_values,
-             uniqExact(audio_language_norm)    AS normalized_audio_values
-         FROM {db}.sl_raw_events`,
+             (SELECT uniqExact(subtitle_language) FROM {db}.events_raw)   AS raw_subtitle_values,
+             (SELECT uniqExact(subtitle_language) FROM {db}.events_clean) AS normalized_subtitle_values,
+             (SELECT uniqExact(audio_language)    FROM {db}.events_raw)   AS raw_audio_values,
+             (SELECT uniqExact(audio_language)    FROM {db}.events_clean) AS normalized_audio_values,
+             (SELECT uniqExact(player_version)    FROM {db}.events_raw)   AS raw_player_values,
+             (SELECT uniqExact(player_version)    FROM {db}.events_clean) AS normalized_player_values`,
 	},
 	{
 		"ingest batches",
@@ -456,14 +510,14 @@ var verifyChecks = []struct {
              sum(attempt) - count()     AS retries,
              round(avg(duration_ms), 1) AS avg_ms,
              max(duration_ms)           AS max_ms
-         FROM {db}.sl_ingest_batches
+         FROM {db}.ingest_batches
          GROUP BY source
          ORDER BY source`,
 	},
 	{
 		"quarantined rows",
 		`SELECT source, reason, count() AS rows
-         FROM {db}.sl_ingest_rejects
+         FROM {db}.ingest_rejects
          GROUP BY source, reason
          ORDER BY rows DESC`,
 	},
@@ -471,12 +525,15 @@ var verifyChecks = []struct {
 		"touched-session queue depth",
 		`SELECT
              count()                        AS queue_rows,
-             uniqExact(video_session_id)    AS distinct_sessions,
+             uniqExact(session_key)         AS distinct_sessions,
              min(last_ingested_at)          AS oldest,
              max(last_ingested_at)          AS newest
-         FROM {db}.sl_dirty_sessions`,
+         FROM {db}.dirty_sessions`,
 	},
 	{
+		// Scoped to this pipeline's tables by name rather than by a prefix
+		// pattern: the objects are no longer sl_-prefixed, and matching
+		// everything in the database would fold in whatever else lives there.
 		"part health (watch parts per partition, not total rows)",
 		`SELECT
              table,
@@ -489,7 +546,9 @@ var verifyChecks = []struct {
              SELECT table, partition, bytes_on_disk, data_uncompressed_bytes,
                     count() OVER (PARTITION BY table, partition) AS parts_in_partition
              FROM system.parts
-             WHERE active AND database = '{db}' AND table LIKE 'sl_%'
+             WHERE active AND database = '{db}'
+               AND table IN ('events_raw', 'events_clean', 'dirty_sessions',
+                             'content_dim', 'ingest_batches', 'ingest_rejects')
          )
          GROUP BY table
          ORDER BY table`,
@@ -498,8 +557,15 @@ var verifyChecks = []struct {
 		// The headline compression number, read from system.parts, which
 		// reports byte totals for every part format. This is the figure to
 		// quote; the per-column breakdown below is not always available.
-		"compression of sl_raw_events (by part format)",
+		// Both storage layers, because the raw/clean split means the pipeline
+		// now keeps two copies of every event and the total is what an operator
+		// is actually sizing disk against. events_clean should come out
+		// noticeably smaller per row despite carrying more columns: its
+		// dimensions are normalized to a smaller dictionary and its duplicates
+		// are collapsed by RMT.
+		"compression of the event tables (by part format)",
 		`SELECT
+             table,
              part_type,
              count()                                AS parts,
              formatReadableSize(sum(bytes_on_disk)) AS on_disk,
@@ -507,9 +573,9 @@ var verifyChecks = []struct {
              round(sum(data_uncompressed_bytes) / greatest(sum(bytes_on_disk), 1), 1) AS ratio,
              round(sum(bytes_on_disk) / greatest(sum(rows), 1), 1) AS bytes_per_row
          FROM system.parts
-         WHERE active AND database = '{db}' AND table = 'sl_raw_events'
-         GROUP BY part_type
-         ORDER BY part_type`,
+         WHERE active AND database = '{db}' AND table IN ('events_raw', 'events_clean')
+         GROUP BY table, part_type
+         ORDER BY table, part_type`,
 	},
 	{
 		// Restricted to Wide parts on purpose.
@@ -526,14 +592,14 @@ var verifyChecks = []struct {
 		// routinely empty there while the table above still answers the
 		// question. Forcing Wide parts to populate a report would be the wrong
 		// trade against the storage layer.
-		"compression by column of sl_raw_events (Wide parts only; empty on Compact-only storage such as Cloud)",
+		"compression by column of events_raw (Wide parts only; empty on Compact-only storage such as Cloud)",
 		`SELECT
              column,
              formatReadableSize(sum(column_data_compressed_bytes))   AS compressed,
              formatReadableSize(sum(column_data_uncompressed_bytes)) AS uncompressed,
              round(sum(column_data_uncompressed_bytes) / greatest(sum(column_data_compressed_bytes), 1), 1) AS ratio
          FROM system.parts_columns
-         WHERE active AND database = '{db}' AND table = 'sl_raw_events'
+         WHERE active AND database = '{db}' AND table = 'events_raw'
            AND part_type = 'Wide'
          GROUP BY column
          ORDER BY sum(column_data_compressed_bytes) DESC

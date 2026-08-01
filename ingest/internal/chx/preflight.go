@@ -32,7 +32,13 @@ type TableSettings struct {
 
 // dedupGuaranteeTables are the tables whose idempotency depends on a
 // deduplication window being set correctly for the engine in use.
-var dedupGuaranteeTables = []string{"sl_raw_events", "sl_content_dim"}
+//
+// events_clean is deliberately absent. Its duplicate handling does not rely on
+// an insert-deduplication window at all: nothing inserts into it directly, and
+// row-level duplicates are collapsed by ReplacingMergeTree and resolved by the
+// events_dedup view. A missing window there would be harmless, so reporting it
+// as a problem would be noise.
+var dedupGuaranteeTables = []string{"events_raw", "content_dim"}
 
 // defaultReplicatedWindowSeconds is the ClickHouse default for
 // replicated_deduplication_window_seconds: one hour. Left alone, a replicated
@@ -188,8 +194,8 @@ func (c *Client) serverDefault(ctx context.Context, name string) string {
 // Only the tail after SETTINGS is parsed. engine_full leads with the ORDER BY
 // tuple, whose own commas would otherwise split a setting away from its name:
 //
-//	MergeTree PARTITION BY ... ORDER BY (video_session_id, event_time, event_type,
-//	event) SETTINGS non_replicated_deduplication_window = 1000, replicated_...
+//	MergeTree PARTITION BY ... ORDER BY (video_session_id,
+//	event_timestamp) SETTINGS non_replicated_deduplication_window = 1000, replicated_...
 //
 // Splitting that on commas puts "event) SETTINGS non_replicated_deduplication_window"
 // in one chunk, and the first setting silently reads as unset.

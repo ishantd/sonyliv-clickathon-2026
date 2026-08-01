@@ -235,11 +235,14 @@ func (l *Loader) sendChunk(ctx context.Context, chunk *Chunk) error {
 	token := l.dedupToken(chunk.Ordinal, len(chunk.Rows))
 	batchID := uuid.NewSHA1(batchNamespace, []byte(token))
 
-	firstEvent, lastEvent := chunk.Rows[0].EventTime, chunk.Rows[0].EventTime
+	firstEvent, lastEvent := chunk.Rows[0].EventTimestamp, chunk.Rows[0].EventTimestamp
 	for i := range chunk.Rows {
 		chunk.Rows[i].IngestBatchID = batchID
 		chunk.Rows[i].BatchRowSeq = uint32(i)
-		if t := chunk.Rows[i].EventTime; t.Before(firstEvent) {
+		// Stamped here rather than by the reader: the batch address and the
+		// origin label are properties of the write, not of the parsed row.
+		chunk.Rows[i].SourceFile = l.opts.Source
+		if t := chunk.Rows[i].EventTimestamp; t.Before(firstEvent) {
 			firstEvent = t
 		} else if t.After(lastEvent) {
 			lastEvent = t
@@ -259,7 +262,7 @@ func (l *Loader) sendChunk(ctx context.Context, chunk *Chunk) error {
 		settings["wait_for_async_insert"] = 1
 	}
 
-	stmt := insertStatement(l.client.Database, "sl_raw_events", model.InsertColumns)
+	stmt := insertStatement(l.client.Database, "events_raw", model.InsertColumns)
 
 	var lastErr error
 	started := time.Now()

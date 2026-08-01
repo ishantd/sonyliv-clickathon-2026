@@ -8,25 +8,37 @@ import (
 	"github.com/google/uuid"
 )
 
-// RawEvent mirrors the non-materialized columns of default.sl_raw_events, in
-// the order the INSERT statement declares them.
+// RawEvent mirrors the writable columns of the events_raw landing table, in the
+// order the INSERT statement declares them. Field names track the source CSV
+// header, which is also what events_raw calls them — the rename into the
+// analytical vocabulary happens once, server-side, at the boundary into
+// events_clean.
 //
 // Values are source-faithful: the producer parses and validates but never
-// corrects. Semantic normalization is a materialized column server-side, so
-// that every producer — this loader, the generator, a future Kafka consumer —
-// gets identical results by construction.
+// corrects. There is deliberately NO normalization here — no case folding, no
+// event classification, no empty-to-unknown mapping. Every such rule lives in
+// the events_raw_to_clean_mv SELECT so that this loader, the generator and a
+// future Kafka consumer get identical results by construction, rather than by
+// three clients agreeing to implement the same thing.
+//
+// Not written here, on purpose: _ingested_at. It defaults to now64(3) so it is
+// the server's receive time rather than the producer's clock, which is what
+// makes lateness (_ingested_at - event_timestamp) measurable across producers
+// on different machines. session_key/user_key are MATERIALIZED for the same
+// reason — one definition, server-side.
 type RawEvent struct {
 	IngestBatchID uuid.UUID
 	BatchRowSeq   uint32
+	SourceFile    string
 
 	VideoSessionID string // 64-char uppercase hex
 	UserID         string // 64-char uppercase hex
 	ContentID      int64
 
-	EventType        string
-	Event            string
-	EventTime        time.Time
-	SessionStartTime time.Time
+	EventType         string
+	Event             string
+	EventTimestamp    time.Time
+	SessionStartEpoch time.Time
 
 	Platform         string
 	AppVersion       string
@@ -37,17 +49,18 @@ type RawEvent struct {
 }
 
 // InsertColumns is the column list of the raw-event INSERT, matching the field
-// order of AppendTo. Kept next to the struct so the two cannot drift.
+// order of Values. Kept next to the struct so the two cannot drift.
 var InsertColumns = []string{
-	"ingest_batch_id",
-	"batch_row_seq",
+	"_ingest_batch_id",
+	"_batch_row_seq",
+	"_source_file",
 	"video_session_id",
 	"user_id",
 	"content_id",
 	"event_type",
 	"event",
-	"event_time",
-	"session_start_time",
+	"event_timestamp",
+	"session_start_epoch",
 	"platform",
 	"app_version",
 	"country",
@@ -61,13 +74,14 @@ func (e *RawEvent) Values() []any {
 	return []any{
 		e.IngestBatchID,
 		e.BatchRowSeq,
+		e.SourceFile,
 		e.VideoSessionID,
 		e.UserID,
 		e.ContentID,
 		e.EventType,
 		e.Event,
-		e.EventTime,
-		e.SessionStartTime,
+		e.EventTimestamp,
+		e.SessionStartEpoch,
 		e.Platform,
 		e.AppVersion,
 		e.Country,
@@ -119,7 +133,7 @@ func (r *Reject) Values() []any {
 	return []any{r.RunID, r.Source, r.SourceLine, r.Reason, r.Detail, r.RawRow}
 }
 
-// BatchAudit is one row of default.sl_ingest_batches.
+// BatchAudit is one row of default.ingest_batches.
 type BatchAudit struct {
 	IngestBatchID     uuid.UUID
 	RunID             uuid.UUID
