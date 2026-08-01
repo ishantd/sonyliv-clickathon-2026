@@ -2,18 +2,27 @@ version: sonyliv-active-v1
 status: benchmark_contract_pending
 
 # Canonical time model.
+source_timestamp_format: unix_epoch_milliseconds
+source_timestamp_columns:
+  - event_timestamp
+  - session_start_epoch
 timezone: UTC
+persisted_timestamp_type: "DateTime64(3, 'UTC')"
+service_date_timezone: UTC
+local_timezone_policy: query_time_projection_only
 interval_convention: "[start, end)"
-same_timestamp_precedence:
-  - VideoSessionEnd
-  - AppBackgrounded
-  - VideoError
-  - pause
-  - VideoSessionStart
-  - AppForegrounded
-  - VideoPlay
-  - resume
-  - other_heartbeat
+same_timestamp_resolution:
+  coalesce_all_assignments: true
+  terminal_wins_all_axes: VideoSessionEnd
+  foreground_axis:
+    stopped_setter: AppBackgrounded
+    stopped_wins: true
+  playback_axis:
+    stopped_setters:
+      - VideoError
+      - pause
+    stopped_wins: true
+  liveness_evaluated_after_state_assignment: true
 
 # Primary answer is session concurrency. User concurrency is a separate metric and
 # requires unioning a user's overlapping session intervals before boundaries are
@@ -59,7 +68,7 @@ liveness:
     The dictionary says heartbeats currently arrive every 60 seconds; clean
     periodic telemetry in the supplied file has a 40.003 second median gap.
     120 seconds is two documented periods and about three observed periods.
-    Sensitivity at 60/90/120 seconds retains 98.6343/98.8284/98.9626 percent
+    Sensitivity at 60/90/120 seconds retains 98.6341/98.8282/98.9624 percent
     of explicit foreground-and-playing time, so the timeout is not identifiable
     from this closed-session extract and must stay configurable.
   signal_events:
@@ -92,10 +101,11 @@ dimensions:
     - country
   content_enrichment:
     - video_type
+  dictionary_only_metadata:
     - category
     - title
   unknown_string: __unknown__
-  missing_start_action: quarantine
+  missing_start_action: retain_raw_and_exclude_from_interval_state
   drift_action: retain_start_value_and_emit_metric
 
 metrics:

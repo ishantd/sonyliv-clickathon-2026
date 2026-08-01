@@ -22,7 +22,7 @@ SELECT throwIf(
     range_start >= range_end
     OR range_start != toStartOfMinute(range_start)
     OR range_end != toStartOfMinute(range_end)
-    OR toDate(range_start) != toDate(range_end - toIntervalMillisecond(1)),
+    OR toDate(range_start, 'UTC') != toDate(range_end - toIntervalMillisecond(1), 'UTC'),
     'minute cache requires a positive minute-aligned range within one UTC service day; route to 30_exact_metrics.sql'
 );
 
@@ -86,3 +86,6 @@ LIMIT 10000;
 
 -- For partial-minute ranges, use 30_exact_metrics.sql so the denominator and
 -- edge overlap remain exact rather than clipping whole minute snapshots.
+-- Keep filtering, service dates, and range parameters in UTC. If a consumer
+-- needs India wall-clock labels, project only the returned timestamp:
+--   toTimeZone(minute_start, 'Asia/Kolkata') AS minute_start_ist

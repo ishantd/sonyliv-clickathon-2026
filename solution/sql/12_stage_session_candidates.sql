@@ -23,7 +23,9 @@ WITH
           (
               SELECT video_session_id
               FROM sonyliv.compaction_worksets
-              WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+              WHERE pipeline_run_id = {pipeline_run_id:UUID}
+                AND policy_version = {policy_version:String}
+                AND adjustment_batch_id = {adjustment_batch_id:UUID}
           )
         GROUP BY video_session_id, event_time, event_type, event
     ),
@@ -77,11 +79,12 @@ WITH
     )
 
 SELECT
+    {pipeline_run_id:UUID},
     {adjustment_batch_id:UUID},
     {state_revision:UInt64},
     {oracle_run_id:UUID},
     {policy_version:String},
-    toDate(lifecycle_start_time) AS session_start_date,
+    toDate(lifecycle_start_time, 'UTC') AS session_start_date,
     video_session_id,
     canonical_user_id,
     content_id,
@@ -98,15 +101,17 @@ SELECT
     intervals,
     reinterpretAsUInt128(sipHash128(intervals)) AS boundary_hash,
     toUInt32(source_event_count),
-    now64(3)
+    now64(3, 'UTC')
 FROM joined
 SETTINGS insert_deduplication_token = {candidate_dedup_token:String};
 
 SELECT
     (SELECT count() FROM sonyliv.compaction_worksets
-     WHERE adjustment_batch_id = {adjustment_batch_id:UUID}) AS workset_sessions,
+     WHERE pipeline_run_id = {pipeline_run_id:UUID}
+       AND policy_version = {policy_version:String}
+       AND adjustment_batch_id = {adjustment_batch_id:UUID}) AS workset_sessions,
     count() AS anchored_candidate_sessions,
     countIf(empty(intervals)) AS candidates_without_active_intervals
 FROM sonyliv.session_recompute_candidates
-WHERE adjustment_batch_id = {adjustment_batch_id:UUID};
-
+WHERE pipeline_run_id = {pipeline_run_id:UUID}
+  AND adjustment_batch_id = {adjustment_batch_id:UUID};

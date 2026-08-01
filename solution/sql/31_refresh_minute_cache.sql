@@ -45,13 +45,6 @@ WITH
     toDateTime64(addDays(selected_date, 1), 3, 'UTC') AS day_end,
     toUnixTimestamp64Milli(day_start) AS day_start_ms,
     toUInt64(60000) AS minute_ms,
-    (
-        SELECT any(cutoff)
-        FROM sonyliv.delta_snapshots
-        WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
-          AND policy_version = {policy_version:String}
-          AND pipeline_run_id = {pipeline_run_id:UUID}
-    ) AS snapshot_cutoff,
 
     points AS
     (
@@ -62,26 +55,20 @@ WITH
             content_id,
             boundary_time,
             sum(delta) AS point_delta
-        FROM sonyliv.boundary_adjustments AS a
-        INNER JOIN
-        (
-            SELECT adjustment_batch_id
-            FROM sonyliv.published_adjustment_batches
-            WHERE policy_version = {policy_version:String}
-              AND pipeline_run_id = {pipeline_run_id:UUID}
-              AND published_at <= snapshot_cutoff
-            GROUP BY adjustment_batch_id
-        ) AS b USING (adjustment_batch_id)
-        WHERE a.service_date = selected_date
-          AND a.entity = CAST({entity:String}, 'Enum8(\'session\' = 1, \'user\' = 2)')
-          AND a.rollup_mask = {rollup_mask:UInt16}
-          AND a.boundary_time < day_end
+        FROM sonyliv.concurrency_delta_snapshots
+        WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+          AND pipeline_run_id = {pipeline_run_id:UUID}
+          AND policy_version = {policy_version:String}
+          AND service_date = selected_date
+          AND entity = CAST({entity:String}, 'Enum8(\'session\' = 1, \'user\' = 2)')
+          AND rollup_mask = {rollup_mask:UInt16}
+          AND boundary_time < day_end
         GROUP BY
             platform,
             country,
             video_type,
             content_id,
-            a.boundary_time
+            boundary_time
         HAVING point_delta != 0
     ),
 

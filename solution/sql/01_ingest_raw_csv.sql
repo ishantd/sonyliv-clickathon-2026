@@ -10,6 +10,9 @@
 --
 -- Retry with byte-identical data, the same row order, block settings, and token.
 -- Production producers should use Native blocks of 10K-100K rows (50K target).
+-- Source event_timestamp/session_start_epoch remain Int64 Unix epoch milliseconds.
+-- Normalize that absolute instant once into DateTime64(3,'UTC'); never add a
+-- local offset during ingestion. Local rendering is a query/UI concern.
 
 INSERT INTO sonyliv.raw_events
 (
@@ -78,5 +81,7 @@ FROM input(
 )
 SETTINGS
     insert_deduplication_token = {insert_deduplication_token:String},
-    async_insert = 0
+    async_insert = 0,
+    max_threads = 1,
+    input_format_parallel_parsing = 0
 FORMAT CSVWithNames;

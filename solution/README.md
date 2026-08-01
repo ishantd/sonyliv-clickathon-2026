@@ -25,6 +25,24 @@ Provenance labels used below:
 The complete measurements are in `evidence/MEASURED.md`; the machine-readable
 semantic switches are in `policy.yaml`.
 
+## Canonical time contract
+
+**[derived]** The source transport stays byte-faithful: `event_timestamp` and
+`session_start_epoch` are `Int64` Unix epoch milliseconds. At the ClickHouse
+ingestion boundary they are normalized once with
+`fromUnixTimestamp64Milli(..., 'UTC')` into `DateTime64(3,'UTC')`. Every stored
+timestamp, service date, partition boundary, interval split, query parameter,
+and published answer remains UTC. No IST-shifted timestamp or service date is
+materialized.
+
+This choice is observable rather than cosmetic. All 905,558 supplied rows have
+13-digit epoch values and more than 99.9% carry non-zero millisecond precision.
+Rendering the same instants in `Asia/Kolkata` changes the calendar date of 6,140
+events across 34 sessions, including 24 SessionStart rows. An implicit server
+timezone would therefore change daily partitions and answers. Consumers that
+need India wall-clock labels convert only the result at runtime, for example
+`toTimeZone(minute_start, 'Asia/Kolkata')`; filters and range bounds stay UTC.
+
 ## Workload summary
 
 This is an append-heavy telemetry workload with millisecond event time,
@@ -43,7 +61,7 @@ flowchart LR
     E["33K content dictionary"] --> D
     D --> F["versioned interval maps"]
     F --> G["old/new signed boundary difference"]
-    G --> H["concurrency_deltas"]
+    G --> H["sealed signed-boundary snapshot"]
     H --> I["validated minute generation"]
     I --> J["minute/hour/day dashboard queries"]
     B --> K["independent full-day oracle"]
@@ -65,23 +83,27 @@ active = started
 
 Transitions:
 
-- `VideoSessionStart` starts lifecycle, initially foreground but not playing.
+- only the first `VideoSessionStart` starts lifecycle, initially foreground but
+  not playing; later Start rows remain in raw input but are ignored by interval
+  state.
 - `VideoPlay` and heartbeat `resume` set playing and renew liveness when
   foreground.
 - heartbeat `pause` and `VideoError` clear playing immediately. Error is
   recoverable only through a later Play/resume.
 - `AppBackgrounded` clears foreground; `AppForegrounded` only sets foreground.
   It does not resume a paused player or refresh an expired lease.
-- the first `VideoSessionEnd` is terminal; later rows are quarantined/ignored.
-- all assignments at the same millisecond are coalesced; terminal/stop wins when
-  no source sequence exists.
+- the first `VideoSessionEnd` is terminal; later rows remain in raw input but are
+  ignored by interval state.
+- all assignments at the same millisecond are coalesced. End wins both axes;
+  Background wins the foreground axis; Error/pause win the playback axis.
 - a late eligible heartbeat after lease expiry opens a new interval at its own
   event time. Heartbeats received while paused/backgrounded do not renew it.
 
 The pause decision is not optional in the default answer: the problem statement
-explicitly says paused time overstates the audience, while the data shows
-heartbeats continue after pause and 13,497 Foreground events retain pause as the
-latest playback state.
+explicitly says paused time overstates the audience. After semantic
+deduplication, first-Start/first-End clipping, and same-millisecond coalescing,
+13,382 of 14,256 Foreground assignments leave playback stopped; 13,371 have
+pause as the latest playback marker.
 
 **[field]** `heartbeat_timeout_ms=120000` is deliberately configurable. Clean
 telemetry has a 40.003s median gap; the dictionary says 60s; 120s is two stated
@@ -119,7 +141,34 @@ identifies a scoped reference calculation; `pipeline_run_id` separately binds
 all correction batches, snapshots, cache rows, and manifests in one serving
 lineage.
 
-The touched-session query is bounded in the supplied data (p99 432 events,
+The control plane has two fail-closed completeness markers. Step 09 freezes the
+initial dirty-operation seed, and step 25 refuses to seal a first snapshot until
+every seed operation is checkpointed and every seed session has committed state.
+A full-scan step 10 writes its source/policy/pipeline-bound oracle manifest in the
+same multiquery; scoped correction runs cannot authorize publication. Snapshot
+membership and point fingerprints are immutable, while steps 34 and 33 attest
+the candidate independently from sealed points and raw intervals. Step 35 then
+re-hashes the live candidate, both attestations, oracle manifest, batch ledger,
+and point projection inside the manifest `INSERT … SELECT`.
+
+**[production prerequisite]** `compaction_worksets` is audit/recovery metadata,
+not compare-and-set locking. A linearizable Keeper/coordinator lease keyed by
+`(pipeline_run_id,policy_version)`, with a monotonically increasing fencing
+epoch, must be held across steps 11–20 and snapshot sealing; the control-plane
+publisher must also serialize step 35 per generation key. The owner/epoch must be
+authoritatively rechecked immediately before the batch-ledger commit. The
+embedded verifier is intentionally single-worker and does not prove this
+external coordination property.
+
+The first snapshot also needs a bounded bootstrap cut: briefly quiesce raw
+ingestion, or freeze a broker/object-store offset, from step 09 seed capture
+through the first step 25 seal. The fail-closed seed check intentionally rejects
+new dirty-operation membership during that window rather than publishing a
+partial initial lineage. Continuous ingestion can resume after the first
+snapshot; production should automate the cutoff instead of repeatedly allocating
+new lineages under live traffic.
+
+The touched-session query is bounded in the supplied raw data (p99 434 rows,
 maximum 1,803) and is the only place that sorts full session history. A nightly
 or on-demand full-day oracle independently reconciles every published answer.
 
@@ -137,13 +186,15 @@ revision instead of broad `FINAL`.
   event,hash)`. **[derived exception]** Session ID leads despite its high
   cardinality because the only raw hot-path read is a touched-session history
   lookup. Dashboard filters never hit raw.
-- **Content:** 33,464 unique keys and 100% used-ID coverage make a hashed
-  dictionary appropriate. Enrichment is applied during session compaction and
-  denormalized into boundaries. A content change explicitly dirties affected
-  sessions because right-side dictionary changes do not trigger an MV.
-- **State:** immutable `ReplacingMergeTree(revision)` history with compact
-  interval arrays. Current touched rows are read with `argMax`, not assumed to be
-  physically replaced.
+- **Content:** 33,464 unique keys cover all 3,357 IDs used by this extract, so a
+  hashed dictionary is appropriate. Video type is resolved during session
+  compaction and denormalized into boundaries; title/category remain dictionary
+  metadata. Production needs an explicit content-change handler to dirty affected
+  sessions because right-side changes do not trigger an MV; the checked fixture
+  does not exercise that handler.
+- **State:** append-only `MergeTree` revision history with compact interval
+  arrays. Current reads are pipeline/policy scoped, joined to committed batch
+  IDs, and reduced with `argMax`; an uncommitted higher revision is invisible.
 - **Points:** `SummingMergeTree(delta)` ordered by entity, mask, date, exact
   filtered dimensions, and boundary time. Queries always `sum(delta) GROUP BY`
   the complete key because physical merges are asynchronous.
@@ -160,9 +211,11 @@ Raw event types remain strings for forward compatibility; internal closed sets
 use Enum.
 
 Daily interval splitting emits `-1` at midnight under the prior `service_date`
-and `+1` under the next. This keeps every daily boundary map self-contained and
-balanced. Sixteen sessions cross at least one day and one crosses two boundaries,
-so this is required, not theoretical.
+and `+1` under the next, keeping every daily boundary map self-contained and
+balanced. Eleven first-Start-to-first-End lifecycles cross at least one UTC
+midnight, and one crosses two. Under the checked 120-second policy, zero
+normalized active intervals cross midnight; the splitter is an unseen-day guard,
+not behavior exercised by this extract.
 
 ## Exact peak and average
 
@@ -201,11 +254,11 @@ single-boundary overcount of 938 sessions. The exact in-minute peak is separatel
 ## Filter strategy
 
 `rollup_mask` identifies which of platform, country, content, and video type are
-materialized. Only masks required by the fixed benchmark are emitted, plus mask
-0 global and mask 15 leaf fallback. The supplied start state has 4,317 full
-dimension combinations, so this avoids a full dimension power set while keeping
-query filters aligned to the point/minute sort key. Country is currently constant
-but is retained for unseen-day correctness.
+materialized. `policy.yaml` selects ten masks, including mask 0 global and mask
+15 leaf. The supplied Start-anchored state has 4,317 full dimension combinations.
+The exact mask set must be confirmed against the fixed benchmark query set; the
+checked verifier does not prove every selected mask is required. Country is
+currently constant but is retained for unseen-day correctness.
 
 Session-static dimensions come from the first SessionStart. This avoids event-row
 drift (user 120 sessions, platform 95, content one) changing attribution inside a
@@ -237,7 +290,15 @@ masks, and leaves a zero signed row sum. Current state, the correction-backed
 serving curve, and a fresh full-source oracle all converge to exactly
 `6,404,143,590` active milliseconds. Reusing the batch ID or minute generation
 hard-fails; a partial-minute dashboard request is rejected and routed to the
-exact endpoint query.
+exact endpoint query. The verifier also proves that generation 1 remains
+byte-stable after generation 2, identical attestation retries collapse to one
+logical claim, and conflicting or post-attestation-mutated candidates cannot
+produce a manifest row. An isolated boundary-swap fixture additionally proves
+that an old interval ending exactly when its replacement starts retains two
+distinct operation IDs and publishes the required net `+2` at that point. The
+published minute path is checked end to end for
+`entity=session, rollup_mask=0`; the remaining entity/mask boundary maps are
+emitted but not each independently minute-parity-tested.
 
 No scheduled `OPTIMIZE FINAL`, `ALTER UPDATE`, or `ALTER DELETE` is part of the
 pipeline.
@@ -273,18 +334,24 @@ benchmark query through the minute serving table.
 ## Unseen-day runbook
 
 1. Save raw/content bytes, SHA-256, row count, schema, UTC range, and
-   `policy.yaml`; allocate one stable `pipeline_run_id`.
+   `policy.yaml`; freeze the bootstrap input offset, allocate one stable
+   `pipeline_run_id`, and obtain the external fenced compactor lease.
 2. Run `00_schema.sql`, then load deterministic Native blocks using steps 01–02;
    retain query IDs, deduplication tokens, and input manifests.
-3. Run `05_profile_loaded_data.sql`; fail on ID/type/content/contract drift.
-4. For each correction batch, run steps 11 → 10 (scoped) → 12 → 13 → 20 → 14.
+3. Run `05_profile_loaded_data.sql`; fail on ID/type/content/contract drift, then
+   freeze the new lineage seed with step 09.
+4. For each correction batch, run steps 11 → 10 (scoped) → 12 → 13 → 20 → 14
+   while holding the fenced lease.
    A crash retry reuses the same batch ID and tokens; a published ID is never
    recycled.
 5. Seal the published adjustment-ledger cutoff with step 25, then build each
-   required `(day,entity,mask)` candidate with step 31.
-6. Run the sealed-point per-minute parity gate in step 34 and the independent
-   raw-interval gates in step 40, including shuffled replay, duplicate replay,
-   tied-boundary, and late-pause fixtures.
+   required `(day,entity,mask)` candidate with step 31. If step 25 fails after
+   writing staging rows, abandon that snapshot ID rather than retrying it. Resume
+   live ingestion after this first complete lineage snapshot is committed.
+6. Run a source-wide step 10 with a new oracle ID; it seals its completion
+   manifest. Run the sealed-point parity gate in step 34, the independent
+   raw-interval minute oracle in step 33, and general gates in step 40, including
+   shuffled replay, duplicate replay, tied-boundary, and late-pause fixtures.
 7. Run step 35 only after every gate passes. Serve aligned ranges with step 32;
    route partial-minute/cross-day ranges to step 30.
 8. Execute fixed cold/warm queries, record deterministic answer SHA and
@@ -316,17 +383,19 @@ must record its version.
 - `sql/00_schema.sql` — ClickHouse tables, MVs, dictionary, and control plane.
 - `sql/01_ingest_raw_csv.sql`, `02_ingest_content_csv.sql` — deterministic load.
 - `sql/05_profile_loaded_data.sql` — evidence reproduction.
+- `sql/09_initialize_pipeline_lineage.sql` — immutable complete seed membership.
 - `sql/10_reference_intervals.sql` — exact event-time state oracle/backfill.
 - `sql/11_select_touched_workset.sql` — append-only dirty-operation drain.
 - `sql/12_stage_session_candidates.sql` — includes zero-active replacements.
 - `sql/13_apply_state_differences.sql` — session/user old-new interval maps.
 - `sql/14_checkpoint_touched_batch.sql` — post-publication dirty checkpoint.
-- `sql/20_publish_boundaries.sql` — session/user maps and signed corrections.
+- `sql/20_publish_boundaries.sql` — exact endpoints and published-batch ledger.
 - `sql/25_seal_delta_snapshot.sql` — immutable correction-ledger cutoff.
 - `sql/30_exact_metrics.sql` — exact arbitrary bucket query.
 - `sql/31_refresh_minute_cache.sql`, `32_dashboard_queries.sql` — serving cache.
+- `sql/33_validate_raw_oracle_generation.sql` — raw interval-to-minute attestation.
 - `sql/34_validate_candidate_generation.sql` — full per-minute snapshot parity.
-- `sql/35_publish_generation.sql` — answer hash and atomic manifest publication.
+- `sql/35_publish_generation.sql` — authoritative re-hash and manifest publication.
 - `sql/40_validation.sql` — publication gates.
 - `sql/60_session_independent_baseline.sql` — non-authoritative comparison path.
 - `tools/verify_embedded.py` — hash-locked executable correctness/correction test.

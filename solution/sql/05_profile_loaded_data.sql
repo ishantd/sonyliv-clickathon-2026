@@ -12,6 +12,23 @@ SELECT
 FROM sonyliv.raw_events
 SETTINGS max_execution_time = 30, max_rows_to_read = 2000000;
 
+-- Calendar-date sensitivity is evidence for keeping service dates explicitly
+-- UTC. Asia/Kolkata is a query-time projection only; it is never persisted.
+SELECT
+    countIf(toDate(event_time, 'UTC') != toDate(event_time, 'Asia/Kolkata'))
+        AS event_rows_with_different_ist_date,
+    uniqExactIf(
+        video_session_id,
+        toDate(event_time, 'UTC') != toDate(event_time, 'Asia/Kolkata')
+    ) AS sessions_with_different_ist_event_date,
+    uniqExactIf(
+        video_session_id,
+        event_type = 'VideoSessionStart'
+        AND toDate(event_time, 'UTC') != toDate(event_time, 'Asia/Kolkata')
+    ) AS session_starts_with_different_ist_date
+FROM sonyliv.raw_events
+SETTINGS max_execution_time = 30, max_rows_to_read = 2000000;
+
 SELECT event_type, count() AS rows
 FROM sonyliv.raw_events
 GROUP BY event_type

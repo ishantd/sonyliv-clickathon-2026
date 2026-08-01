@@ -21,7 +21,7 @@ schema; “N/A” means the feature is intentionally absent.
 | `schema-types-enum` | Applied selectively | Internal entity, batch status, and closed control states use Enum. Raw event/video type remain LowCardinality String to accept unseen values. |
 | `schema-json-when-to-use` | N/A, consciously | The supplied schema is fixed and columnar. Do not add JSON until a genuinely dynamic event payload exists; then project hot paths into columns. |
 | `schema-types-lowcardinality` | Applied | Repeated strings with measured cardinality 1–84 (plus event value 47) use LowCardinality. Titles remain plain String. |
-| `schema-types-native-types` | Applied | `DateTime64(3,'UTC')`, `UUID`, `FixedString(64)`, signed numeric IDs/deltas, Date and Bool replace strings. |
+| `schema-types-native-types` | Applied | Source epoch-millisecond `Int64` values are normalized once to `DateTime64(3,'UTC')`; 99.9%+ of supplied values require millisecond precision. UUID, FixedString, signed numeric IDs/deltas, Date, and Bool replace strings. |
 | `schema-partition-lifecycle` | Applied | Daily raw session-start partitions support short replay retention; monthly point/state partitions support retention/archive. No arbitrary high-cardinality partition key. |
 | `query-join-choose-algorithm` | Applied | Unique 33K content enrichment uses a hashed dictionary/direct lookup; small result joins use `LEFT ANY`. [Join guidance](https://clickhouse.com/docs/concepts/best-practices/minimize-optimize-joins) |
 | `query-join-consider-alternatives` | Applied | Content attributes are denormalized at session compaction; dashboards have no runtime content JOIN. |
@@ -48,6 +48,10 @@ schema; “N/A” means the feature is intentionally absent.
 - **[official]** Direct deterministic Native batches of 10K–100K rows; 50K is
   the starting target. Async inserts with acknowledgement are the fallback for
   small/high-frequency producers.
+- **[derived]** Preserve source timestamps as Unix epoch milliseconds on the
+  transport, normalize once to `DateTime64(3,'UTC')` at ingestion, and keep all
+  persisted service dates UTC. `Asia/Kolkata` is an explicit query-time
+  projection only; never add a local offset to an epoch value.
 - **[derived]** A queue/Kafka/ClickPipes layer is warranted for production burst
   absorption/replay, but is not needed to prove the hackathon model. In both
   cases ClickHouse performs normalization, state computation, and analytics.
@@ -59,19 +63,32 @@ schema; “N/A” means the feature is intentionally absent.
 - **[official]** Prefer denormalization or a dictionary/direct join for
   latency-sensitive analytics; use ANY when one match is intended.
 - **[derived]** Content is an ideal dictionary: 33,464 unique keys and 100% raw
-  coverage. Resolve video type/category during touched-session recomputation and
-  carry them into boundaries/minutes.
+  coverage. Resolve video type during touched-session recomputation and carry it
+  into boundaries/minutes; title/category remain dictionary metadata.
 - **[field]** Choose dictionary refresh lifetime from metadata SLO. A changed
   right-side row must explicitly dirty affected sessions because no MV trigger
-  fires for dictionary changes.
+  fires for dictionary changes. That production handler is required but is not
+  exercised by the checked fixture.
 
 ### `decision-late-arriving-upserts`
 
 - **[official]** ReplacingMergeTree replacement is eventual, and incremental MV
   output is not retracted by a source replacement. [ReplacingMergeTree](https://clickhouse.com/docs/concepts/features/operations/update/replacing-merge-tree)
 - **[derived]** Recompute touched session history in event time and publish
-  `new_boundary_map - old_boundary_map`. Read current touched state via `argMax`
-  rather than broad `FINAL`.
+  `new_boundary_map - old_boundary_map`. Initial backfill and corrections use the
+  same versioned-state path; stable operation IDs, batch ledgers, and sealed
+  `pipeline_run_id` snapshots prevent retry/race ambiguity. Read current touched
+  state via `argMax` rather than broad `FINAL`.
+- **[field / production prerequisite]** Plain MergeTree workset rows are
+  audit/recovery metadata, not CAS. Hold a linearizable Keeper/coordinator lease
+  keyed by `(pipeline_run_id,policy_version)` across compaction and snapshot
+  sealing, serialize manifest publication per generation key, use a monotone
+  fencing epoch, and authoritatively recheck it just before the batch-ledger
+  commit. The embedded verifier is single-worker.
+- **[field / production prerequisite]** Freeze a broker/object-store offset or
+  briefly quiesce ingestion from initial seed capture through the first snapshot.
+  The checked SQL deliberately fails closed if dirty membership grows during
+  lineage bootstrap; this is a bounded bootstrap cut, not a steady-state pause.
 - **[field]** Do not set a streaming watermark from CSV order. Measure actual
   `ingested_at-event_time`; retain a slower reconciliation/correction lane through
   the raw-data retention window.
@@ -93,9 +110,10 @@ schema; “N/A” means the feature is intentionally absent.
 - **[official]** Incremental MVs are insert-block triggers; refreshable MVs
   periodically recompute a selected result.
 - **[derived]** Hybrid tiering: exact signed boundary points absorb corrections;
-  exact minute generations answer dashboards; raw-event interval oracle verifies
-  complete days. This is smaller and more update-friendly than raw overlap or
-  session×minute explosion.
+  exact minute generations answer dashboards; a sealed-point parity gate and
+  raw-event interval oracle verify complete days before the manifest publishes.
+  This is smaller and more update-friendly than raw overlap or session×minute
+  explosion.
 - **[field]** Refresh the hot minute generation every 30–60s initially, then tune
   from correction backlog/freshness evidence. Never publish a latency target
   without Cloud `system.query_log` evidence. [Query log fields](https://clickhouse.com/docs/reference/system-tables/query_log)

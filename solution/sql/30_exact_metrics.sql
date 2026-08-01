@@ -3,6 +3,7 @@
 -- Required parameters:
 --   entity               'session' or 'user'
 --   rollup_mask          mask from policy.yaml
+--   policy/pipeline/snapshot exactly matching the published manifest
 --   range_start          UTC string, inclusive
 --   range_end            UTC string, exclusive
 --   bucket_ms            60000, 3600000, or 86400000
@@ -14,6 +15,15 @@
 -- The query includes every point from UTC midnight so a range beginning in the
 -- middle of a minute/day has the correct opening balance. Because intervals are
 -- split at UTC midnight, each service_date independently begins at zero.
+
+SELECT throwIf(
+    count() != 1,
+    'exact query source snapshot is missing or duplicated'
+)
+FROM sonyliv.delta_snapshots
+WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+  AND pipeline_run_id = {pipeline_run_id:UUID}
+  AND policy_version = {policy_version:String};
 
 WITH
     toDateTime64({range_start:String}, 3, 'UTC') AS range_start,
@@ -32,11 +42,14 @@ WITH
             content_id,
             boundary_time,
             sum(delta) AS point_delta
-        FROM sonyliv.concurrency_deltas
-        WHERE entity = CAST({entity:String}, 'Enum8(\'session\' = 1, \'user\' = 2)')
+        FROM sonyliv.concurrency_delta_snapshots
+        WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+          AND pipeline_run_id = {pipeline_run_id:UUID}
+          AND policy_version = {policy_version:String}
+          AND entity = CAST({entity:String}, 'Enum8(\'session\' = 1, \'user\' = 2)')
           AND rollup_mask = {rollup_mask:UInt16}
-          AND service_date BETWEEN toDate(range_start)
-                               AND toDate(range_end - toIntervalMillisecond(1))
+          AND service_date BETWEEN toDate(range_start, 'UTC')
+                               AND toDate(range_end - toIntervalMillisecond(1), 'UTC')
           AND boundary_time < range_end
           AND ({platform_filter:String} = '*' OR platform = {platform_filter:String})
           AND ({country_filter:String} = '*' OR country = {country_filter:String})

@@ -19,6 +19,11 @@ not ClickHouse Cloud latency claims. The executable late-pause test also proves
 that touched-session corrections converge exactly with a fresh full-source
 rebuild and reject duplicate publication retries.
 
+The canonical time contract is UTC end to end: source transport timestamps are
+Unix epoch milliseconds, ClickHouse stores `DateTime64(3,'UTC')`, service days
+are UTC, and any `Asia/Kolkata` rendering happens only in the consuming query or
+UI.
+
 ## Team
 
 | Role | Name | GitHub |

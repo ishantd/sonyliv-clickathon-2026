@@ -1,6 +1,12 @@
 -- Publication gates. Every query below must return zero bad rows (or the stated
 -- equality) before a minute generation is added to the serving manifest.
 
+SELECT throwIf(count() != 1, 'validation snapshot is missing or duplicated')
+FROM sonyliv.delta_snapshots
+WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+  AND pipeline_run_id = {pipeline_run_id:UUID}
+  AND policy_version = {policy_version:String};
+
 -- 1. Interval shape.
 SELECT throwIf(count() > 0, 'invalid or empty reference intervals') AS invalid_or_empty_intervals
 FROM sonyliv.active_intervals_reference
@@ -58,7 +64,10 @@ FROM
         video_type,
         content_id,
         sum(delta) AS balance
-    FROM sonyliv.concurrency_deltas
+    FROM sonyliv.concurrency_delta_snapshots
+    WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+      AND pipeline_run_id = {pipeline_run_id:UUID}
+      AND policy_version = {policy_version:String}
     GROUP BY
         entity,
         rollup_mask,
@@ -83,7 +92,10 @@ WITH points AS
         content_id,
         boundary_time,
         sum(delta) AS d
-    FROM sonyliv.concurrency_deltas
+    FROM sonyliv.concurrency_delta_snapshots
+    WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+      AND pipeline_run_id = {pipeline_run_id:UUID}
+      AND policy_version = {policy_version:String}
     GROUP BY
         entity,
         rollup_mask,
@@ -115,14 +127,20 @@ WHERE concurrency < 0;
 WITH global_points AS
 (
     SELECT service_date, boundary_time, sum(delta) AS d
-    FROM sonyliv.concurrency_deltas
-    WHERE entity = 'session' AND rollup_mask = 0
+    FROM sonyliv.concurrency_delta_snapshots
+    WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+      AND pipeline_run_id = {pipeline_run_id:UUID}
+      AND policy_version = {policy_version:String}
+      AND entity = 'session' AND rollup_mask = 0
     GROUP BY service_date, boundary_time
 ), platform_points AS
 (
     SELECT service_date, boundary_time, sum(delta) AS d
-    FROM sonyliv.concurrency_deltas
-    WHERE entity = 'session' AND rollup_mask = 1
+    FROM sonyliv.concurrency_delta_snapshots
+    WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+      AND pipeline_run_id = {pipeline_run_id:UUID}
+      AND policy_version = {policy_version:String}
+      AND entity = 'session' AND rollup_mask = 1
     GROUP BY service_date, boundary_time
 )
 SELECT throwIf(count() > 0, 'global and platform delta points disagree') AS global_platform_point_mismatches
@@ -131,7 +149,7 @@ FULL OUTER JOIN platform_points AS p USING (service_date, boundary_time)
 WHERE coalesce(g.d, toInt64(0)) != coalesce(p.d, toInt64(0));
 
 -- 7. Content enrichment coverage. Supplied data must return zero misses; unseen
--- misses are quarantined as __unknown__ and alerted, never silently dropped.
+-- misses remain explicit __unknown__ values and alert, never silently drop rows.
 SELECT throwIf(count() > 0, 'content dictionary misses') AS content_dictionary_misses
 FROM
 (
@@ -179,6 +197,8 @@ SELECT
             'duplicate published adjustment batch IDs'
         )
         FROM sonyliv.published_adjustment_batches
+        WHERE pipeline_run_id = {pipeline_run_id:UUID}
+          AND policy_version = {policy_version:String}
     ) AS duplicate_published_batch_rows,
     countIf(current_status = 'failed') AS currently_failed_batches
 FROM current_batches;
@@ -187,7 +207,15 @@ SELECT throwIf(
     count() != uniqExact(adjustment_operation_id),
     'duplicate boundary operation IDs'
 ) AS duplicate_boundary_operations
-FROM sonyliv.boundary_adjustments;
+FROM sonyliv.boundary_adjustments AS a
+INNER JOIN
+(
+    SELECT adjustment_batch_id
+    FROM sonyliv.delta_snapshot_batches
+    WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+      AND pipeline_run_id = {pipeline_run_id:UUID}
+      AND policy_version = {policy_version:String}
+) AS m USING (adjustment_batch_id);
 
 -- 10. Cache conservation for the global session mask. These two totals must be
 -- equal for the selected policy/date/generation.
@@ -210,6 +238,9 @@ WITH
         SELECT sum(active_entity_ms)
         FROM sonyliv.concurrency_minute_versions
         WHERE generation = {generation:UInt64}
+          AND policy_version = {policy_version:String}
+          AND pipeline_run_id = {pipeline_run_id:UUID}
+          AND source_delta_snapshot = {source_delta_snapshot:UInt128}
           AND service_date = {service_date:Date}
           AND entity = 'session'
           AND rollup_mask = 0

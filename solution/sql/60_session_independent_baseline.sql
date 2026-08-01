@@ -100,8 +100,11 @@ WITH
     exact_points AS
     (
         SELECT boundary_time, sum(delta) AS d
-        FROM sonyliv.concurrency_deltas
-        WHERE entity = 'session'
+        FROM sonyliv.concurrency_delta_snapshots
+        WHERE source_delta_snapshot = {source_delta_snapshot:UInt128}
+          AND pipeline_run_id = {pipeline_run_id:UUID}
+          AND policy_version = {policy_version:String}
+          AND entity = 'session'
           AND rollup_mask = 0
           AND service_date = selected_date
           AND boundary_time < day_end

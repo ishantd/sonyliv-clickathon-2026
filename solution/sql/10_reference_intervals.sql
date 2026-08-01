@@ -15,6 +15,28 @@
 -- publishes the difference. Do not attach this query directly to raw_events as
 -- an incremental MV: an incremental MV sees only its inserted block.
 
+SELECT throwIf(
+    {full_scan:UInt8} = 1
+    AND
+    (
+        (
+            SELECT count()
+            FROM sonyliv.oracle_run_manifests
+            WHERE oracle_run_id = {oracle_run_id:UUID}
+              AND pipeline_run_id = {pipeline_run_id:UUID}
+              AND policy_version = {policy_version:String}
+        ) > 0
+        OR
+        (
+            SELECT count()
+            FROM sonyliv.active_intervals_reference
+            WHERE oracle_run_id = {oracle_run_id:UUID}
+              AND policy_version = {policy_version:String}
+        ) > 0
+    ),
+    'full-scan oracle ID is committed or has orphan rows; allocate a new run ID'
+);
+
 INSERT INTO sonyliv.active_intervals_reference
 (
     oracle_run_id,
@@ -60,7 +82,9 @@ WITH
               (
                   SELECT video_session_id
                   FROM sonyliv.compaction_worksets
-                  WHERE adjustment_batch_id = {workset_batch_id:UUID}
+                  WHERE pipeline_run_id = {pipeline_run_id:UUID}
+                    AND policy_version = {policy_version:String}
+                    AND adjustment_batch_id = {workset_batch_id:UUID}
               )
           )
         GROUP BY
@@ -124,6 +148,13 @@ WITH
         INNER JOIN session_anchors AS a USING (video_session_id)
         WHERE e.event_time >= a.lifecycle_start_time
           AND (NOT a.has_terminal_end OR e.event_time <= a.terminal_end_time)
+          -- `start_choice: first`: a later distinct SessionStart is retained in
+          -- raw storage but cannot reset either lifecycle state axis.
+          AND
+          (
+              e.event_type != 'VideoSessionStart'
+              OR e.event_time = a.lifecycle_start_time
+          )
     ),
 
     same_timestamp_assignments AS
@@ -305,7 +336,7 @@ WITH
 SELECT
     {oracle_run_id:UUID} AS oracle_run_id,
     {policy_version:String} AS policy_version,
-    toDate(lifecycle_start_time) AS session_start_date,
+    toDate(lifecycle_start_time, 'UTC') AS session_start_date,
     video_session_id,
     canonical_user_id,
     toUInt32(row_number() OVER (PARTITION BY video_session_id ORDER BY start_time, end_time)) AS interval_index,
@@ -322,3 +353,105 @@ SELECT
 FROM normalized_intervals
 WHERE end_time > start_time
 SETTINGS insert_deduplication_token = {oracle_insert_dedup_token:String};
+
+-- The completion marker is intentionally in this same multiquery and uses the
+-- same full_scan parameter as the interval INSERT above. A scoped hot-path run
+-- cannot be relabelled later as an independent publication oracle.
+INSERT INTO sonyliv.oracle_run_manifests
+WITH
+    deduplicated_events AS
+    (
+        SELECT
+            video_session_id,
+            event_time,
+            event_type,
+            event
+        FROM sonyliv.raw_events
+        WHERE event_time <= toDateTime64({evaluation_as_of:String}, 3, 'UTC')
+        GROUP BY video_session_id, event_time, event_type, event
+    ),
+    expected AS
+    (
+        SELECT count() AS expected_anchored_sessions
+        FROM
+        (
+            SELECT video_session_id
+            FROM deduplicated_events
+            GROUP BY video_session_id
+            HAVING countIf(event_type = 'VideoSessionStart') > 0
+        )
+    ),
+    oracle_rows AS
+    (
+        SELECT
+            video_session_id,
+            interval_index,
+            start_time,
+            end_time,
+            concat(
+                video_session_id, canonical_user_id, ';',
+                toString(interval_index), ';',
+                toString(toUnixTimestamp64Milli(start_time)), ';',
+                toString(toUnixTimestamp64Milli(end_time)), ';',
+                toString(content_id), ';',
+                toString(length(platform)), ':', platform,
+                toString(length(country)), ':', country,
+                toString(length(video_type)), ':', video_type
+            ) AS canonical_row
+        FROM sonyliv.active_intervals_reference
+        WHERE oracle_run_id = {oracle_run_id:UUID}
+          AND policy_version = {policy_version:String}
+    ),
+    oracle_summary AS
+    (
+        SELECT
+            uniqExact(video_session_id) AS active_sessions,
+            count() AS interval_rows,
+            hex(
+                SHA256(
+                    arrayStringConcat(
+                        arrayMap(
+                            item -> item.2,
+                            arraySort(groupArray((
+                                tuple(video_session_id, start_time, end_time, interval_index),
+                                canonical_row
+                            )))
+                        ),
+                        ''
+                    )
+                )
+            ) AS interval_hash
+        FROM oracle_rows
+    ),
+    payload AS
+    (
+        SELECT
+            {oracle_run_id:UUID} AS oracle_run_id,
+            {pipeline_run_id:UUID} AS pipeline_run_id,
+            {policy_version:String} AS policy_version,
+            {source_snapshot_hash:String} AS source_snapshot_hash,
+            toBool({full_scan:UInt8}) AS is_full_scan,
+            toDateTime64({evaluation_as_of:String}, 3, 'UTC') AS evaluation_as_of,
+            {heartbeat_timeout_ms:UInt64} AS heartbeat_timeout_ms,
+            expected.expected_anchored_sessions,
+            oracle_summary.active_sessions,
+            oracle_summary.interval_rows,
+            oracle_summary.interval_hash
+        FROM expected
+        CROSS JOIN oracle_summary
+        WHERE {full_scan:UInt8} = 1
+    )
+SELECT
+    *,
+    hex(SHA256(concat(
+        toString(oracle_run_id), ';', toString(pipeline_run_id), ';',
+        toString(length(policy_version)), ':', policy_version,
+        source_snapshot_hash, toString(is_full_scan), ';',
+        toString(toUnixTimestamp64Milli(evaluation_as_of)), ';',
+        toString(heartbeat_timeout_ms), ';',
+        toString(expected_anchored_sessions), ';', toString(active_sessions), ';',
+        toString(interval_rows), ';', interval_hash
+    ))) AS manifest_hash,
+    now64(3, 'UTC')
+FROM payload
+SETTINGS insert_deduplication_token = {oracle_manifest_dedup_token:String};

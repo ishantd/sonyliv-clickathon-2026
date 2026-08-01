@@ -1,5 +1,9 @@
 # Foreground-Only Concurrency at Streaming Scale — Solution Design
 
+> **Legacy, non-authoritative draft.** It is retained for the end-of-session
+> comparison only. The verified implementation and current UTC contract are in
+> [`solution/`](../solution/README.md).
+
 **Team submission for Click-a-thon 2026 · SonyLIV problem statement**
 **Status: draft v1 — every decision cites measured evidence (`docs/EVIDENCE.md`)**
 

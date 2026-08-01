@@ -8,18 +8,26 @@ WITH candidate_ids AS
 (
     SELECT video_session_id
     FROM sonyliv.session_recompute_candidates
-    WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+    WHERE pipeline_run_id = {pipeline_run_id:UUID}
+      AND policy_version = {policy_version:String}
+      AND adjustment_batch_id = {adjustment_batch_id:UUID}
 ), old_users AS
 (
     SELECT
         video_session_id,
         argMax(canonical_user_id, state_revision) AS canonical_user_id
-    FROM sonyliv.session_state_versions
-    WHERE policy_version = {policy_version:String}
+    FROM sonyliv.session_state_versions AS s
+    INNER JOIN sonyliv.published_adjustment_batches AS p USING (adjustment_batch_id)
+    WHERE s.pipeline_run_id = {pipeline_run_id:UUID}
+      AND s.policy_version = {policy_version:String}
+      AND p.pipeline_run_id = {pipeline_run_id:UUID}
+      AND p.policy_version = {policy_version:String}
       AND video_session_id IN candidate_ids
     GROUP BY video_session_id
 )
 SELECT DISTINCT
+    {pipeline_run_id:UUID},
+    {policy_version:String},
     {adjustment_batch_id:UUID},
     canonical_user_id
 FROM
@@ -28,7 +36,9 @@ FROM
     UNION ALL
     SELECT canonical_user_id
     FROM sonyliv.session_recompute_candidates
-    WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+    WHERE pipeline_run_id = {pipeline_run_id:UUID}
+      AND policy_version = {policy_version:String}
+      AND adjustment_batch_id = {adjustment_batch_id:UUID}
 )
 SETTINGS insert_deduplication_token = {affected_users_dedup_token:String};
 
@@ -49,14 +59,20 @@ WITH current_old AS
         video_type,
         content_id,
         argMax(tuple(is_deleted, intervals), tuple(state_revision, adjustment_batch_id)) AS current
-    FROM sonyliv.entity_state_versions
-    WHERE entity = 'session'
-      AND policy_version = {policy_version:String}
+    FROM sonyliv.entity_state_versions AS s
+    INNER JOIN sonyliv.published_adjustment_batches AS p USING (adjustment_batch_id)
+    WHERE s.pipeline_run_id = {pipeline_run_id:UUID}
+      AND s.policy_version = {policy_version:String}
+      AND p.pipeline_run_id = {pipeline_run_id:UUID}
+      AND p.policy_version = {policy_version:String}
+      AND entity = 'session'
       AND source_entity_id IN
       (
           SELECT video_session_id
           FROM sonyliv.session_recompute_candidates
-          WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+          WHERE pipeline_run_id = {pipeline_run_id:UUID}
+            AND policy_version = {policy_version:String}
+            AND adjustment_batch_id = {adjustment_batch_id:UUID}
       )
     GROUP BY source_entity_id, rollup_mask, platform, country, video_type, content_id
     HAVING current.1 = 0
@@ -98,7 +114,9 @@ SELECT
     intervals
 FROM sonyliv.session_recompute_candidates
 ARRAY JOIN masks AS mask
-WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+WHERE pipeline_run_id = {pipeline_run_id:UUID}
+  AND policy_version = {policy_version:String}
+  AND adjustment_batch_id = {adjustment_batch_id:UUID}
 SETTINGS insert_deduplication_token = {new_session_changes_dedup_token:String};
 
 -- Retract current user maps before the session-state replacement is installed.
@@ -118,14 +136,20 @@ WITH current_old AS
         video_type,
         content_id,
         argMax(tuple(is_deleted, intervals), tuple(state_revision, adjustment_batch_id)) AS current
-    FROM sonyliv.entity_state_versions
-    WHERE entity = 'user'
-      AND policy_version = {policy_version:String}
+    FROM sonyliv.entity_state_versions AS s
+    INNER JOIN sonyliv.published_adjustment_batches AS p USING (adjustment_batch_id)
+    WHERE s.pipeline_run_id = {pipeline_run_id:UUID}
+      AND s.policy_version = {policy_version:String}
+      AND p.pipeline_run_id = {pipeline_run_id:UUID}
+      AND p.policy_version = {policy_version:String}
+      AND entity = 'user'
       AND source_entity_id IN
       (
           SELECT canonical_user_id
           FROM sonyliv.affected_compaction_users
-          WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+          WHERE pipeline_run_id = {pipeline_run_id:UUID}
+            AND policy_version = {policy_version:String}
+            AND adjustment_batch_id = {adjustment_batch_id:UUID}
       )
     GROUP BY source_entity_id, rollup_mask, platform, country, video_type, content_id
     HAVING current.1 = 0
@@ -159,14 +183,20 @@ WITH
             video_type,
             content_id,
             argMax(is_deleted, tuple(state_revision, adjustment_batch_id)) AS is_deleted
-        FROM sonyliv.entity_state_versions
-        WHERE entity = 'session'
-          AND policy_version = {policy_version:String}
+        FROM sonyliv.entity_state_versions AS s
+        INNER JOIN sonyliv.published_adjustment_batches AS p USING (adjustment_batch_id)
+        WHERE s.pipeline_run_id = {pipeline_run_id:UUID}
+          AND s.policy_version = {policy_version:String}
+          AND p.pipeline_run_id = {pipeline_run_id:UUID}
+          AND p.policy_version = {policy_version:String}
+          AND entity = 'session'
           AND source_entity_id IN
           (
               SELECT video_session_id
               FROM sonyliv.session_recompute_candidates
-              WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+              WHERE pipeline_run_id = {pipeline_run_id:UUID}
+                AND policy_version = {policy_version:String}
+                AND adjustment_batch_id = {adjustment_batch_id:UUID}
           )
         GROUP BY source_entity_id, rollup_mask, platform, country, video_type, content_id
         HAVING is_deleted = 0
@@ -182,9 +212,13 @@ WITH
             if(bitAnd(mask, 4) != 0, content_id, toInt32(0)) AS content_id
         FROM sonyliv.session_recompute_candidates
         ARRAY JOIN masks AS mask
-        WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+        WHERE pipeline_run_id = {pipeline_run_id:UUID}
+          AND policy_version = {policy_version:String}
+          AND adjustment_batch_id = {adjustment_batch_id:UUID}
     )
 SELECT
+    {pipeline_run_id:UUID},
+    {policy_version:String},
     CAST('session', 'Enum8(\'session\' = 1, \'user\' = 2)'),
     o.source_entity_id,
     o.rollup_mask,
@@ -194,7 +228,6 @@ SELECT
     o.content_id,
     {state_revision:UInt64},
     {adjustment_batch_id:UUID},
-    {policy_version:String},
     true,
     CAST([], 'Array(Tuple(DateTime64(3, \'UTC\'), DateTime64(3, \'UTC\')))')
 FROM current_old AS o
@@ -211,6 +244,8 @@ SETTINGS insert_deduplication_token = {session_tombstones_dedup_token:String};
 INSERT INTO sonyliv.entity_state_versions
 WITH [toUInt16(0), 1, 2, 4, 8, 3, 5, 9, 12, 15] AS masks
 SELECT
+    {pipeline_run_id:UUID},
+    {policy_version:String},
     CAST('session', 'Enum8(\'session\' = 1, \'user\' = 2)'),
     video_session_id,
     mask,
@@ -220,21 +255,24 @@ SELECT
     if(bitAnd(mask, 4) != 0, content_id, toInt32(0)),
     {state_revision:UInt64},
     {adjustment_batch_id:UUID},
-    {policy_version:String},
     false,
     intervals
 FROM sonyliv.session_recompute_candidates
 ARRAY JOIN masks AS mask
-WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+WHERE pipeline_run_id = {pipeline_run_id:UUID}
+  AND policy_version = {policy_version:String}
+  AND adjustment_batch_id = {adjustment_batch_id:UUID}
 SETTINGS insert_deduplication_token = {session_state_maps_dedup_token:String};
 
 INSERT INTO sonyliv.session_state_versions
 SELECT
+    {pipeline_run_id:UUID},
+    policy_version,
     session_start_date,
     video_session_id,
     state_revision,
-    now64(3),
-    policy_version,
+    now64(3, 'UTC'),
+    adjustment_batch_id,
     canonical_user_id,
     content_id,
     platform,
@@ -248,14 +286,24 @@ SELECT
     source_event_count,
     CAST([], 'Array(LowCardinality(String))')
 FROM sonyliv.session_recompute_candidates
-WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+WHERE pipeline_run_id = {pipeline_run_id:UUID}
+  AND policy_version = {policy_version:String}
+  AND adjustment_batch_id = {adjustment_batch_id:UUID}
 SETTINGS insert_deduplication_token = {session_state_versions_dedup_token:String};
 
 -- Rebuild current user maps from all current session states of affected users.
 INSERT INTO sonyliv.user_recompute_candidates
 WITH
     [toUInt16(0), 1, 2, 4, 8, 3, 5, 9, 12, 15] AS masks,
-    current_sessions AS
+    candidate_ids AS
+    (
+        SELECT video_session_id
+        FROM sonyliv.session_recompute_candidates
+        WHERE pipeline_run_id = {pipeline_run_id:UUID}
+          AND policy_version = {policy_version:String}
+          AND adjustment_batch_id = {adjustment_batch_id:UUID}
+    ),
+    committed_current_sessions AS
     (
         SELECT
             video_session_id,
@@ -263,14 +311,41 @@ WITH
                 tuple(canonical_user_id, content_id, platform, country, video_type, intervals),
                 state_revision
             ) AS current
-        FROM sonyliv.session_state_versions
-        WHERE policy_version = {policy_version:String}
+        FROM sonyliv.session_state_versions AS s
+        INNER JOIN sonyliv.published_adjustment_batches AS p USING (adjustment_batch_id)
+        WHERE s.pipeline_run_id = {pipeline_run_id:UUID}
+          AND s.policy_version = {policy_version:String}
+          AND p.pipeline_run_id = {pipeline_run_id:UUID}
+          AND p.policy_version = {policy_version:String}
         GROUP BY video_session_id
-        HAVING current.1 IN
+    ),
+    session_overlay AS
+    (
+        SELECT video_session_id, current
+        FROM committed_current_sessions
+        WHERE video_session_id NOT IN candidate_ids
+
+        UNION ALL
+
+        SELECT
+            video_session_id,
+            tuple(canonical_user_id, content_id, platform, country, video_type, intervals) AS current
+        FROM sonyliv.session_recompute_candidates
+        WHERE pipeline_run_id = {pipeline_run_id:UUID}
+          AND policy_version = {policy_version:String}
+          AND adjustment_batch_id = {adjustment_batch_id:UUID}
+    ),
+    current_sessions AS
+    (
+        SELECT *
+        FROM session_overlay
+        WHERE current.1 IN
         (
             SELECT canonical_user_id
             FROM sonyliv.affected_compaction_users
-            WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+            WHERE pipeline_run_id = {pipeline_run_id:UUID}
+              AND policy_version = {policy_version:String}
+              AND adjustment_batch_id = {adjustment_batch_id:UUID}
         )
     ),
     masked_intervals AS
@@ -328,6 +403,8 @@ WITH
         GROUP BY canonical_user_id, rollup_mask, platform, country, video_type, content_id, island_number
     )
 SELECT
+    {pipeline_run_id:UUID},
+    {policy_version:String},
     {adjustment_batch_id:UUID},
     {state_revision:UInt64},
     canonical_user_id,
@@ -361,7 +438,9 @@ SELECT
     toInt8(1),
     intervals
 FROM sonyliv.user_recompute_candidates
-WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+WHERE pipeline_run_id = {pipeline_run_id:UUID}
+  AND policy_version = {policy_version:String}
+  AND adjustment_batch_id = {adjustment_batch_id:UUID}
 SETTINGS insert_deduplication_token = {new_user_changes_dedup_token:String};
 
 -- Tombstone user keys that disappear.
@@ -376,14 +455,20 @@ WITH current_old AS
         video_type,
         content_id,
         argMax(is_deleted, tuple(state_revision, adjustment_batch_id)) AS is_deleted
-    FROM sonyliv.entity_state_versions
-    WHERE entity = 'user'
-      AND policy_version = {policy_version:String}
+    FROM sonyliv.entity_state_versions AS s
+    INNER JOIN sonyliv.published_adjustment_batches AS p USING (adjustment_batch_id)
+    WHERE s.pipeline_run_id = {pipeline_run_id:UUID}
+      AND s.policy_version = {policy_version:String}
+      AND p.pipeline_run_id = {pipeline_run_id:UUID}
+      AND p.policy_version = {policy_version:String}
+      AND entity = 'user'
       AND source_entity_id IN
       (
           SELECT canonical_user_id
           FROM sonyliv.affected_compaction_users
-          WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+          WHERE pipeline_run_id = {pipeline_run_id:UUID}
+            AND policy_version = {policy_version:String}
+            AND adjustment_batch_id = {adjustment_batch_id:UUID}
       )
     GROUP BY source_entity_id, rollup_mask, platform, country, video_type, content_id
     HAVING is_deleted = 0
@@ -397,9 +482,13 @@ WITH current_old AS
         video_type,
         content_id
     FROM sonyliv.user_recompute_candidates
-    WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+    WHERE pipeline_run_id = {pipeline_run_id:UUID}
+      AND policy_version = {policy_version:String}
+      AND adjustment_batch_id = {adjustment_batch_id:UUID}
 )
 SELECT
+    {pipeline_run_id:UUID},
+    {policy_version:String},
     CAST('user', 'Enum8(\'session\' = 1, \'user\' = 2)'),
     o.source_entity_id,
     o.rollup_mask,
@@ -409,7 +498,6 @@ SELECT
     o.content_id,
     {state_revision:UInt64},
     {adjustment_batch_id:UUID},
-    {policy_version:String},
     true,
     CAST([], 'Array(Tuple(DateTime64(3, \'UTC\'), DateTime64(3, \'UTC\')))')
 FROM current_old AS o
@@ -424,6 +512,8 @@ SETTINGS insert_deduplication_token = {user_tombstones_dedup_token:String};
 
 INSERT INTO sonyliv.entity_state_versions
 SELECT
+    {pipeline_run_id:UUID},
+    {policy_version:String},
     CAST('user', 'Enum8(\'session\' = 1, \'user\' = 2)'),
     canonical_user_id,
     rollup_mask,
@@ -433,9 +523,10 @@ SELECT
     content_id,
     state_revision,
     adjustment_batch_id,
-    {policy_version:String},
     false,
     intervals
 FROM sonyliv.user_recompute_candidates
-WHERE adjustment_batch_id = {adjustment_batch_id:UUID}
+WHERE pipeline_run_id = {pipeline_run_id:UUID}
+  AND policy_version = {policy_version:String}
+  AND adjustment_batch_id = {adjustment_batch_id:UUID}
 SETTINGS insert_deduplication_token = {user_state_maps_dedup_token:String};

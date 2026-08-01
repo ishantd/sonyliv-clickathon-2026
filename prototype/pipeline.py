@@ -30,7 +30,9 @@ CREATE DATABASE IF NOT EXISTS ch ENGINE = Atomic;
 
 -- ============ landing table ============
 CREATE TABLE IF NOT EXISTS ch.raw_events (
-    event_date        Date MATERIALIZED toDate(intDiv(ts_ms, 1000)),
+    event_date        Date MATERIALIZED toDate(
+        fromUnixTimestamp64Milli(toInt64(ts_ms), 'UTC'), 'UTC'
+    ),
     ts_ms             UInt64,
     user_id           String,
     video_session_id  String,
@@ -79,7 +81,7 @@ SELECT
     groupUniqArrayStateIf(toUInt32(intDiv(intDiv(ts_ms,1000),60)*60), event_type IN {ACTIVITY}) AS act_minutes,
     groupUniqArrayStateIf(ts_ms, event_type = 'AppBackgrounded') AS bg_ts,
     groupUniqArrayStateIf(ts_ms, event_type = 'AppForegrounded') AS fg_ts,
-    max(toUInt64(toUnixTimestamp64Milli(now64(3))))              AS dirty_seq  -- ingest wall-clock: watermark driver
+    max(toUInt64(toUnixTimestamp64Milli(now64(3, 'UTC'))))       AS dirty_seq  -- ingest wall-clock: watermark driver
 FROM ch.raw_events
 GROUP BY video_session_id, platform, content_id;
 
@@ -259,7 +261,7 @@ def compact(s, scope="both", since_seq=0):
         s.query(f"""
             INSERT INTO ch.emitted_intervals
             SELECT '{scope_name}', video_session_id, platform, content_id, runs,
-                   toUInt64(toUnixTimestamp64Milli(now64(3)))
+                   toUInt64(toUnixTimestamp64Milli(now64(3, 'UTC')))
             FROM ch.fresh_{scope_name}
         """)
     return time.time() - t0, new_wm

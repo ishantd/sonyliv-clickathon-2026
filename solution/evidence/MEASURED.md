@@ -1,9 +1,11 @@
 # Measured evidence ledger
 
-This ledger contains observations, not product-policy claims. The source is the
-public SonyLIV Click-a-thon package and all calculations were run locally with
-chDB 4.2.1 (the embedded ClickHouse engine) over the original CSV bytes. The
-reproducible server-side queries are in `sql/05_profile_loaded_data.sql`.
+This ledger separates raw-source observations from explicitly scoped
+policy-derived results. All calculations used chDB 4.2.1 over the hash-identified
+official CSV bytes. Core source-profile queries are in
+`sql/05_profile_loaded_data.sql`; end-to-end policy checks are in
+`tools/verify_embedded.py`. Extended forensic counts below retain their stated
+deduplication, lifecycle, and tie-handling scope.
 
 ## Source identity
 
@@ -14,8 +16,20 @@ reproducible server-side queries are in `sql/05_profile_loaded_data.sql`.
 
 The raw event-time range is `2026-07-14 15:43:58.144` through
 `2026-07-26 11:30:04.847` UTC over seven non-contiguous dates. July 26 contains
-849,888 events and 10,517 session starts, so whole-file daily averages are not a
-representative load benchmark.
+849,888 raw events and 10,517 distinct sessions whose first Start is on that
+date, so whole-file daily averages are not a representative load benchmark.
+
+Both source timestamp columns are 13-digit integers on every row. Of the
+905,558 values, 904,654 `event_timestamp` values and 904,738
+`session_start_epoch` values have non-zero millisecond remainders, establishing
+that `DateTime64(3)` precision is required. The transport contract is therefore
+Unix epoch milliseconds; ingestion converts it once to a UTC native timestamp.
+
+`Asia/Kolkata` rendering changes the calendar date for 6,140 events (0.6780%)
+across 34 sessions. Twenty-four SessionStart rows (0.2209% of 10,866 sessions)
+would move to another raw partition. On July 26 alone, the event-date totals are
+849,888 under UTC and 852,625 under India civil time. This measured difference
+is why persisted service dates are explicitly UTC and local time is query-only.
 
 ## Population and shape
 
@@ -27,8 +41,8 @@ representative load benchmark.
 | Canonical users on SessionStart | 9,510 |
 | Raw content IDs | 3,357 |
 | Heartbeat rows | 843,600 (93.158%) |
-| Rows/session | p50 53; p90 180; p99 432; max 1,803 |
-| Session duration | p50 711.983s; p90 1,990.126s; p99 about 4,447s |
+| Rows/session (raw) | p50 53; p90 180; p99 434; max 1,803 |
+| First-Start-to-first-End duration (`quantilesExact`) | p50 712.366s; p90 1,990.162s; p99 4,447.120s |
 | Sessions longer than 1h / 4h / 24h | 150 / 16 / 1 |
 | Longest session | 157,101.184s (43.64h) |
 
@@ -57,23 +71,29 @@ must measure `ingested_at - event_time` directly.
 
 ## Lifecycle and state evidence
 
-- After exact deduplication, every supplied session has a distinct Start, Play,
-  and at least one End. Four sessions have two non-identical End timestamps; the
-  supplied snapshot contains no truly open/no-End session.
-- With first-End terminal semantics, 241 sessions have 870 later rows. With even
-  the latest End, 239 sessions still have 802 later rows. Post-End input is an
-  anomaly, not evidence that an ended lifecycle should reopen.
-- Playback markers behave as idempotent assignments: 9,768 adjacent transitions
-  are `resume -> resume` and 422 are `pause -> pause`.
-- 13,497 of 14,321 Foreground events have `pause` as their latest playback
-  marker. Therefore foregrounding cannot imply playing.
-- 1,950 pauses and 357 resumes occur while backgrounded. Foreground and playing
-  must be independent booleans.
+- After semantic deduplication, every supplied session has one distinct Start,
+  one distinct Play, and at least one End. Four sessions have two non-identical
+  End timestamps; the supplied snapshot contains no no-End session.
+- After semantic deduplication, 241 sessions have 870 rows after the first End;
+  239 sessions have 799 rows after even the latest End. Post-End input is an
+  anomaly, not evidence that a terminal lifecycle should reopen.
+- Coalescing same-millisecond pause/resume assignments with stop-wins leaves
+  9,768 adjacent `resume -> resume` transitions and 423 `pause -> pause`
+  transitions.
+- Within first-Start/first-End lifecycle windows, 13,382 of 14,256 coalesced
+  Foreground assignments leave playback stopped; 13,371 have pause as the latest
+  playback marker. Foregrounding therefore cannot imply playing.
+- At timestamps whose post-assignment foreground state is backgrounded, 2,014
+  coalesced pause assignments and 309 coalesced resume assignments occur.
+  Foreground and playing must be independent booleans.
 - Of 293 errors, 238 are immediately followed by End and 288 have no later
   Play/resume. Treating Error as a playback stop is strongly supported; making
   it terminal is not established.
 - The problem statement explicitly names paused time as inactive. Heartbeats
   continue after pause, so heartbeat freshness alone is insufficient.
+- Eleven first-Start-to-first-End lifecycles cross UTC midnight and one crosses
+  two; zero normalized active intervals cross midnight under the checked
+  120-second policy.
 
 Representative session `94D660...` starts, plays, emits telemetry, pauses at
 800.944s, backgrounds at 827.440s, foregrounds at 830.641s, emits a heartbeat at
@@ -99,13 +119,13 @@ lease:
 | Model | Active hours | Share of naive session duration |
 |---|---:|---:|
 | Start-to-End overlap | 2,972.122 | 100.000% |
-| Foreground + playing, no lease | 1,798.156951 | 60.501% |
+| Foreground + playing, no lease | 1,798.160253 | 60.501% |
 | 60s lease | 1,773.598929 | 59.675% |
 | 90s lease | 1,777.090138 | 59.792% |
 | 120s lease | 1,779.502796 | 59.873% |
 
 Relative to explicit foreground-and-playing time, 60/90/120 seconds retain
-98.6343%/98.8284%/98.9626%, shortening 661/423/343 sessions. At 60 seconds,
+98.6341%/98.8282%/98.9624%, shortening 665/427/347 sessions. At 60 seconds,
 retention varies from 99.94% on Mweb to 88.45% on Samsung HTML TV. A timeout is
 therefore a configurable field policy, not a fact that this closed extract can
 uniquely reveal.
@@ -156,12 +176,15 @@ dimension mask before boundaries are emitted.
 
 ## Verified exact versus session-independent baseline
 
-The checked-in embedded verifier executed the full ClickHouse DDL, event-time
-interval query, ten rollup masks for both session/user entities, boundary MV,
-minute cache, exact bucket query, and publication gates. Under policy
-`sonyliv-active-v1` with a 120s lease:
+The checked embedded verifier emitted all ten configured rollup-mask boundary
+maps for both session and user entities. It built, published, parity-checked, and
+dashboard-queried a minute generation only for `entity=session, rollup_mask=0`;
+validation additionally compared global mask-0 and platform mask-1 boundary
+points. The remaining masks and the user minute cache were not independently
+validated end to end. Under policy `sonyliv-active-v1` with a 120s lease:
 
-- 31,947 active intervals cover 10,848 sessions and 1,779.502796 session-hours.
+- Source-wide global session state has 31,947 active intervals across 10,848
+  sessions and 1,779.502796 session-hours.
 - The hot `2026-07-26 10:00–11:00 UTC` exact in-minute peak is 2,305 and exact
   time-weighted average is 855.578199.
 - The exact minute-boundary sample peak is 2,285. The session-independent
@@ -181,15 +204,30 @@ minute cache, exact bucket query, and publication gates. Under policy
   Republishing the same adjustment batch and rebuilding the same generation are
   both rejected; a partial-minute cache request is also rejected for exact-query
   routing.
+- Generation 1's sealed ledger/point fingerprint and exact/cached query hashes
+  remain unchanged after generation 2. Identical attestation retries remain one
+  logical claim; a second conflicting claim and a post-attestation candidate row
+  are both rejected with zero manifest rows.
+- A separate replacement-boundary fixture emits four rows with four unique
+  operation IDs. At the shared old-end/new-start timestamp, two distinct rows
+  sum to the required `+2`; the batch ledger publishes exactly once. This guards
+  against collapsing distinct correction causes that happen to share a final
+  signed delta.
 
 These are correctness results from embedded ClickHouse, not target-Cloud latency
 claims. The full record is `evidence/embedded-verification.json`.
 
 ## Sizing consequence
 
-With the checked-in state machine and 120-second setting, the file yields 31,947
-normalized active intervals and 63,894 interval boundaries: 14.17x fewer
-contributions than raw events before timestamp/dimension aggregation. A linear
-100x framing is about 90.6M raw events versus 6.39M boundary contributions.
-This is a sizing proxy, not a benchmark result; real scale tests must report
-`system.query_log` rows/bytes and wall latency.
+With the checked-in state machine and 120-second setting, the global session
+mask yields 31,947 normalized active intervals and 63,894 endpoints: 14.17x
+fewer contributions than raw events before timestamp aggregation. That narrow
+mask alone scales linearly to about 6.39M endpoints at 100x.
+
+The configured serving design deliberately fans those intervals across ten
+session masks and ten distinct-user masks. The checked run emitted 1,268,514
+signed adjustment rows and sealed 1,263,018 non-zero logical points. A simple
+100x framing is therefore about 90.6M raw events, 6.39M global-session
+endpoints, and 126.9M configured adjustment rows—not 6.39M rows for the whole
+serving layout. These are sizing proxies, not benchmark results; real scale
+tests must report `system.query_log` rows/bytes and wall latency.
