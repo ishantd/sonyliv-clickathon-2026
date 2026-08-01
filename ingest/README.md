@@ -18,6 +18,7 @@ explanation.
 ```bash
 cp .env.example .env      # fill in your ClickHouse Cloud service details
 make build
+make doctor               # preflight: is this service safe to load into?
 make load DATA=/path/to/click-a-thon-2026/SonyLiv/data
 make verify
 ```
@@ -31,6 +32,60 @@ For local development without a Cloud service:
 make ch-up                # ClickHouse in Docker on :9000 / :8123
 # then uncomment the local block in .env
 ```
+
+---
+
+## Pointing this at a real service
+
+Run `sonyliv-ingest doctor` first. It exists because a laptop and a Cloud
+service differ in ways a successful connection does not reveal, and each
+difference is silent — the load works and a guarantee is quietly weaker.
+
+```
+$ sonyliv-ingest doctor
+target      : clickhouse+tls://default@your-service.clickhouse.cloud:9440/default
+tls         : true
+server      : ClickHouse 25.x
+deployment  : ClickHouse Cloud (SharedMergeTree — deduplication uses the replicated window)
+database    : default (exists)
+
+session defaults this pipeline overrides:
+  async_insert            server=1  pipeline=0 for bulk, 1 for control rows
+
+deduplication settings in place (blank = table not created yet):
+  table              engine               non_repl   repl       repl_seconds
+  sl_raw_events      SharedMergeTree      1000       1000       2592000
+  sl_content_dim     SharedReplacingMerge 100        100        2592000
+
+no problems found — safe to run `sonyliv-ingest schema`
+```
+
+### What actually differs on Cloud
+
+**`ENGINE = MergeTree` becomes SharedMergeTree.** The DDL is unchanged; the
+engine is substituted. That moves deduplication from
+`non_replicated_deduplication_window` onto `replicated_deduplication_window`,
+which the schema now sets to the same value so the guarantee means one thing in
+both places.
+
+**The replicated window expires on a timer.** `replicated_deduplication_window_seconds`
+defaults to **3600**. The non-replicated window has no time component at all, so
+"re-running a load is a no-op" is true indefinitely on a laptop and would stop
+being true one hour in on Cloud. The schema sets it to 30 days. This is the one
+difference most likely to be discovered as a mysteriously doubled row count, and
+it is what `doctor` checks hardest for.
+
+**`async_insert` is on by default.** Correct for small writers, wrong for a
+pipeline that already sends 50K-row blocks. The connection forces it off and the
+control-plane writers turn it back on per query.
+
+**The database is not created for you.** `schema` creates tables, not databases.
+`default` always exists; anything else needs `CREATE DATABASE` first.
+
+Re-running `sonyliv-ingest schema` against an existing database *converges* it —
+the settings corrections are `ALTER TABLE ... MODIFY SETTING`, which is
+metadata-only — so a database created by an older version of this schema is
+fixed by running it again rather than rebuilt.
 
 ---
 
@@ -53,12 +108,16 @@ the file, so CI can inject secrets without editing anything.
 ## `sonyliv-ingest`
 
 ```
-sonyliv-ingest schema                          apply the DDL (idempotent)
+sonyliv-ingest doctor                          preflight a service before loading
+sonyliv-ingest schema                          apply the DDL (idempotent, converging)
 sonyliv-ingest schema --dry-run                print the DDL, password redacted
 sonyliv-ingest content --file <content.csv>    load the catalogue
 sonyliv-ingest events  --file <raw.csv>        load the event stream
 sonyliv-ingest verify                          integrity + storage report
 ```
+
+Every subcommand takes `--env <path>` to select a `.env`; without it the nearest
+`.env` walking up from the working directory is used.
 
 `events` flags:
 

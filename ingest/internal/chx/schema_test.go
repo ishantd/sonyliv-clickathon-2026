@@ -83,10 +83,60 @@ func TestSchemaStatementsLoad(t *testing.T) {
 	}
 
 	// Every statement must be idempotent, or `schema` stops being re-runnable.
+	// ALTER ... MODIFY SETTING qualifies: it is metadata-only and converges to
+	// the same state however many times it runs. It is also the only way a
+	// settings correction reaches a database that already has the tables, since
+	// CREATE TABLE IF NOT EXISTS is a no-op there.
 	for _, s := range stmts {
 		u := strings.ToUpper(s.SQL)
-		if !strings.Contains(u, "IF NOT EXISTS") && !strings.Contains(u, "OR REPLACE") {
+		idempotent := strings.Contains(u, "IF NOT EXISTS") ||
+			strings.Contains(u, "OR REPLACE") ||
+			strings.Contains(u, "MODIFY SETTING")
+		if !idempotent {
 			t.Errorf("%s[%d] is not idempotent: %s", s.File, s.Index, s.Summary())
+		}
+	}
+}
+
+// TestDedupSettingsCoverBothEngineFamilies.
+//
+// Which deduplication window a table honours is chosen by the engine, not by
+// the DDL: a local MergeTree reads non_replicated_deduplication_window, and the
+// SharedMergeTree that ClickHouse Cloud creates from the same statement reads
+// the replicated_* pair instead. Setting only the first is the trap — it passes
+// every local test and silently stops deduplicating in production.
+func TestDedupSettingsCoverBothEngineFamilies(t *testing.T) {
+	stmts, err := SchemaStatements()
+	if err != nil {
+		t.Fatalf("SchemaStatements: %v", err)
+	}
+
+	// Tables that carry a deduplication guarantee, and the statement kinds that
+	// must state it for both engine families.
+	for _, table := range []string{"SL_RAW_EVENTS", "SL_CONTENT_DIM"} {
+		var stated bool
+		for _, s := range stmts {
+			u := strings.ToUpper(s.SQL)
+			if !strings.Contains(u, table) {
+				continue
+			}
+			if !strings.Contains(u, "NON_REPLICATED_DEDUPLICATION_WINDOW") {
+				continue
+			}
+			if !strings.Contains(u, "REPLICATED_DEDUPLICATION_WINDOW =") {
+				t.Errorf("%s states non_replicated_deduplication_window without the replicated "+
+					"equivalent: deduplication would be off on ClickHouse Cloud", table)
+			}
+			// The replicated window also expires on a timer (server default
+			// 3600s) where the non-replicated one never does.
+			if !strings.Contains(u, "REPLICATED_DEDUPLICATION_WINDOW_SECONDS") {
+				t.Errorf("%s does not override replicated_deduplication_window_seconds: "+
+					"replay stops being a no-op an hour after the load", table)
+			}
+			stated = true
+		}
+		if !stated {
+			t.Errorf("no deduplication settings found for %s", table)
 		}
 	}
 }
