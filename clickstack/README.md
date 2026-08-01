@@ -9,10 +9,12 @@ reproducible on another service.
 | `dashboards/01-live-concurrency.json` | Live concurrency at 10-second grain, filterable by title / content type / category |
 | `dashboards/02-concurrency-analytics.json` | Corrected concurrency at 1-minute grain, filterable by platform / app version / content type / category |
 | `dashboards/03-pipeline-observability.json` | Ingest lag, rollup latency, recompute backlog, and read volume per serving query |
+| `dashboards/04-grouped-viewers.json` | Stacked-bar breakdown; pick the group-by key from a tab bar |
 | `sources.json` | The four ClickStack sources the tiles bind to |
 | `apply.sh` | Create-or-update everything. Idempotent |
 | `csapi.sh` | One authenticated request against the ClickStack API |
 | `check-tiles.sh` | Run every tile's SQL against ClickHouse and report pass/fail |
+| `TILE-VERIFICATION.md` | Last full sweep: every tile against six windows |
 
 ## Setup
 
@@ -72,9 +74,20 @@ directly:
 ./clickstack/check-tiles.sh --rows                                # show first rows
 ```
 
-All 28 SQL tiles pass against `sonyliv_prod`. It checks that a query is valid and
-returns rows — not that the result looks right; `make rollup-check` is what
-asserts the numbers.
+`--sweep` runs every tile against six windows chosen for *shape* rather than size:
+the canonical hot hour, the hot day, the full extract span, two live windows, and
+**Jul 16-17 where the extract has no events at all**. That last one earns its place —
+a tile that errors on an empty result set breaks on a quiet night, and nothing else
+catches it beforehand.
+
+All 38 SQL tiles pass against `sonyliv_prod` in all six windows (228 checks); the
+last run is committed as `TILE-VERIFICATION.md`. It checks that a query is valid and
+what it returns — not that the chart looks right; `make rollup-check` is what asserts
+the numbers.
+
+Reading the returned *values* rather than just pass/fail is what caught a number tile
+emitting a unix epoch, an empty window rendering `-0`, and `argMax` over zero rows
+leaking a fake `1970-01-01` row.
 
 ## What the dashboards read, and the one rule behind their layout
 
@@ -97,6 +110,12 @@ the shape they do because of a single property:
 That is why dashboard 02 splits its tiles into two labelled groups instead of
 letting every filter touch every tile. The distinction is visible in the UI on
 purpose.
+
+It is also why dashboard 04 stacks bars of average concurrency and carries no peak
+at all. `active_ms` is additive, so a stack of per-platform bars sums to exactly the
+true overall average — verified: mask 63 grouped by platform totals 855.603469 over
+the hot hour, identical to the ungrouped mask 0 figure, and the shares sum to 100.00.
+Stacked peaks would total more viewers than were ever simultaneously present.
 
 ## Reference figures
 
