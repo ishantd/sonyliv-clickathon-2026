@@ -239,10 +239,6 @@ export interface FleetCurveResponse {
   /** Set when the comparison query failed. The generator line still renders. */
   clickhouse_error?: string;
   scoped_sessions: number;
-  /** True when more sessions matched than the comparison query can scope to. */
-  truncated: boolean;
-  /** The scope ceiling, set by ClickHouse's max_query_size rather than by taste. */
-  compare_cap: number;
   timeout_ms: number;
 }
 

@@ -92,14 +92,6 @@ export default function LivePage() {
           </p>
         )}
 
-        {data?.truncated && (
-          <p className="mt-3 font-mono text-xs text-bad">
-            More sessions matched than the comparison query can scope to, so the
-            pipeline line covers only the first {num(data.compare_cap)}. Narrow the filter to
-            compare exactly.
-          </p>
-        )}
-
         <ErrorNote error={error} />
       </Panel>
 

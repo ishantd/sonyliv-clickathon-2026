@@ -122,6 +122,10 @@ func (s *Server) handleFleetCreate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusServiceUnavailable, err)
 		return
 	}
+	// Before responding, so the sessions are in fleet_sessions by the time the
+	// dashboard's next curve poll scopes itself from that table.
+	s.fleet.PersistNow(r.Context())
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"created":  len(views),
 		"sessions": views,
@@ -282,16 +286,14 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 		"timeout_ms": s.timeoutMS,
 	}
 
-	ids := s.fleet.SessionIDs(f, now)
-	resp["scoped_sessions"] = len(ids)
-	resp["truncated"] = len(ids) > MaxComparedSessions
-	// Reported rather than duplicated in the UI: the cap exists because of
-	// ClickHouse's max_query_size, so it belongs next to the query that respects it.
-	resp["compare_cap"] = MaxComparedSessions
+	// Count only — the scope itself is resolved inside the query, against
+	// fleet_sessions. There is no cap and nothing to truncate.
+	_, scoped := s.fleet.List(f, 0, 1, now)
+	resp["scoped_sessions"] = scoped
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	points, err := FleetCurve(ctx, s.client, ids, from, now, s.timeoutMS)
+	points, err := FleetCurve(ctx, s.client, f, from, now, s.timeoutMS)
 	if err != nil {
 		resp["clickhouse"] = []fleet.CurvePoint{}
 		resp["clickhouse_error"] = err.Error()

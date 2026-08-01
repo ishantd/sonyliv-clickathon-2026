@@ -571,22 +571,3 @@ func (r *Registry) Dimensions() map[string][]string {
 	}
 	return out
 }
-
-// SessionIDs returns the ids matching a filter, for scoping the ClickHouse
-// comparison query.
-func (r *Registry) SessionIDs(f Filter, now time.Time) []string {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	out := make([]string, 0, len(r.order))
-	for _, id := range r.order {
-		s, ok := r.sessions[id]
-		if !ok {
-			continue
-		}
-		if r.selects(s, f, now) {
-			out = append(out, id)
-		}
-	}
-	return out
-}

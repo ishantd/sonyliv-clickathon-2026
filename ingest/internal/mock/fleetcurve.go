@@ -11,14 +11,6 @@ import (
 	"github.com/sonyliv-clickathon/ingest/internal/fleet"
 )
 
-// MaxComparedSessions caps how many session ids the comparison query scopes to.
-//
-// Not arbitrary: the ids go into the query as a literal array, and ClickHouse's
-// default max_query_size is 256 KB. At 65 bytes per 64-character id, 2,000 ids is
-// ~130 KB — comfortably under, where 10,000 would be rejected outright. The caller
-// reports truncation rather than silently comparing a subset.
-const MaxComparedSessions = 2000
-
 // FleetCurve computes per-minute concurrency for a set of sessions the way the
 // pipeline does — by inferring it from the event stream.
 //
@@ -29,33 +21,48 @@ const MaxComparedSessions = 2000
 // real five-term predicate from concurrency/sql/010_recompute_sessions.sql:
 // started AND NOT end_seen AND foreground AND playing AND inside the lease.
 //
-// Dimension filtering is deliberately absent here. The caller passes ids the
-// registry has already filtered, so both lines of the graph are narrowed by one
-// implementation of the filter instead of two that could disagree.
-func FleetCurve(ctx context.Context, c *chx.Client, videoSessionIDs []string,
+// Scope comes from fleet_sessions, not from a list of ids in the query text.
+//
+// It used to be the list, which forced a 2,000-session cap: 65 bytes per id
+// against ClickHouse's 256 KB max_query_size, and a "narrow the filter to compare
+// exactly" warning once you exceeded it. That ceiling was an artifact of the
+// mechanism, not of the problem — the fleet's sessions are already a table, so the
+// scope is a subquery and the cap disappears with it.
+//
+// The dimension filter is applied here too, against the same columns the registry
+// filters on. Two expressions of one Filter is a drift risk worth naming, so they
+// are kept literally parallel: same fields, same equality semantics, and every
+// value bound as a parameter rather than interpolated.
+func FleetCurve(ctx context.Context, c *chx.Client, f fleet.Filter,
 	from, to time.Time, timeoutMS int64) ([]fleet.CurvePoint, error) {
-
-	if len(videoSessionIDs) == 0 {
-		return []fleet.CurvePoint{}, nil
-	}
-	if len(videoSessionIDs) > MaxComparedSessions {
-		videoSessionIDs = videoSessionIDs[:MaxComparedSessions]
-	}
 
 	sql := fmt.Sprintf(`
 WITH
     {timeout:Int64}                          AS timeout_ms,
     toDateTime64({from:String}, 3, 'UTC')    AS w_from,
     toDateTime64({to:String},   3, 'UTC')    AS w_to,
-    -- Hash server-side and keep the predicate on the leading sort-key column, so
-    -- this is a set of point lookups rather than a scan. Reimplementing
-    -- ClickHouse's SipHash in Go would be a second definition that could disagree.
-    arrayMap(x -> sipHash64(x), {vsids:Array(String)}) AS keys,
+    -- The scope: every fleet session the filter admits. Hashing happens
+    -- server-side and stays on events_dedup's leading sort-key column, so this is
+    -- a key condition rather than a scan — and reimplementing ClickHouse's SipHash
+    -- in Go would be a second definition that could disagree with this one.
+    --
+    -- Empty filter fields match everything, which is what makes one query serve
+    -- both the unfiltered and the filtered graph.
+    keys AS (
+        SELECT sipHash64(video_session_id) AS session_key
+        FROM %[1]s.fleet_sessions FINAL
+        WHERE removed = false
+          AND ({content_id:Int64}   = 0  OR content_id  = {content_id:Int64})
+          AND ({video_type:String}  = '' OR video_type  = {video_type:String})
+          AND ({platform:String}    = '' OR platform    = {platform:String})
+          AND ({app_version:String} = '' OR app_version = {app_version:String})
+          AND ({country:String}     = '' OR country     = {country:String})
+    ),
     scoped AS (
         SELECT session_key, event_ts, signal,
                signal IN ('play','resume','liveness') AS is_liveness
         FROM %[1]s.events_dedup
-        WHERE session_key IN keys AND event_ts <= w_to
+        WHERE session_key IN (SELECT session_key FROM keys) AND event_ts <= w_to
     ),
     -- Collapse the millisecond first. events_dedup yields one row per
     -- (session, ts, type, event), so a single instant can still carry a background
@@ -157,7 +164,11 @@ WHERE toDateTime64(m, 3, 'UTC') < w_to
 GROUP BY m ORDER BY m`, c.Database)
 
 	rows, err := c.Conn.Query(ctx, sql,
-		clickhouse.Named("vsids", videoSessionIDs),
+		clickhouse.Named("content_id", f.ContentID),
+		clickhouse.Named("video_type", f.VideoType),
+		clickhouse.Named("platform", f.Platform),
+		clickhouse.Named("app_version", f.AppVersion),
+		clickhouse.Named("country", f.Country),
 		clickhouse.Named("timeout", timeoutMS),
 		clickhouse.Named("from", from.UTC().Format("2006-01-02 15:04:05.000")),
 		clickhouse.Named("to", to.UTC().Format("2006-01-02 15:04:05.000")))

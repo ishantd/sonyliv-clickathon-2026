@@ -126,6 +126,16 @@ func (f *Fleet) ClearEnded(ctx context.Context) int {
 	return len(ids)
 }
 
+// PersistNow flushes changed sessions immediately instead of waiting for the tick.
+//
+// Called right after a create. The comparison query scopes itself from
+// fleet_sessions, so a session that exists in memory but not yet in the table is
+// invisible to the ClickHouse line while the fleet line already counts it — a gap
+// that looks like a pipeline defect and is really a five-second write delay.
+// Identity is what the scope needs, and identity is fixed at create, so this is
+// the only point that needs forcing.
+func (f *Fleet) PersistNow(ctx context.Context) { f.persist(ctx) }
+
 // persist writes changed sessions to the store, if there is one.
 func (f *Fleet) persist(ctx context.Context) {
 	if f.store == nil {
