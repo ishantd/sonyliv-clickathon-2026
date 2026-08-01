@@ -1,6 +1,6 @@
 # ClickStack tile verification
 
-Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
+Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 21:05:59Z.
 
 ## hot-hour — `2026-07-26 10:00:00` .. `2026-07-26 11:00:00`
 
@@ -9,7 +9,7 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 01 Concurrent viewers now | number | OK | 1 | `0` |
 | 01 Exact peak in window — all titles | number | OK | 1 | `0` |
 | 01 Viewer-hours in window | number | OK | 1 | `0` |
-| 01 Live layer lag (seconds) | number | OK | 1 | `3` |
+| 01 Live layer lag (seconds) | number | OK | 1 | `11` |
 | 01 Concurrent viewers — exact peak vs time-weighted average | line | OK | 0 | `—` |
 | 01 Top titles — average concurrent viewers | line | OK | 0 | `—` |
 | 01 Title leaderboard | table | OK | 0 | `—` |
@@ -21,7 +21,7 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 02 Viewer-hours by category | pie | OK | 12 | `cdbgg128.71` |
 | 02 Titles by viewer-hours | table | OK | 25 | `wekek kedlivecdbgg119.7225532.8` |
 | 02 Exact peak — all dimensions collapsed | number | OK | 1 | `2305` |
-| 02 Minute layer lag (seconds) | number | OK | 1 | `394` |
+| 02 Minute layer lag (seconds) | number | OK | 1 | `425` |
 | 02 Peak minute in window | table | OK | 1 | `2026-07-26 10:55:0023052283.98` |
 | 02 Exact peak by platform | bar | OK | 10 | `ANDROID_PHONE1461` |
 | 02 Exact peak by app version | table | OK | 25 | `6.34.81178444.21` |
@@ -31,9 +31,9 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 03 Read volume per serving query — cluster-wide | table | OK | 0 | `—` |
 | 03 Rollup build duration by layer (ms) | line | OK | 0 | `—` |
 | 03 Recompute backlog — sessions dirtied per minute | line | OK | 0 | `—` |
-| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 20:49:07.9882943301260sonyliv-active-v` |
-| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1114441110785665850.59090` |
-| 03 Storage and compression | table | OK | 10 | `events_clean1.11 million9.44 MiB25.1152` |
+| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 21:05:37.9543245801288sonyliv-active-v` |
+| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1167871116100968620.58760` |
+| 03 Storage and compression | table | OK | 10 | `events_clean1.16 million10.40 MiB23.9132` |
 | 04 Average concurrent viewers by platform | stacked_bar | OK | 407 | `2026-07-26 10:00:00ANDROID_TAB1` |
 | 04 Platform totals | table | OK | 10 | `ANDROID_PHONE552.4764.579979` |
 | 04 Average concurrent viewers by content type | stacked_bar | OK | 140 | `2026-07-26 10:00:00vod48.04` |
@@ -54,7 +54,7 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 01 Concurrent viewers now | number | OK | 1 | `0` |
 | 01 Exact peak in window — all titles | number | OK | 1 | `0` |
 | 01 Viewer-hours in window | number | OK | 1 | `0` |
-| 01 Live layer lag (seconds) | number | OK | 1 | `9` |
+| 01 Live layer lag (seconds) | number | OK | 1 | `4` |
 | 01 Concurrent viewers — exact peak vs time-weighted average | line | OK | 0 | `—` |
 | 01 Top titles — average concurrent viewers | line | OK | 0 | `—` |
 | 01 Title leaderboard | table | OK | 0 | `—` |
@@ -66,7 +66,7 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 02 Viewer-hours by category | pie | OK | 12 | `cdbgg184.24` |
 | 02 Titles by viewer-hours | table | OK | 25 | `wekek kedlivecdbgg170.1346042.2` |
 | 02 Exact peak — all dimensions collapsed | number | OK | 1 | `2305` |
-| 02 Minute layer lag (seconds) | number | OK | 1 | `400` |
+| 02 Minute layer lag (seconds) | number | OK | 1 | `439` |
 | 02 Peak minute in window | table | OK | 1 | `2026-07-26 10:55:0023052283.98` |
 | 02 Exact peak by platform | bar | OK | 10 | `ANDROID_PHONE1461` |
 | 02 Exact peak by app version | table | OK | 25 | `6.34.81178867.18` |
@@ -76,9 +76,9 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 03 Read volume per serving query — cluster-wide | table | OK | 0 | `—` |
 | 03 Rollup build duration by layer (ms) | line | OK | 0 | `—` |
 | 03 Recompute backlog — sessions dirtied per minute | line | OK | 0 | `—` |
-| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 20:49:17.9992543325251sonyliv-active-v` |
-| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1114757110817265850.59070` |
-| 03 Storage and compression | table | OK | 10 | `events_clean1.11 million9.42 MiB25.2112` |
+| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 21:05:57.9232545862300sonyliv-active-v` |
+| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1168568116170468640.58740` |
+| 03 Storage and compression | table | OK | 10 | `events_clean1.16 million10.40 MiB23.9112` |
 | 04 Average concurrent viewers by platform | stacked_bar | OK | 1668 | `2026-07-26 00:10:00ANDROID_PHONE0.44` |
 | 04 Platform totals | table | OK | 10 | `ANDROID_PHONE1097.9465.6818991` |
 | 04 Average concurrent viewers by content type | stacked_bar | OK | 988 | `2026-07-26 00:10:00vod0.44` |
@@ -99,7 +99,7 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 01 Concurrent viewers now | number | OK | 1 | `0` |
 | 01 Exact peak in window — all titles | number | OK | 1 | `0` |
 | 01 Viewer-hours in window | number | OK | 1 | `0` |
-| 01 Live layer lag (seconds) | number | OK | 1 | `4` |
+| 01 Live layer lag (seconds) | number | OK | 1 | `7` |
 | 01 Concurrent viewers — exact peak vs time-weighted average | line | OK | 0 | `—` |
 | 01 Top titles — average concurrent viewers | line | OK | 0 | `—` |
 | 01 Title leaderboard | table | OK | 0 | `—` |
@@ -111,7 +111,7 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 02 Viewer-hours by category | pie | OK | 0 | `—` |
 | 02 Titles by viewer-hours | table | OK | 0 | `—` |
 | 02 Exact peak — all dimensions collapsed | number | OK | 1 | `0` |
-| 02 Minute layer lag (seconds) | number | OK | 1 | `406` |
+| 02 Minute layer lag (seconds) | number | OK | 1 | `390` |
 | 02 Peak minute in window | table | OK | 0 | `—` |
 | 02 Exact peak by platform | bar | OK | 0 | `—` |
 | 02 Exact peak by app version | table | OK | 0 | `—` |
@@ -121,9 +121,9 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 03 Read volume per serving query — cluster-wide | table | OK | 0 | `—` |
 | 03 Rollup build duration by layer (ms) | line | OK | 0 | `—` |
 | 03 Recompute backlog — sessions dirtied per minute | line | OK | 0 | `—` |
-| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 20:49:17.9993043325251sonyliv-active-v` |
-| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1115102110851465880.59080` |
-| 03 Storage and compression | table | OK | 10 | `events_clean1.11 million9.44 MiB25.1142` |
+| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 21:06:07.8812745888274sonyliv-active-v` |
+| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1169212116234668660.58720` |
+| 03 Storage and compression | table | OK | 10 | `events_clean1.16 million10.41 MiB23.9132` |
 | 04 Average concurrent viewers by platform | stacked_bar | OK | 0 | `—` |
 | 04 Platform totals | table | OK | 0 | `—` |
 | 04 Average concurrent viewers by content type | stacked_bar | OK | 0 | `—` |
@@ -156,7 +156,7 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 02 Viewer-hours by category | pie | OK | 12 | `cdbgg185.53` |
 | 02 Titles by viewer-hours | table | OK | 25 | `wekek kedlivecdbgg170.1346042.2` |
 | 02 Exact peak — all dimensions collapsed | number | OK | 1 | `2305` |
-| 02 Minute layer lag (seconds) | number | OK | 1 | `412` |
+| 02 Minute layer lag (seconds) | number | OK | 1 | `404` |
 | 02 Peak minute in window | table | OK | 1 | `2026-07-26 10:55:0023052283.98` |
 | 02 Exact peak by platform | bar | OK | 10 | `ANDROID_PHONE1461` |
 | 02 Exact peak by app version | table | OK | 25 | `6.34.81178928.47` |
@@ -166,9 +166,9 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 | 03 Read volume per serving query — cluster-wide | table | OK | 0 | `—` |
 | 03 Rollup build duration by layer (ms) | line | OK | 0 | `—` |
 | 03 Recompute backlog — sessions dirtied per minute | line | OK | 0 | `—` |
-| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 20:49:27.9962643353250sonyliv-active-v` |
-| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1115448110885765910.59090` |
-| 03 Storage and compression | table | OK | 10 | `events_clean1.11 million9.44 MiB25.1132` |
+| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 21:06:17.9133045919277sonyliv-active-v` |
+| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1170000116312968710.58730` |
+| 03 Storage and compression | table | OK | 10 | `events_clean1.16 million10.42 MiB23.9122` |
 | 04 Average concurrent viewers by platform | stacked_bar | OK | 5073 | `2026-07-14 15:43:00IPHONE0.01` |
 | 04 Platform totals | table | OK | 10 | `ANDROID_PHONE1198.9267.3720134` |
 | 04 Average concurrent viewers by content type | stacked_bar | OK | 4187 | `2026-07-14 15:43:00vod0.01` |
@@ -182,93 +182,93 @@ Database `sonyliv_prod`, granularity 60s, generated 2026-08-01 20:49:32Z.
 
 38 passed, 0 failed.
 
-## live-30m — `2026-08-01 20:19:32` .. `2026-08-01 20:49:32`
+## live-30m — `2026-08-01 20:35:59` .. `2026-08-01 21:05:59`
 
 | Tile | Type | Result | Rows | First row |
 |---|---|---|---|---|
-| 01 Concurrent viewers now | number | OK | 1 | `560` |
-| 01 Exact peak in window — all titles | number | OK | 1 | `600` |
-| 01 Viewer-hours in window | number | OK | 1 | `285.53` |
-| 01 Live layer lag (seconds) | number | OK | 1 | `6` |
-| 01 Concurrent viewers — exact peak vs time-weighted average | line | OK | 31 | `2026-08-01 20:19:00579191.46` |
-| 01 Top titles — average concurrent viewers | line | OK | 248 | `2026-08-01 20:19:00tifif feh7.54` |
-| 01 Title leaderboard | table | OK | 25 | `necec cegvodcgdgn39169.48` |
-| 02 Time-weighted average concurrency | number | OK | 1 | `568.734559` |
-| 02 Viewer-hours | number | OK | 1 | `218.01` |
-| 02 Active intervals started | number | OK | 1 | `3502` |
-| 02 Average concurrency by platform | line | OK | 230 | `2026-08-01 20:20:00XIAOMI_ANDROID_TV2` |
-| 02 Average concurrency by content type | line | OK | 23 | `2026-08-01 20:20:00vod569.07` |
-| 02 Viewer-hours by category | pie | OK | 12 | `chbgg17.83` |
-| 02 Titles by viewer-hours | table | OK | 25 | `tifif fehvoddhddd9.611344.3` |
-| 02 Exact peak — all dimensions collapsed | number | OK | 1 | `600` |
-| 02 Minute layer lag (seconds) | number | OK | 1 | `418` |
-| 02 Peak minute in window | table | OK | 1 | `2026-08-01 20:38:00600589.46` |
-| 02 Exact peak by platform | bar | OK | 10 | `ANDROID_PHONE422` |
-| 02 Exact peak by app version | table | OK | 8 | `6.34.8389138.14` |
-| 02 Exact peak by category | table | OK | 25 | `chbgg5817.83` |
-| 03 Stream ingest lag p50 / p95 / p99 (seconds) | line | OK | 31 | `2026-08-01 20:19:0021.9833.47983.33` |
-| 03 Rows ingested per second, by producer | line | OK | 38 | `2026-08-01 20:19:00generator25.3` |
-| 03 Read volume per serving query — cluster-wide | table | OK | 30 | `17704518813321872408-- ===================================` |
-| 03 Rollup build duration by layer (ms) | line | OK | 77 | `2026-08-01 20:19:00intervals271` |
-| 03 Recompute backlog — sessions dirtied per minute | line | OK | 31 | `2026-08-01 20:19:00578` |
-| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 20:49:27.9963243353250sonyliv-active-v` |
-| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1115767110917565920.59080` |
-| 03 Storage and compression | table | OK | 10 | `events_clean1.11 million9.45 MiB25.1142` |
-| 04 Average concurrent viewers by platform | stacked_bar | OK | 230 | `2026-08-01 20:20:00XIAOMI_ANDROID_TV2` |
-| 04 Platform totals | table | OK | 10 | `ANDROID_PHONE150.5469.052402` |
-| 04 Average concurrent viewers by content type | stacked_bar | OK | 23 | `2026-08-01 20:20:00vod569.07` |
-| 04 Content type totals | table | OK | 1 | `vod218.011003502` |
-| 04 Average concurrent viewers by app version | stacked_bar | OK | 184 | `2026-08-01 20:20:002.14.09.04` |
-| 04 App version totals | table | OK | 8 | `6.34.8138.1463.362234` |
-| 04 Average concurrent viewers by category | stacked_bar | OK | 253 | `2026-08-01 20:20:00cfccc19.99` |
-| 04 Category totals | table | OK | 27 | `chbgg17.838.18278` |
-| 04 Average concurrent viewers by title (top 10, rest folded into 'other') | stacked_bar | OK | 253 | `2026-08-01 20:20:00wofif fih24.85` |
-| 04 Title totals | table | OK | 30 | `tifif fehvoddhddd9.614.41134` |
+| 01 Concurrent viewers now | number | OK | 1 | `556` |
+| 01 Exact peak in window — all titles | number | OK | 1 | `599` |
+| 01 Viewer-hours in window | number | OK | 1 | `280.1` |
+| 01 Live layer lag (seconds) | number | OK | 1 | `5` |
+| 01 Concurrent viewers — exact peak vs time-weighted average | line | OK | 30 | `2026-08-01 20:36:00596580.97` |
+| 01 Top titles — average concurrent viewers | line | OK | 240 | `2026-08-01 20:36:00nivev jad22.73` |
+| 01 Title leaderboard | table | OK | 25 | `necec cegvodcgdgn39159.97` |
+| 02 Time-weighted average concurrency | number | OK | 1 | `565.228688` |
+| 02 Viewer-hours | number | OK | 1 | `226.09` |
+| 02 Active intervals started | number | OK | 1 | `3669` |
+| 02 Average concurrency by platform | line | OK | 249 | `2026-08-01 20:36:00IPHONE55.15` |
+| 02 Average concurrency by content type | line | OK | 24 | `2026-08-01 20:36:00vod580.97` |
+| 02 Viewer-hours by category | pie | OK | 12 | `cdbgg16.63` |
+| 02 Titles by viewer-hours | table | OK | 25 | `mesos gejvodbjcfm9.921543.9` |
+| 02 Exact peak — all dimensions collapsed | number | OK | 1 | `599` |
+| 02 Minute layer lag (seconds) | number | OK | 1 | `420` |
+| 02 Peak minute in window | table | OK | 1 | `2026-08-01 20:38:00599588.78` |
+| 02 Exact peak by platform | bar | OK | 12 | `ANDROID_PHONE410` |
+| 02 Exact peak by app version | table | OK | 9 | `6.34.8400142.65` |
+| 02 Exact peak by category | table | OK | 25 | `chbgg5815.8` |
+| 03 Stream ingest lag p50 / p95 / p99 (seconds) | line | OK | 31 | `2026-08-01 20:35:0022.18126.33163.671` |
+| 03 Rows ingested per second, by producer | line | OK | 43 | `2026-08-01 20:35:00generator1.1` |
+| 03 Read volume per serving query — cluster-wide | table | OK | 30 | `11406397511435481412\nWITH w AS (SELECT toDateTime(\'2026-` |
+| 03 Rollup build duration by layer (ms) | line | OK | 86 | `2026-08-01 20:36:00live205` |
+| 03 Recompute backlog — sessions dirtied per minute | line | OK | 31 | `2026-08-01 20:35:0037` |
+| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 21:06:37.8612745971293sonyliv-active-v` |
+| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1170822116394668760.58730` |
+| 03 Storage and compression | table | OK | 10 | `events_clean1.16 million10.44 MiB23.9132` |
+| 04 Average concurrent viewers by platform | stacked_bar | OK | 249 | `2026-08-01 20:36:00IPHONE55.15` |
+| 04 Platform totals | table | OK | 12 | `ANDROID_PHONE151.9267.192514` |
+| 04 Average concurrent viewers by content type | stacked_bar | OK | 24 | `2026-08-01 20:36:00vod580.97` |
+| 04 Content type totals | table | OK | 1 | `vod226.091003669` |
+| 04 Average concurrent viewers by app version | stacked_bar | OK | 196 | `2026-08-01 20:36:003.9.412.75` |
+| 04 App version totals | table | OK | 9 | `6.34.8142.6563.092307` |
+| 04 Average concurrent viewers by category | stacked_bar | OK | 264 | `2026-08-01 20:36:00bgfff23.72` |
+| 04 Category totals | table | OK | 27 | `cdbgg16.637.35263` |
+| 04 Average concurrent viewers by title (top 10, rest folded into 'other') | stacked_bar | OK | 264 | `2026-08-01 20:36:00necec ceg16.62` |
+| 04 Title totals | table | OK | 30 | `mesos gejvodbjcfm9.924.39154` |
 
 38 passed, 0 failed.
 
-## live-6h — `2026-08-01 14:49:32` .. `2026-08-01 20:49:32`
+## live-6h — `2026-08-01 15:05:59` .. `2026-08-01 21:05:59`
 
 | Tile | Type | Result | Rows | First row |
 |---|---|---|---|---|
-| 01 Concurrent viewers now | number | OK | 1 | `559` |
+| 01 Concurrent viewers now | number | OK | 1 | `557` |
 | 01 Exact peak in window — all titles | number | OK | 1 | `1161` |
-| 01 Viewer-hours in window | number | OK | 1 | `593.74` |
-| 01 Live layer lag (seconds) | number | OK | 1 | `2` |
-| 01 Concurrent viewers — exact peak vs time-weighted average | line | OK | 62 | `2026-08-01 19:48:00328157.62` |
-| 01 Top titles — average concurrent viewers | line | OK | 464 | `2026-08-01 19:52:00taziz lic11.06` |
-| 01 Title leaderboard | table | OK | 25 | `necec cegvodcgdgn391719.68` |
-| 02 Time-weighted average concurrency | number | OK | 1 | `136.441983` |
-| 02 Viewer-hours | number | OK | 1 | `538.95` |
-| 02 Active intervals started | number | OK | 1 | `10431` |
-| 02 Average concurrency by platform | line | OK | 633 | `2026-08-01 16:46:00ANDROID_PHONE0.4` |
-| 02 Average concurrency by content type | line | OK | 91 | `2026-08-01 16:46:00vod0.4` |
-| 02 Viewer-hours by category | pie | OK | 12 | `chbgg39.41` |
-| 02 Titles by viewer-hours | table | OK | 25 | `wofif fihvodchbgg21.953633.6` |
+| 01 Viewer-hours in window | number | OK | 1 | `742.44` |
+| 01 Live layer lag (seconds) | number | OK | 1 | `10` |
+| 01 Concurrent viewers — exact peak vs time-weighted average | line | OK | 78 | `2026-08-01 19:48:00328157.62` |
+| 01 Top titles — average concurrent viewers | line | OK | 595 | `2026-08-01 19:49:00cegeg gef0.57` |
+| 01 Title leaderboard | table | OK | 25 | `necec cegvodcgdgn391524.22` |
+| 02 Time-weighted average concurrency | number | OK | 1 | `164.87062` |
+| 02 Viewer-hours | number | OK | 1 | `697.95` |
+| 02 Active intervals started | number | OK | 1 | `12997` |
+| 02 Average concurrency by platform | line | OK | 812 | `2026-08-01 16:46:00ANDROID_PHONE0.4` |
+| 02 Average concurrency by content type | line | OK | 108 | `2026-08-01 16:46:00vod0.4` |
+| 02 Viewer-hours by category | pie | OK | 12 | `chbgg49.8` |
+| 02 Titles by viewer-hours | table | OK | 25 | `vamem befvodbfcfm28.624843.5` |
 | 02 Exact peak — all dimensions collapsed | number | OK | 1 | `1161` |
-| 02 Minute layer lag (seconds) | number | OK | 1 | `424` |
+| 02 Minute layer lag (seconds) | number | OK | 1 | `433` |
 | 02 Peak minute in window | table | OK | 1 | `2026-08-01 19:53:0011611000.83` |
-| 02 Exact peak by platform | bar | OK | 10 | `ANDROID_PHONE807` |
-| 02 Exact peak by app version | table | OK | 9 | `6.34.8718338.07` |
-| 02 Exact peak by category | table | OK | 25 | `chbgg6539.41` |
-| 03 Stream ingest lag p50 / p95 / p99 (seconds) | line | OK | 70 | `2026-08-01 16:46:00-1.620.180.34` |
-| 03 Rows ingested per second, by producer | line | OK | 79 | `2026-08-01 16:22:00csv:ch-hackathon-raw-data.csv15092.6` |
+| 02 Exact peak by platform | bar | OK | 12 | `ANDROID_PHONE807` |
+| 02 Exact peak by app version | table | OK | 10 | `6.34.8718437.71` |
+| 02 Exact peak by category | table | OK | 25 | `chbgg6549.8` |
+| 03 Stream ingest lag p50 / p95 / p99 (seconds) | line | OK | 86 | `2026-08-01 16:46:00-1.620.180.34` |
+| 03 Rows ingested per second, by producer | line | OK | 100 | `2026-08-01 16:22:00csv:ch-hackathon-raw-data.csv15092.6` |
 | 03 Read volume per serving query — cluster-wide | table | OK | 30 | `17970580568159697991-- ===================================` |
-| 03 Rollup build duration by layer (ms) | line | OK | 143 | `2026-08-01 19:45:00live177` |
-| 03 Recompute backlog — sessions dirtied per minute | line | OK | 71 | `2026-08-01 16:22:0010866` |
-| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 20:49:37.9802843376246sonyliv-active-v` |
-| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1116107110951465930.59070` |
-| 03 Storage and compression | table | OK | 10 | `events_clean1.11 million9.45 MiB25.1142` |
-| 04 Average concurrent viewers by platform | stacked_bar | OK | 633 | `2026-08-01 16:46:00ANDROID_PHONE0.4` |
-| 04 Platform totals | table | OK | 10 | `ANDROID_PHONE373.1369.237164` |
-| 04 Average concurrent viewers by content type | stacked_bar | OK | 91 | `2026-08-01 16:46:00vod0.4` |
-| 04 Content type totals | table | OK | 3 | `vod537.3499.710381` |
-| 04 Average concurrent viewers by app version | stacked_bar | OK | 540 | `2026-08-01 16:46:000.4` |
-| 04 App version totals | table | OK | 9 | `6.34.8338.0762.736515` |
-| 04 Average concurrent viewers by category | stacked_bar | OK | 698 | `2026-08-01 16:46:00other0.4` |
-| 04 Category totals | table | OK | 30 | `chbgg39.417.31716` |
-| 04 Average concurrent viewers by title (top 10, rest folded into 'other') | stacked_bar | OK | 632 | `2026-08-01 16:46:00other0.4` |
-| 04 Title totals | table | OK | 30 | `wofif fihvodchbgg21.954.07363` |
+| 03 Rollup build duration by layer (ms) | line | OK | 189 | `2026-08-01 19:45:00live177` |
+| 03 Recompute backlog — sessions dirtied per minute | line | OK | 87 | `2026-08-01 16:22:0010866` |
+| 03 Layer freshness | table | OK | 3 | `intervals2026-08-01 21:06:47.9483146006255sonyliv-active-v` |
+| 03 Dedup collapse — landed vs resolved | table | OK | 1 | `1171622116474368790.58710` |
+| 03 Storage and compression | table | OK | 10 | `events_clean1.16 million10.44 MiB23.9122` |
+| 04 Average concurrent viewers by platform | stacked_bar | OK | 812 | `2026-08-01 16:46:00ANDROID_PHONE0.4` |
+| 04 Platform totals | table | OK | 12 | `ANDROID_PHONE479.0468.648924` |
+| 04 Average concurrent viewers by content type | stacked_bar | OK | 108 | `2026-08-01 16:46:00vod0.4` |
+| 04 Content type totals | table | OK | 3 | `vod696.3599.7712947` |
+| 04 Average concurrent viewers by app version | stacked_bar | OK | 680 | `2026-08-01 16:46:000.4` |
+| 04 App version totals | table | OK | 10 | `6.34.8437.7162.718089` |
+| 04 Average concurrent viewers by category | stacked_bar | OK | 881 | `2026-08-01 16:46:00other0.4` |
+| 04 Category totals | table | OK | 30 | `chbgg49.87.13879` |
+| 04 Average concurrent viewers by title (top 10, rest folded into 'other') | stacked_bar | OK | 830 | `2026-08-01 16:46:00necec ceg0.4` |
+| 04 Title totals | table | OK | 30 | `vamem befvodbfcfm28.624.1484` |
 
 38 passed, 0 failed.
 

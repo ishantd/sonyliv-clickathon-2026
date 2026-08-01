@@ -14,6 +14,7 @@ reproducible on another service.
 | `apply.sh` | Create-or-update everything. Idempotent |
 | `csapi.sh` | One authenticated request against the ClickStack API |
 | `check-tiles.sh` | Run every tile's SQL against ClickHouse and report pass/fail |
+| `check-render.sh` | Load each dashboard in a browser and assert it actually renders |
 | `TILE-VERIFICATION.md` | Last full sweep: every tile against six windows |
 
 ## Setup
@@ -88,6 +89,29 @@ the numbers.
 Reading the returned *values* rather than just pass/fail is what caught a number tile
 emitting a unix epoch, an empty window rendering `-0`, and `argMax` over zero rows
 leaking a fake `1970-01-01` row.
+
+### Valid SQL is not a rendered dashboard
+
+`check-tiles.sh` proves the SQL runs and the API's own `POST /dashboards/validate`
+proves the payload is well formed. Neither proves the UI can draw it, so
+`check-render.sh` loads each dashboard in a browser and asserts its name reaches the
+document title *and* a tile-specific probe string reaches the body:
+
+```bash
+./clickstack/check-render.sh     # 4 render, 0 broken
+```
+
+It needs a logged-in session. `browse` is Chromium-only and its
+`cookie-import-browser` reads only Chromium-family profiles, so a Firefox session has
+to be carried across by hand — Firefox keeps cookies in plain SQLite, and the ClickStack
+UI lives on `hyperdx.clickhouse.cloud`. Failing that, `browse handoff` and one manual
+sign-in works; the session persists.
+
+**The settle is the whole trick.** Waiting on an `svg` node returns instantly, because
+the sidebar has SVG icons from the first paint — the probe then reads an unmounted page
+and reports every dashboard as broken. That false signal cost a round of "diagnosis"
+that blamed the `pie` and `bar` chart types for a fault that did not exist. Use
+`wait --networkidle`, which blocks until the SPA stops fetching.
 
 ## What the dashboards read, and the one rule behind their layout
 
