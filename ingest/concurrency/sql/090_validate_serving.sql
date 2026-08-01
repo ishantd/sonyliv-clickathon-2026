@@ -199,15 +199,26 @@ WITH
     -- wrong one.
     --
     -- Compared on active_ms because it is the only metric both layers compute
-    -- additively, and bounded to minutes older than BOTH watermarks. Without that
-    -- bound the check compares a live layer rebuilt seconds ago against a minute
-    -- layer rebuilt minutes ago, and reports the lag between them — which is the
-    -- design working, not a defect.
+    -- additively, and bounded twice.
+    --
+    -- Older than both watermarks: otherwise it compares a live layer rebuilt
+    -- seconds ago against a minute layer rebuilt minutes ago and reports the lag
+    -- between them, which is the design working.
+    --
+    -- And no older than 10 minutes: the live layer only rebuilds a trailing window,
+    -- so once a bucket falls out of it the bucket is a FROZEN snapshot. It was
+    -- written while those sessions were still open, when each interval ended at the
+    -- optimistic last_signal + 120s lease, and it is never revisited. The minute
+    -- layer later rebuilds the same minute from settled intervals that are shorter.
+    -- Measured: every disagreement was 38-57 minutes old and the live value was
+    -- always the higher one. That difference IS the correction the lagged layer
+    -- exists to make, so it is reported below as evidence rather than asserted to be
+    -- zero here.
     i_cross_layer AS
     (
         SELECT
             'INVARIANT',
-            'live vs minute: sum(active_ms) agree on minutes settled in both',
+            'live vs minute: agree on recent minutes settled in both',
             '0 disagreeing minutes',
             concat(toString(countIf(l != m)), ' of ', toString(count()), ' settled minutes'),
             countIf(l != m) = 0
@@ -236,6 +247,41 @@ WITH
                 FROM {{db}}.serving_watermark FINAL
                 WHERE layer IN ('live', 'minute')
             )
+            AND minute > now64(3) - toIntervalMinute(10)
+        )
+    ),
+
+    -- Informational, not pass/fail: how much the lagged layer actually corrects.
+    -- The live layer freezes each bucket with an optimistic lease-extended interval
+    -- end; the minute layer rebuilds it from settled intervals. This quantifies the
+    -- gap on minutes the live layer has stopped revisiting, which is the concrete
+    -- answer to "what does waiting five minutes buy you".
+    i_correction AS
+    (
+        SELECT
+            'EVIDENCE',
+            'live vs minute on frozen minutes: how much the lagged layer corrects',
+            'informational',
+            if(count() = 0, 'no frozen overlap yet',
+               concat(toString(count()), ' minutes, live over-reports by ',
+                      toString(round(100.0 * sum(toInt64(l) - toInt64(m)) / nullIf(sum(m), 0), 3)), '%')),
+            1
+        FROM
+        (
+            SELECT l.active_ms AS l, m.active_ms AS m
+            FROM
+            (
+                SELECT toStartOfMinute(bucket_start) AS minute, sum(active_ms) AS active_ms
+                FROM {{db}}.serving_concurrency_live FINAL
+                WHERE dim_mask = 0 GROUP BY minute HAVING count() = 6
+            ) AS l
+            INNER JOIN
+            (
+                SELECT minute_start AS minute, sum(active_ms) AS active_ms
+                FROM {{db}}.serving_concurrency_minute
+                WHERE dim_mask = 0 GROUP BY minute
+            ) AS m USING (minute)
+            WHERE minute <= now64(3) - toIntervalMinute(10)
         )
     ),
 
@@ -295,6 +341,7 @@ FROM
     UNION ALL SELECT * FROM i_active_bounds
     UNION ALL SELECT * FROM i_live_bounds
     UNION ALL SELECT * FROM i_cross_layer
+    UNION ALL SELECT * FROM i_correction
     UNION ALL SELECT * FROM i_no_holes
     UNION ALL SELECT * FROM i_watermark
 )

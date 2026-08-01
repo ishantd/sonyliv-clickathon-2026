@@ -168,6 +168,15 @@ extract's own sessions so synthetic traffic cannot move a fixed number:
   `make rollup-live` fills it. A fresh seed each run is required — identical flags
   produce an identical dedup fingerprint and the load is silently skipped as a
   replay.
+- **Live buckets older than the rebuild window are frozen snapshots.** The live
+  layer rebuilds only a trailing `--live-window` (30 min default), so once a bucket
+  ages out it keeps whatever it held — written while those sessions were still open,
+  with each interval ending at the optimistic `last_signal + 120s` lease. It is never
+  revisited, while the `TTL` keeps it queryable for three days. So a wide window on
+  dashboard 01 shows slightly *optimistic* history; dashboard 02 is the corrected
+  reading. `make rollup-check` quantifies the gap rather than assuming it: measured at
+  **0.066% over 92 frozen minutes**, which is both small enough to trust the live
+  layer and a real reason the lagged one exists.
 - **A fresh loop pays a cold start.** `--loop` keeps an in-memory cursor of what it
   last recomputed, so the first pass after a restart has no cursor, reads every
   dirty session, and rebuilds every service day. Steady state is one day; the first
