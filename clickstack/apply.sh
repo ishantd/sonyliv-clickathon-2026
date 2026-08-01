@@ -210,4 +210,117 @@ print(json.dumps(new))
   fi
 done
 
+# ------------------------------------------------- webhooks and alerts ----
+# Applied last: an alert binds to a dashboardId AND a tileId, neither of which
+# exists until the dashboards above have been written. Tile ids are resolved by
+# tile NAME against the live dashboard, which is why the update path further up
+# carries existing tile ids forward instead of letting the API mint new ones.
+
+alert_url="${CLICKSTACK_ALERT_WEBHOOK_URL:-https://webhook.invalid/sonyliv-oncall}"
+if [[ "$alert_url" == *".invalid/"* ]]; then
+  echo "alerts  note     CLICKSTACK_ALERT_WEBHOOK_URL unset — alerts will evaluate and"
+  echo "                 change state in ClickStack, but deliver nowhere. Set it to a"
+  echo "                 Slack incoming webhook to receive them."
+fi
+
+if $dry_run; then
+  python3 -c '
+import json, sys
+spec = json.load(open(sys.argv[1]))
+print("--- webhooks/alerts (url %s)" % sys.argv[2])
+print(json.dumps(spec, indent=2).replace("__ALERT_WEBHOOK_URL__", sys.argv[2]))
+' "$here/alerts.json" "$alert_url"
+else
+  webhook_map="$(mktemp)"
+  trap 'rm -f "$source_map" "$webhook_map"' EXIT
+
+  existing_webhooks="$("$csapi" GET /webhooks)"
+  webhook_count="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1])).get("webhooks",[])))' "$here/alerts.json")"
+
+  for i in $(seq 0 $((webhook_count - 1))); do
+    payload="$(python3 -c '
+import json, sys
+spec = json.load(open(sys.argv[1]))["webhooks"][int(sys.argv[2])]
+print(json.dumps(spec).replace("__ALERT_WEBHOOK_URL__", sys.argv[3]))
+' "$here/alerts.json" "$i" "$alert_url")"
+
+    name="$(printf '%s' "$payload" | python3 -c 'import json,sys;print(json.load(sys.stdin)["name"])')"
+    existing="$(printf '%s' "$existing_webhooks" | python3 -c '
+import json, sys
+for w in json.load(sys.stdin).get("result", []):
+    if w.get("name") == sys.argv[1]:
+        print(w["id"]); break
+' "$name")"
+
+    if [[ -n "$existing" ]]; then
+      # PATCH is not routed on this resource; a webhook is small enough that
+      # delete-and-recreate would work, but that would orphan every alert
+      # referencing it, so an unchanged existing webhook is simply reused.
+      id="$existing"
+      echo "webhook reused   $name  ($id)"
+    else
+      id="$("$csapi" POST /webhooks "$payload" |
+        python3 -c 'import json,sys;print(json.load(sys.stdin)["result"]["id"])')"
+      echo "webhook created  $name  ($id)"
+    fi
+    printf '%s\t%s\n' "$name" "$id" >> "$webhook_map"
+  done
+
+  # Dashboards are re-read AFTER writing so freshly created tiles have ids.
+  live_dashboards="$("$csapi" GET /dashboards)"
+  existing_alerts="$("$csapi" GET /alerts)"
+
+  alert_count="$(python3 -c 'import json,sys;print(len(json.load(open(sys.argv[1])).get("alerts",[])))' "$here/alerts.json")"
+
+  for i in $(seq 0 $((alert_count - 1))); do
+    # Resolution of dashboard name -> id and tile name -> id happens here rather
+    # than in the JSON, so alerts.json stays reviewable and environment-free.
+    resolved="$(python3 -c '
+import json, sys
+spec  = json.load(open(sys.argv[1]))["alerts"][int(sys.argv[2])]
+dashes = json.load(open(sys.argv[3])).get("result", [])
+hooks  = dict(l.rstrip("\n").split("\t", 1) for l in open(sys.argv[4]) if l.strip())
+
+d = next((x for x in dashes if x.get("name") == spec["dashboard"]), None)
+if d is None:
+    sys.exit("alert %r: no dashboard named %r" % (spec["name"], spec["dashboard"]))
+t = next((x for x in (d.get("tiles") or []) if x.get("name") == spec["tile"]), None)
+if t is None:
+    sys.exit("alert %r: dashboard %r has no tile named %r"
+             % (spec["name"], spec["dashboard"], spec["tile"]))
+if spec["webhook"] not in hooks:
+    sys.exit("alert %r: no webhook named %r" % (spec["name"], spec["webhook"]))
+
+print(json.dumps({
+    "name":          spec["name"],
+    "message":       spec.get("message"),
+    "source":        "tile",
+    "dashboardId":   d["id"],
+    "tileId":        t["id"],
+    "interval":      spec["interval"],
+    "threshold":     spec["threshold"],
+    "thresholdType": spec["thresholdType"],
+    "channel":       {"type": "webhook", "webhookId": hooks[spec["webhook"]]},
+}))
+' "$here/alerts.json" "$i" <(printf '%s' "$live_dashboards") "$webhook_map")"
+
+    name="$(printf '%s' "$resolved" | python3 -c 'import json,sys;print(json.load(sys.stdin)["name"])')"
+    existing="$(printf '%s' "$existing_alerts" | python3 -c '
+import json, sys
+for a in json.load(sys.stdin).get("result", []):
+    if a.get("name") == sys.argv[1]:
+        print(a["id"]); break
+' "$name")"
+
+    if [[ -n "$existing" ]]; then
+      "$csapi" PUT "/alerts/$existing" "$resolved" >/dev/null
+      echo "alert   updated  $name  ($existing)"
+    else
+      id="$("$csapi" POST /alerts "$resolved" |
+        python3 -c 'import json,sys;print(json.load(sys.stdin)["result"]["id"])')"
+      echo "alert   created  $name  ($id)"
+    fi
+  done
+fi
+
 $dry_run || echo "done — open ClickStack from the ClickHouse Cloud console to view them"

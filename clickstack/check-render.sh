@@ -36,6 +36,7 @@ SonyLIV — Concurrency analytics (lagged)	Average concurrency
 SonyLIV — Pipeline & query observability	Ingest lag
 SonyLIV — Grouped viewers	Platform totals
 SonyLIV — Benchmark answers	Peak by dimension value
+SonyLIV — Viewer-drop alerts	Breaching slices, any dimension
 EOF
 )
 

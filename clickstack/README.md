@@ -1,8 +1,8 @@
 # ClickStack dashboards
 
-Five dashboards over the serving tables, created through the managed ClickStack
-API rather than clicked together by hand — so they are diffable, reviewable, and
-reproducible on another service.
+Six dashboards and five alerts over the serving tables, created through the
+managed ClickStack API rather than clicked together by hand — so they are
+diffable, reviewable, and reproducible on another service.
 
 | File | What it is |
 |---|---|
@@ -11,6 +11,8 @@ reproducible on another service.
 | `dashboards/03-pipeline-observability.json` | Ingest lag, rollup latency, recompute backlog, and read volume per serving query |
 | `dashboards/04-grouped-viewers.json` | Stacked-bar breakdown; pick the group-by key from a tab bar |
 | `dashboards/05-benchmark-answers.json` | The scored benchmark set: peak and average per grouping, at minute/hour/day, with query evidence |
+| `dashboards/06-viewer-drop-alerts.json` | Retention against each slice's own trailing baseline, per location / platform / content type / category |
+| `alerts.json` | The five alerts and their webhook, bound to tiles of 06 by name |
 | `sources.json` | The four ClickStack sources the tiles bind to |
 | `apply.sh` | Create-or-update everything. Idempotent |
 | `csapi.sh` | One authenticated request against the ClickStack API |
@@ -198,5 +200,26 @@ extract's own sessions so synthetic traffic cannot move a fixed number:
   last recomputed, so the first pass after a restart has no cursor, reads every
   dirty session, and rebuilds every service day. Steady state is one day; the first
   pass is all of them. Restarting the loop is therefore cheap but not free.
-- **Alerts are not wired.** The API supports them bound to dashboard tiles with
-  webhook delivery, but there is no webhook destination to point them at yet.
+- **Alerts evaluate but deliver nowhere by default.** `CLICKSTACK_ALERT_WEBHOOK_URL`
+  is optional and falls back to an RFC 2606 `.invalid` host, which cannot resolve.
+  State transitions are real and visible in ClickStack; nothing is sent anywhere.
+  Point it at a Slack incoming webhook for delivery. Not defaulted to a live
+  endpoint on purpose — concurrency figures should not leave the account because a
+  config value was missing.
+- **An alert interval must exceed the minute layer's publish lag.** At `1m` or `5m`
+  the window contains no settled minute; ClickHouse `min()` over an empty set
+  returns `0.0`, not null, so every evaluation would page. Hence `15m` intervals and
+  an explicit `count() = 0` guard in every tile. Read the current lag off
+  *Detector lag (s)* before lowering either.
+- **A 15m alert is evaluated on a 15m cadence.** Changing a threshold does not
+  re-evaluate immediately — expect up to one interval before the state catches up.
+- **The location alert reports total collapse, not a regional one.** `country`
+  carries a single value, `india`, throughout this extract. The detector is
+  per-slice with an independent baseline each, so a multi-country day lights up per
+  country with no change; today, platform is the dimension where a partial outage
+  is visible.
+- **A scheduled end-of-broadcast decline is indistinguishable from an outage.** No
+  baseline-relative detector can separate them without an EPG signal the extract
+  does not carry; the 2026-07-26 11:19 episode is exactly that case. Related: as the
+  trailing baseline decays, an alert self-clears after roughly 15 minutes even if
+  the outage continues. Correct for paging, wrong for a status page.

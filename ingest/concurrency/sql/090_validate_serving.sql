@@ -325,6 +325,51 @@ WITH
                    toString(count()), ' layers: ', arrayStringConcat(arraySort(groupArray(layer)), ', ')),
             countIf(watermark_ts > now64(3) + toIntervalMinute(1)) = 0
         FROM {{db}}.serving_watermark FINAL
+    ),
+
+    -- The drop detector's failure mode is silence: if it stops seeing traffic it reports
+    -- perfect retention, which is indistinguishable from a healthy service. So it is
+    -- checked against a window whose answer is known, deliberately offset by 17 seconds
+    -- because a dashboard passes whatever wall clock the page loaded at and never a
+    -- minute boundary. An unaligned window once made the generated minute grid miss the
+    -- join entirely: 0 observed, 0 baseline, retention pinned to 1.0, permanently green.
+    -- check-tiles.sh cannot catch this — the SQL succeeds, it just answers "all well".
+    d_alignment AS
+    (
+        SELECT
+            'INVARIANT',
+            'drop detector: an unaligned window still sees the 2026-07-26 11:00 traffic',
+            'observed > 2000 concurrent',
+            concat(toString(round(anyIf(observed, minute_start = '2026-07-26 11:00:00'), 2)),
+                   ' concurrent, ', toString(countIf(has_opinion)), ' of ',
+                   toString(count()), ' minutes with an opinion'),
+            anyIf(observed, minute_start = '2026-07-26 11:00:00') > 2000
+                AND countIf(has_opinion) = count()
+        FROM {{db}}.serving_drop_signal(
+            win_from = '2026-07-26 11:00:17', win_to = '2026-07-26 11:06:17',
+            grouping_key = 'country', baseline_minutes = 15,
+            min_baseline = 25, persist_minutes = 1)
+    ),
+
+    -- Absence of data must read as zero, not as nothing. Traffic stops dead at 11:30 on
+    -- 2026-07-26, so 11:31 onward have no source rows at all; the grid plus LEFT JOIN is
+    -- what turns them into a breach instead of an empty result set that no threshold can
+    -- fire on. Asserted on the count of ZERO-observed minutes, since a regression here
+    -- removes rows rather than changing their values.
+    d_absence AS
+    (
+        SELECT
+            'INVARIANT',
+            'drop detector: a slice that stops reporting breaches instead of vanishing',
+            '>= 5 zero-viewer minutes, all at retention 0',
+            concat(toString(countIf(observed = 0)), ' zero minutes, worst retention ',
+                   toString(round(min(retention), 4))),
+            countIf(observed = 0) >= 5
+                AND countIf(observed = 0 AND has_opinion AND retention = 0) >= 5
+        FROM {{db}}.serving_drop_signal(
+            win_from = '2026-07-26 11:30:00', win_to = '2026-07-26 11:38:00',
+            grouping_key = 'country', baseline_minutes = 15,
+            min_baseline = 25, persist_minutes = 1)
     )
 
 SELECT kind, check, expected, actual, if(pass, 'PASS', 'FAIL') AS verdict
@@ -344,6 +389,8 @@ FROM
     UNION ALL SELECT * FROM i_correction
     UNION ALL SELECT * FROM i_no_holes
     UNION ALL SELECT * FROM i_watermark
+    UNION ALL SELECT * FROM d_alignment
+    UNION ALL SELECT * FROM d_absence
 )
 -- FAIL sorts before PASS, so anything wrong is the first thing on screen.
 ORDER BY verdict, kind DESC, check
