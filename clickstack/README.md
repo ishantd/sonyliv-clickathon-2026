@@ -1,6 +1,6 @@
 # ClickStack dashboards
 
-Three dashboards over the serving tables, created through the managed ClickStack
+Four dashboards over the serving tables, created through the managed ClickStack
 API rather than clicked together by hand — so they are diffable, reviewable, and
 reproducible on another service.
 
