@@ -138,9 +138,12 @@ export function Nav() {
           })}
         </nav>
 
-        <span className="ml-auto hidden font-mono text-[0.6875rem] text-ink-3 sm:block">
-          writes to events_raw · UTC
-        </span>
+        {/* Just the timezone. "writes to events_raw" was stating the obvious —
+            every page here writes to events_raw, so a permanent banner saying so
+            carried no information and spent header width doing it. UTC stays
+            because the tables are full of bare clock times and nothing else on
+            the page says which zone they are in. */}
+        <span className="ml-auto font-mono text-[0.6875rem] text-ink-3">UTC</span>
 
         <TokenBadge />
       </div>
