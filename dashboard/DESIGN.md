@@ -79,10 +79,17 @@ earn.
   whole page into horizontal scroll on a 390px viewport.
 - **The nav scrolls, it does not wrap.** Five items plus a two-line lockup do not
   fit at 390px.
-- **The lockup is stacked.** SONYLIV over CLICKHOUSE with the `×` between them.
-  Inline reads as a hyphenated product name; stacked reads as two parties. Gold
-  lands only on the `×` — putting it on both words spends the whole colour budget
-  in the corner of the screen.
+- **The lockup uses both parties' real marks**, not lettering set in Inter:
+  SonyLIV's own header PNG (`public/sonyliv-mark.png`, from their CDN) over
+  ClickHouse's own SVG (`components/BrandMarks.tsx`, verbatim from clickhouse.com,
+  `fill="currentColor"` so the lockup tints it). Two brands in one lockup is
+  exactly where an approximation shows.
+  Stacked with the `×` between them: side by side, two wordmarks read as a
+  hyphenated product name. The ClickHouse mark sits at `ink-2`, a step below the
+  liv mark's own gold — a lockup where both parties shout has no hierarchy, and
+  this is the SonyLIV problem statement. The `×` is the only gold in the header.
+  The ClickHouse mark is 16px tall, not 13px: at 13px its cap height was ~7px,
+  present but not readable.
 
 ## Deliberately not done
 

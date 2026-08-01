@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSyncExternalStore } from "react";
 import { getToken, setToken } from "@/lib/api";
+import { ClickHouseMark, SonyLivMark } from "./BrandMarks";
 
 /**
  * Shows whether a token is stored, and allows clearing it.
@@ -42,31 +43,40 @@ function TokenBadge() {
 }
 
 /**
- * The collaboration lockup: SONYLIV over CLICKHOUSE.
+ * The collaboration lockup: the real `liv` mark over the real ClickHouse wordmark.
  *
- * Stacked rather than inline, because two brand words on one line read as a
- * hyphenated product name; stacked with the × between them reads as two parties.
- * Tight leading (0.95) binds the pair into one mark, and the shared left edge is
- * what makes it a lockup rather than two labels.
+ * Both are the parties' own assets — SonyLIV's header PNG and ClickHouse's own
+ * SVG — rather than lettering set in Inter and hoped to pass. Two brands in one
+ * lockup is exactly where an approximation shows.
  *
- * The × is set in the text face, not drawn — it is a typographic multiplication
- * sign doing the job it exists for, which is the one case where a glyph is not a
- * stand-in for an icon.
+ * Stacked, because side by side two wordmarks read as a hyphenated product name
+ * while stacked with the × between them reads as two parties. The left edges
+ * align and the gap is tight, which is what binds them into one mark instead of
+ * two logos that happen to be near each other.
  *
- * Gold lands only on the ×. SonyLIV spends its single signal colour on the tick
- * in its own logo and nowhere else in the header; putting it on both words would
- * spend the whole budget in the corner of the screen.
+ * The × stays typographic and gold. It is a multiplication sign doing the job it
+ * exists for — the one case where a glyph is not standing in for an icon — and
+ * it is the only place the signal colour appears in the header, so the eye reads
+ * the join rather than the chrome.
+ *
+ * The ClickHouse mark inherits `currentColor` at ink-2, deliberately a step below
+ * the liv mark's own gold: a lockup where both parties shout has no hierarchy,
+ * and this is the SonyLIV problem statement.
  */
 function Lockup() {
   return (
     <span
-      className="flex shrink-0 flex-col leading-[0.95] font-semibold tracking-[0.02em] uppercase"
+      className="flex shrink-0 flex-col gap-1"
       aria-label="SonyLIV × ClickHouse"
+      title="SonyLIV × ClickHouse"
     >
-      <span className="text-[0.8125rem] text-ink">
-        sonyliv <span className="font-normal text-accent">×</span>
+      <span className="flex items-center gap-1.5">
+        <SonyLivMark />
+        <span className="text-[0.8125rem] leading-none text-accent">×</span>
       </span>
-      <span className="text-[0.8125rem] text-ink-2">clickhouse</span>
+      <span className="text-ink-2">
+        <ClickHouseMark />
+      </span>
     </span>
   );
 }
