@@ -7,7 +7,15 @@ Problem statement reference: https://github.com/sidagarwal04/click-a-thon-2026/t
 
 ## Status
 
-Planning / scaffolding only. No solution code yet — per the event rules, all code must be written during the 24-hour hack window (12:00 pm IST 1 Aug → 12:00 pm IST 2 Aug 2026).
+Active build. The independent evidence-backed ClickHouse design, executable SQL,
+semantic policy, and embedded verification are in [`solution/`](solution/README.md).
+It was created during the 24-hour hack window and intentionally leaves the
+concurrent `docs/` / `prototype/` draft untouched for end-of-session comparison.
+
+Current verified reference result for the supplied source hashes and policy
+`sonyliv-active-v1`: 31,947 active intervals; exact hot-hour peak 2,305 and
+time-weighted average 855.578199 sessions. These are correctness-oracle outputs,
+not ClickHouse Cloud latency claims.
 
 ## Team
 
