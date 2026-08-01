@@ -40,10 +40,22 @@ SETTINGS
     -- MergeTree and re-running the loader appends a second full copy of the
     -- catalogue. ReplacingMergeTree would eventually collapse it, but "wait for
     -- a merge" is not a substitute for not writing the rows.
-    -- Replicated / SharedMergeTree (ClickHouse Cloud) dedupes independently and
-    -- ignores this setting.
-    non_replicated_deduplication_window = 100
+    --
+    -- The replicated_* pair is the same guarantee for a Replicated or
+    -- SharedMergeTree, which is what ClickHouse Cloud creates from this DDL.
+    -- Only the engine decides which pair is read; see sl_raw_events for why
+    -- setting just the first one is a trap.
+    non_replicated_deduplication_window = 100,
+    replicated_deduplication_window = 100,
+    replicated_deduplication_window_seconds = 2592000
 COMMENT 'Content catalogue. 33,464 rows in the supplied extract, content_id unique.';
+
+-- Converge a database that already has the table; see sl_raw_events.
+ALTER TABLE {{db}}.sl_content_dim
+    MODIFY SETTING
+        non_replicated_deduplication_window = 100,
+        replicated_deduplication_window = 100,
+        replicated_deduplication_window_seconds = 2592000;
 
 -- Deduplicated read view. Replacement by background merge is eventual, so the
 -- dictionary source must not assume physical replacement has happened yet.

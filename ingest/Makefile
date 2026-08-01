@@ -30,6 +30,10 @@ check: test
 	@out=$$(gofmt -l .); if [ -n "$$out" ]; then echo "gofmt needed:"; echo "$$out"; exit 1; fi
 	@echo "check ok"
 
+## doctor: preflight the configured service before loading into it
+doctor: build
+	$(BIN)/sonyliv-ingest doctor
+
 ## schema: apply the DDL (idempotent)
 schema: build
 	$(BIN)/sonyliv-ingest schema
@@ -76,4 +80,4 @@ ch-down:
 clean:
 	rm -rf $(BIN)
 
-.PHONY: help build test check schema schema-print load verify demo loadtest ch-up ch-down clean
+.PHONY: help build test check doctor schema schema-print load verify demo loadtest ch-up ch-down clean

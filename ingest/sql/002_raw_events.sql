@@ -193,12 +193,34 @@ PARTITION BY toYYYYMMDD(session_start_time)
 -- rather than a global hash aggregation.
 ORDER BY (video_session_id, event_time, event_type, event)
 SETTINGS
-    -- Enables insert_deduplication_token on a non-replicated MergeTree, so a
-    -- crashed loader can safely replay the same batch locally. Replicated /
-    -- SharedMergeTree (ClickHouse Cloud) dedupes via replicated_deduplication_window
-    -- and ignores this. 1000 blocks x 50K rows = 50M rows of retry protection.
-    non_replicated_deduplication_window = 1000
+    -- Idempotency, stated once and enforced on both engine families.
+    --
+    -- Which of these applies is decided by the engine, not by this file. A
+    -- local MergeTree honours the non_replicated_* window and ignores the rest;
+    -- a Replicated or SharedMergeTree (what ClickHouse Cloud silently creates
+    -- from `ENGINE = MergeTree`) does the opposite. Setting only the first is
+    -- the trap: it works perfectly on a laptop and quietly stops working in
+    -- production.
+    --
+    -- 1000 blocks x 50K rows = 50M rows of retry protection on either engine.
+    non_replicated_deduplication_window = 1000,
+    replicated_deduplication_window = 1000,
+    -- The server default here is 3600 — one hour. There is no time component at
+    -- all on the non-replicated path, so "re-running a load is a no-op" is true
+    -- indefinitely on a laptop and expires overnight on Cloud. 30 days makes the
+    -- guarantee mean the same thing in both places.
+    replicated_deduplication_window_seconds = 2592000
 COMMENT 'Append-only event landing table. Never mutated: corrections arrive as new rows.';
+
+-- CREATE TABLE IF NOT EXISTS above is a no-op against a database that already
+-- has this table, so the settings correction would never reach one. This makes
+-- `schema` converge rather than merely not-fail: it is metadata-only, costs
+-- nothing, and re-running it changes nothing.
+ALTER TABLE {{db}}.sl_raw_events
+    MODIFY SETTING
+        non_replicated_deduplication_window = 1000,
+        replicated_deduplication_window = 1000,
+        replicated_deduplication_window_seconds = 2592000;
 
 
 -- =============================================================================

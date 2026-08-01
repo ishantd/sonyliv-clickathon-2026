@@ -1,5 +1,6 @@
 // Command sonyliv-ingest loads the supplied CSV extracts into ClickHouse.
 //
+//	sonyliv-ingest doctor                       preflight a service before loading
 //	sonyliv-ingest schema                       apply the DDL (idempotent)
 //	sonyliv-ingest content --file <content.csv> load the content catalogue
 //	sonyliv-ingest events  --file <raw.csv>     load the event stream
@@ -42,6 +43,7 @@ func usage() {
 	fmt.Fprint(os.Stderr, `sonyliv-ingest — CSV to ClickHouse loader
 
 Usage:
+  sonyliv-ingest doctor
   sonyliv-ingest schema
   sonyliv-ingest content --file <ch-hackathon-content-data.csv>
   sonyliv-ingest events  --file <ch-hackathon-raw-data.csv> [flags]
@@ -61,6 +63,8 @@ func run() error {
 	defer stop()
 
 	switch os.Args[1] {
+	case "doctor":
+		return cmdDoctor(ctx, os.Args[2:])
 	case "schema":
 		return cmdSchema(ctx, os.Args[2:])
 	case "content":
