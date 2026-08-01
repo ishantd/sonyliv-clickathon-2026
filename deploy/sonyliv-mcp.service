@@ -1,0 +1,53 @@
+[Unit]
+Description=SonyLIV serving-layer MCP server
+Documentation=file:///opt/sonyliv/README-mcp.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sonyliv
+Group=sonyliv
+
+# Holds CLICKHOUSE_* for the sonyliv_mcp user and SONYLIV_MCP_TOKEN.
+# Must be chmod 600 and owned by sonyliv — it carries two secrets.
+EnvironmentFile=/etc/sonyliv/mcp.env
+
+# --transport http requires SONYLIV_MCP_TOKEN to be non-empty and refuses to start
+# without it. The bind is deliberately 127.0.0.1: terminate TLS in front of this rather
+# than exposing SQL access over plaintext HTTP. See README-mcp.md.
+ExecStart=/opt/sonyliv/bin/sonyliv-mcp --transport http --addr 127.0.0.1:8848
+
+Restart=always
+RestartSec=3s
+
+# The server never writes anything and connects only outbound to ClickHouse, so it can be
+# confined tightly. If any of this is relaxed, say why in the commit.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+ReadWritePaths=
+
+# A runaway aggregation should hit this before it hits the box.
+MemoryMax=512M
+TasksMax=256
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sonyliv-mcp
+
+[Install]
+WantedBy=multi-user.target

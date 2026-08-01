@@ -18,6 +18,7 @@ build:
 	@mkdir -p $(BIN)
 	go build -o $(BIN)/sonyliv-ingest ./cmd/sonyliv-ingest
 	go build -o $(BIN)/sonyliv-gen    ./cmd/sonyliv-gen
+	go build -o $(BIN)/sonyliv-mcp    ./cmd/sonyliv-mcp
 	@echo "built $(BIN)/sonyliv-ingest and $(BIN)/sonyliv-gen"
 
 ## test: run unit tests
@@ -99,3 +100,21 @@ clean:
 .PHONY: help build test check doctor schema schema-print load verify \
         rollup rollup-live rollup-check clickstack \
         demo loadtest ch-up ch-down clean
+
+# Serving-layer MCP server. Connects as sonyliv_mcp (ingest/sql/009_mcp_reader.sql) and
+# refuses to start as anything that can read per-user data.
+mcp: build
+	$(BIN)/sonyliv-mcp --transport stdio
+
+mcp-http: build
+	$(BIN)/sonyliv-mcp --transport http --addr 127.0.0.1:8848
+
+# Exercises the refusals, which is the half that matters.
+mcp-check:
+	./cmd/sonyliv-mcp/check-mcp.sh
+
+# Proves the grant set directly against ClickHouse, bypassing the server.
+mcp-check-grants:
+	./cmd/sonyliv-mcp/check-grants.sh
+
+.PHONY: mcp mcp-http mcp-check mcp-check-grants
