@@ -131,12 +131,12 @@ extract's own sessions so synthetic traffic cannot move a fixed number:
 
 ## Known limits
 
-- **Two observability tiles read the answering replica only.** Cluster-wide
-  `system.query_log` / `system.parts` need `clusterAllReplicas(...)`, which
-  requires `GRANT READ ON REMOTE TO sonyliv_svc` — `sonyliv_svc` already has
-  `SELECT` on both tables but not that. The tiles say "— this replica" in their
-  titles rather than rendering as empty boxes. To widen them, run the grant as an
-  admin and wrap both table references.
+- **Two observability tiles need `READ ON REMOTE`.** They read
+  `system.query_log` and `system.parts` through `clusterAllReplicas(default, ...)`,
+  because both are per-node on Cloud and a plain read shows only the replica that
+  answered — measured here, 8,519 query_log rows against 36,895 cluster-wide. That
+  needs `GRANT READ ON REMOTE TO sonyliv_svc` on top of `SELECT` on the system
+  tables. If those two tiles ever render empty, check that grant first.
 - **The live dashboard needs live traffic.** 93.9% of the extract sits in a
   2.5-hour window on 2026-07-26, so the 10-second layer has nothing recent to
   show unless something is producing events. `bin/sonyliv-gen --concurrency 900
