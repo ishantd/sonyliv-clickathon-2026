@@ -13,6 +13,15 @@ CONTENT_CSV ?= $(DATA)/ch-hackathon-content-data.csv
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | column -t -s ':'
 
+## web: rebuild the Next.js dashboard and stage its static export for embedding
+##      Requires Node >= 20.9 (Next 16). The export is committed, so `make build`
+##      works with no Node toolchain — run this only after changing dashboard/.
+web:
+	cd ../dashboard && npm ci --silent && npm run build
+	rm -rf internal/mock/web && mkdir -p internal/mock/web
+	cp -R ../dashboard/out/. internal/mock/web/
+	@echo "staged $$(du -sh internal/mock/web | cut -f1) into internal/mock/web"
+
 ## build: compile all binaries into ./bin
 build:
 	@mkdir -p $(BIN)

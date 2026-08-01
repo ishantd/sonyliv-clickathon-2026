@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
 	"strconv"
@@ -16,16 +17,22 @@ import (
 	"github.com/sonyliv-clickathon/ingest/internal/chx"
 )
 
-//go:embed web
+// The `all:` prefix is REQUIRED, not stylistic. Next's static export contains
+// _next/ and __next.*.txt, and go:embed silently skips paths whose base name
+// begins with "_" or ".". Without `all:` the binary compiles, serves index.html,
+// and the page renders blank with no JavaScript and no error anywhere.
+//
+//go:embed all:web
 var webFS embed.FS
 
 // Server serves the two dashboards and their control API.
 type Server struct {
-	client    *chx.Client
-	runner    *Runner
-	manual    *Manual
-	token     string
-	timeoutMS int64
+	client     *chx.Client
+	runner     *Runner
+	manual     *Manual
+	token      string
+	corsOrigin string
+	timeoutMS  int64
 }
 
 // NewServer wires the dashboards over one ClickHouse client.
@@ -33,13 +40,19 @@ type Server struct {
 // timeoutMS is the liveness lease the stepper evaluates against. It must match
 // whatever the pipeline runs with, or the dashboard would show a different
 // notion of "active" from the served answer.
-func NewServer(client *chx.Client, token string, timeoutMS int64) *Server {
+// corsOrigin, when non-empty, is the single origin allowed to call /api/. It
+// exists for `next dev`: the dashboard runs on :3000 while this serves :8088, and
+// next.config rewrites cannot bridge them because rewrites are unsupported under
+// output: 'export'. Empty in production, where the exported files are served from
+// this same binary and the API is same-origin.
+func NewServer(client *chx.Client, token, corsOrigin string, timeoutMS int64) *Server {
 	return &Server{
-		client:    client,
-		runner:    NewRunner(client),
-		manual:    NewManual(client, timeoutMS),
-		token:     token,
-		timeoutMS: timeoutMS,
+		client:     client,
+		runner:     NewRunner(client),
+		manual:     NewManual(client, timeoutMS),
+		token:      token,
+		corsOrigin: corsOrigin,
+		timeoutMS:  timeoutMS,
 	}
 }
 
@@ -63,11 +76,18 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ready\n"))
 	})
 
-	// "GET /{$}" not "GET /": the bare pattern is a catch-all for every GET path,
-	// which overlaps the "/api/" subtree below and makes ServeMux reject the
-	// route table as ambiguous. {$} anchors it to the root exactly.
-	mux.HandleFunc("GET /{$}", s.page("web/load.html"))
-	mux.HandleFunc("GET /manual", s.page("web/manual.html"))
+	// The Next.js static export, served from the embedded FS. FileServerFS
+	// resolves "/" and "/manual/" to their index.html, which is why the export
+	// sets trailingSlash: true.
+	//
+	// Registered as a bare "/" subtree pattern with no method, so it does not
+	// conflict with the "/api/" subtree below — a method-qualified "GET /" would,
+	// because it is a catch-all for every GET path.
+	sub, err := fs.Sub(webFS, "web")
+	if err != nil {
+		panic("embedded web assets missing: " + err.Error())
+	}
+	mux.Handle("/", http.FileServerFS(sub))
 
 	api := http.NewServeMux()
 	api.HandleFunc("GET /api/content", s.handleContent)
@@ -80,8 +100,32 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("POST /api/manual/event", s.handleManualEvent)
 	api.HandleFunc("GET /api/manual/session/{vsid}", s.handleManualState)
 
-	mux.Handle("/api/", s.auth(api))
+	mux.Handle("/api/", s.cors(s.auth(api)))
 	return mux
+}
+
+// cors permits exactly one configured origin, and only when configured.
+//
+// Not a wildcard: this endpoint writes to ClickHouse, so any page in any tab
+// could otherwise drive it. A single explicit origin keeps the dev convenience
+// without turning production into an open write surface.
+func (s *Server) cors(next http.Handler) http.Handler {
+	if s.corsOrigin == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Origin") == s.corsOrigin {
+			w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // auth gates the control API behind a shared token when one is configured.
@@ -99,18 +143,6 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-func (s *Server) page(name string) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		b, err := webFS.ReadFile(name)
-		if err != nil {
-			http.Error(w, "page missing: "+name, http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(b)
-	}
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

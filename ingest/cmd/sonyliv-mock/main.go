@@ -48,6 +48,12 @@ func run() error {
 	envPath := fs.String("env", "", "path to .env")
 	timeoutMS := fs.Int64("heartbeat-timeout-ms", 120_000,
 		"liveness lease the stepper evaluates against; must match the pipeline's")
+	// Only needed for `next dev`, which serves the dashboard from :3000 while this
+	// serves :8088. A next.config rewrite would normally bridge that, but rewrites
+	// are unsupported under output: 'export'. Empty in production, where this binary
+	// serves the exported files itself and the API is same-origin.
+	corsOrigin := fs.String("cors-origin", "",
+		"single origin allowed to call /api/ (dev only, e.g. http://localhost:3000)")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
 		return err
@@ -77,7 +83,7 @@ func run() error {
 	}
 	fmt.Printf("connected to %s (ClickHouse %s)\n", cfg.Redacted(), version)
 
-	srv := mock.NewServer(client, *token, *timeoutMS)
+	srv := mock.NewServer(client, *token, *corsOrigin, *timeoutMS)
 	httpSrv := &http.Server{
 		Addr:              *listen,
 		Handler:           srv.Handler(),
@@ -94,6 +100,9 @@ func run() error {
 		fmt.Printf("event stepper   http://%s/manual\n", *listen)
 		if *token == "" {
 			fmt.Println("no --token set: /api/ is unauthenticated (fine on loopback)")
+		}
+		if *corsOrigin != "" {
+			fmt.Printf("CORS: allowing %s (for `next dev`)\n", *corsOrigin)
 		}
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
