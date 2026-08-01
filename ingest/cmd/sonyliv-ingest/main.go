@@ -48,6 +48,7 @@ Usage:
   sonyliv-ingest content --file <ch-hackathon-content-data.csv>
   sonyliv-ingest events  --file <ch-hackathon-raw-data.csv> [flags]
   sonyliv-ingest verify
+  sonyliv-ingest concurrency [--layer intervals|live|minute|all] [flags]
 
 Run "sonyliv-ingest <command> -h" for command flags.
 `)
@@ -73,6 +74,8 @@ func run() error {
 		return cmdEvents(ctx, os.Args[2:])
 	case "verify":
 		return cmdVerify(ctx, os.Args[2:])
+	case "concurrency":
+		return cmdConcurrency(ctx, os.Args[2:])
 	case "-h", "--help", "help":
 		usage()
 		return nil

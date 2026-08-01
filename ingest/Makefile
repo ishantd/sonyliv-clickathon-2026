@@ -51,6 +51,22 @@ load: schema
 verify: build
 	$(BIN)/sonyliv-ingest verify
 
+## rollup: full rebuild — session_intervals, then both serving layers
+rollup: build
+	$(BIN)/sonyliv-ingest concurrency --layer all
+
+## rollup-live: keep the live dashboard moving (10s cadence, Ctrl-C to stop)
+rollup-live: build
+	$(BIN)/sonyliv-ingest concurrency --layer live --loop 10s
+
+## rollup-check: assert the serving layers against the canonical measured figures
+rollup-check:
+	./concurrency/ch.sh --file concurrency/sql/090_validate_serving.sql --format PrettyCompactMonoBlock
+
+## clickstack: create or update the ClickStack connection, sources and dashboards
+clickstack:
+	../clickstack/apply.sh
+
 ## demo: live replay — 2,000 concurrent sessions, 10 event-minutes at 30x
 demo: build
 	$(BIN)/sonyliv-gen --concurrency 2000 --duration 10m --speed 30 --ramp-up 1m
@@ -80,4 +96,6 @@ ch-down:
 clean:
 	rm -rf $(BIN)
 
-.PHONY: help build test check doctor schema schema-print load verify demo loadtest ch-up ch-down clean
+.PHONY: help build test check doctor schema schema-print load verify \
+        rollup rollup-live rollup-check clickstack \
+        demo loadtest ch-up ch-down clean

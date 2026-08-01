@@ -113,3 +113,15 @@ func (c *Client) CountRows(ctx context.Context, table string) (uint64, error) {
 	}
 	return n, nil
 }
+
+// Named binds a value to a {name:Type} query parameter.
+//
+// Positional ? binding is enough for the short queries in this package, but the
+// concurrency rollups are long enough that positional arguments become a counting
+// exercise, and they reference the same parameter more than once — which ? cannot
+// express at all. Re-exported here so callers bind parameters through chx rather
+// than importing the driver directly, which is the boundary the rest of this
+// package maintains.
+func Named(name string, value any) driver.NamedValue {
+	return clickhouse.Named(name, value)
+}

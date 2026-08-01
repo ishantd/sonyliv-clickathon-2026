@@ -1,0 +1,284 @@
+-- =============================================================================
+-- 007_serving_concurrency.sql — the two layers a BI tool reads
+--
+-- Everything above session_intervals is per-session and order-dependent.
+-- Everything here is a pure rollup of that one table, so both layers can be
+-- rebuilt from scratch at any time and neither holds state the other needs.
+--
+--   serving_concurrency_live     10-second grain, content only, 3-day TTL
+--   serving_concurrency_minute   1-minute grain, six dimension masks
+--
+-- Built by concurrency/sql/020_rollup_live.sql and 030_rollup_minute.sql,
+-- driven by `sonyliv-ingest concurrency`.
+--
+-- WHICH METRIC IS ADDITIVE, AND WHY IT DECIDES THE WHOLE SCHEMA
+-- ---------------------------------------------------------------------------
+-- A dashboard aggregates. So the only question that matters for a serving table
+-- is which columns survive a SUM across rows, and which do not:
+--
+--   active_ms           ADDITIVE across every dimension and across time.
+--                       It is session-milliseconds inside the bucket, so
+--                       sum(active_ms) / bucket_ms is the exact time-weighted
+--                       average concurrency for any filter combination. This is
+--                       one of the two policy-default metrics
+--                       (solution/policy.yaml:111-116) and it is the metric the
+--                       dashboards draw their main series from, precisely
+--                       because it cannot be aggregated wrongly.
+--
+--   ending_concurrency  ADDITIVE across dimensions at a fixed instant, because
+--                       one session belongs to exactly one slice. It is the
+--                       concurrency sampled at the bucket's closing edge, so it
+--                       is the honest answer to "how many right now".
+--                       NOT additive across time — summing two buckets is
+--                       meaningless.
+--
+--   bucket_peak /       NOT ADDITIVE, EVER. Two titles peak at different
+--   minute_peak         instants, so summing their peaks invents viewers who
+--                       were never simultaneously present. On the tuning
+--                       extract, summing per-content peaks over the hot hour
+--                       overstates the true 2,305 substantially.
+--
+-- That last line is the reason dim_mask exists. An exact peak for a given
+-- grouping has to be computed at that grouping, so it is precomputed per mask
+-- rather than derived at read time. A reader that wants peak picks the matching
+-- mask; a reader that wants an average or an instantaneous count can use any
+-- mask, including the full-grain one, and filter freely.
+--
+-- WHY THE TWO LAYERS USE DIFFERENT REPLACEMENT MECHANISMS
+-- ---------------------------------------------------------------------------
+-- Both layers are rebuilt repeatedly, and each needs a rebuild to REPLACE what
+-- was there rather than add to it. They reach that differently because they are
+-- rebuilt at very different rates.
+--
+--   live    ReplacingMergeTree(version) + FINAL on read. Rebuilt every ~10s
+--           over a short trailing window, so a partition swap would rewrite far
+--           more than it changed. The table is bounded to 3 days at 10-second
+--           grain, which keeps FINAL cheap.
+--
+--   minute  Plain MergeTree, rebuilt a whole UTC day at a time into
+--           serving_concurrency_minute_staging and swapped in with
+--           ALTER TABLE ... REPLACE PARTITION. Atomic, needs no FINAL and no
+--           version column, and — unlike replacement — it also removes rows
+--           that a recompute no longer produces. That matters here: if late data
+--           costs a session all of its active time in some minute, the row for
+--           that minute must disappear, and a ReplacingMergeTree has nothing to
+--           replace it with. Partition granularity is the day, so the swap unit
+--           and the rebuild unit are the same thing.
+--
+-- Reads go through the three views at the bottom, which is where FINAL and the
+-- content_dict join live. No dashboard tile should reference these tables
+-- directly.
+-- =============================================================================
+
+
+-- -----------------------------------------------------------------------------
+-- serving_concurrency_live — 10-second grain, content dimension only
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS {{db}}.serving_concurrency_live
+(
+    bucket_start        DateTime('UTC')
+        COMMENT 'Left edge of a 10-second bucket, half-open [bucket_start, +10s)',
+
+    dim_mask            UInt8
+        COMMENT 'Which dimensions this row is grouped by. 0 = ungrouped total, 4 = content_id. Bit convention matches solution/policy.yaml:118-134 (platform=1, country=2, content_id=4, video_type=8)',
+
+    content_id          Int64
+        COMMENT 'Zero when dim_mask = 0. Int64 because the catalogue holds one negative id',
+
+    bucket_peak         UInt32
+        COMMENT 'NOT ADDITIVE. Max instantaneous concurrency inside the bucket, exact only at this row dim_mask. Never sum this across content_id',
+
+    ending_concurrency  UInt32
+        COMMENT 'Additive across dim_mask=4 rows at one bucket_start. Concurrency at the closing edge of the bucket',
+
+    active_ms           UInt64
+        COMMENT 'Additive everywhere. Session-milliseconds inside this bucket; active_ms/10000 is the exact time-weighted average concurrency',
+
+    version             UInt64
+        COMMENT 'Milliseconds since epoch at rollup time; higher wins on replacement'
+)
+ENGINE = ReplacingMergeTree(version)
+PARTITION BY toDate(bucket_start)
+ORDER BY (dim_mask, bucket_start, content_id)
+TTL bucket_start + INTERVAL 3 DAY
+COMMENT 'Live concurrency at 10-second grain. Best-effort: rebuilt continuously over a trailing window and does NOT wait for late events. Read via serving_live_total / serving_live_content.';
+
+
+-- -----------------------------------------------------------------------------
+-- serving_concurrency_minute — 1-minute grain, six dimension masks
+--
+-- Masks materialized, and what each is for:
+--
+--    0  ungrouped                          the headline exact peak
+--    1  platform                           exact peak per platform
+--    4  content_id                         exact peak per title
+--    8  video_type                         exact peak per VOD/live
+--   16  app_version                        exact peak per build
+--   32  category                           exact peak per catalogue category
+--   63  all five at once (full grain)      arbitrary filter combinations
+--
+-- Mask 63 is what makes the dashboard's filters compose. Under a combined
+-- filter, sum(active_ms) and sum(ending_concurrency) stay exact; max(minute_peak)
+-- becomes an upper bound rather than the true peak, because the true peak for an
+-- arbitrary dimension combination was never computed at that grouping. The
+-- dashboard says so on its face rather than quietly rounding up.
+--
+-- Deliberately absent: audio_language, subtitle_language, player_version. All
+-- three change mid-session — measured on the extract at 8,796 / 2,980 / 1,600
+-- sessions respectively — so pinning a session to one value would move active
+-- time between slices and break the conservation check in
+-- concurrency/sql/090_validate_serving.sql. solution/policy.yaml:94-109 excludes
+-- them from serving masks for the same reason. country IS carried, even though
+-- the extract holds a single value ('india'), because an unseen day may not.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS {{db}}.serving_concurrency_minute
+(
+    minute_start        DateTime('UTC')
+        COMMENT 'Left edge of a 1-minute bucket, half-open [minute_start, +60s). Bucketed on absolute time, so an interval crossing midnight lands in both days without a clipping step',
+
+    dim_mask            UInt16
+        COMMENT 'platform=1, country=2, content_id=4, video_type=8, app_version=16, category=32. Materialized: 0, 1, 4, 8, 16, 32, 63',
+
+    content_id          Int64,
+    platform            LowCardinality(String) COMMENT 'Empty string when not selected by dim_mask',
+    country             LowCardinality(String) COMMENT 'Empty string when not selected by dim_mask',
+    app_version         LowCardinality(String) COMMENT 'Empty string when not selected by dim_mask',
+    video_type          LowCardinality(String) COMMENT 'Empty string when not selected by dim_mask',
+    category            LowCardinality(String) COMMENT 'Empty string when not selected by dim_mask',
+
+    minute_peak         UInt32
+        COMMENT 'NOT ADDITIVE. Exact max instantaneous concurrency in the minute at this row dim_mask only',
+
+    ending_concurrency  UInt32
+        COMMENT 'Additive across rows of one dim_mask at one minute_start',
+
+    active_ms           UInt64
+        COMMENT 'Additive everywhere. active_ms/60000 is the exact time-weighted average concurrency',
+
+    sessions_active     UInt32 COMMENT 'Distinct sessions contributing any active time to this minute',
+    sessions_started    UInt32 COMMENT 'Active intervals opening inside this minute',
+    sessions_ended      UInt32 COMMENT 'Active intervals closing inside this minute'
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMMDD(minute_start)
+ORDER BY (dim_mask, minute_start, platform, video_type, category, app_version, content_id)
+COMMENT 'Corrected concurrency at 1-minute grain, published on a lag so the late-arrival window has closed. Rebuilt a whole UTC day at a time via REPLACE PARTITION. Read via serving_minute_current.';
+
+
+-- Staging table for the atomic day swap. Structure and engine must match
+-- serving_concurrency_minute exactly or REPLACE PARTITION refuses the move.
+-- Kept empty between rebuilds; the driver drops its partition after each swap.
+CREATE TABLE IF NOT EXISTS {{db}}.serving_concurrency_minute_staging
+    AS {{db}}.serving_concurrency_minute
+ENGINE = MergeTree
+PARTITION BY toYYYYMMDD(minute_start)
+ORDER BY (dim_mask, minute_start, platform, video_type, category, app_version, content_id)
+COMMENT 'Scratch space for one day of serving_concurrency_minute, swapped in with REPLACE PARTITION. Never read directly.';
+
+
+-- -----------------------------------------------------------------------------
+-- serving_watermark — what each layer has published through
+--
+-- Both the freshness tiles and the "why is this layer behind" question read this
+-- rather than inferring staleness from max(bucket_start). Those differ, and the
+-- difference is the point: a live layer with no traffic has an old max bucket
+-- but a current watermark, and conflating the two would show a healthy pipeline
+-- as broken.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS {{db}}.serving_watermark
+(
+    layer           LowCardinality(String) COMMENT 'live | minute | intervals',
+    watermark_ts    DateTime64(3, 'UTC')   COMMENT 'Events at or before this instant are reflected in the layer',
+    built_at        DateTime64(3, 'UTC')   COMMENT 'Wall-clock completion of the rollup that set this watermark',
+    policy_version  LowCardinality(String),
+    intervals_in    UInt64 COMMENT 'session_intervals rows read',
+    rows_out        UInt64 COMMENT 'serving rows written',
+    build_ms        UInt64 COMMENT 'Rollup duration; the build-latency series on the observability dashboard',
+    version         UInt64 COMMENT 'Milliseconds since epoch; higher wins'
+)
+ENGINE = ReplacingMergeTree(version)
+ORDER BY layer
+COMMENT 'One row per serving layer recording how current it is. Read with FINAL.';
+
+
+-- Append-only history of the same rows, so the observability dashboard can plot
+-- build duration over time. A ReplacingMergeTree keyed on layer cannot answer
+-- that — it keeps exactly one row per layer by design.
+CREATE TABLE IF NOT EXISTS {{db}}.serving_watermark_history
+(
+    layer           LowCardinality(String),
+    watermark_ts    DateTime64(3, 'UTC'),
+    built_at        DateTime64(3, 'UTC'),
+    policy_version  LowCardinality(String),
+    intervals_in    UInt64,
+    rows_out        UInt64,
+    build_ms        UInt64
+)
+ENGINE = MergeTree
+PARTITION BY toYYYYMM(built_at)
+ORDER BY (layer, built_at)
+TTL toDateTime(built_at) + INTERVAL 30 DAY
+COMMENT 'Every rollup run, for the build-latency and throughput series.';
+
+
+-- -----------------------------------------------------------------------------
+-- Reader views. The only objects a dashboard tile should name.
+--
+-- They exist so that FINAL, the mask convention and the content_dict join are
+-- written once here instead of being restated — and eventually mis-stated — in
+-- every tile. dictGet rather than a JOIN because content_dict is already
+-- resident and COMPLEX_KEY_HASHED, so enrichment costs a hash lookup per row
+-- instead of a join build.
+-- -----------------------------------------------------------------------------
+
+-- Ungrouped live totals. The exact peak series, and the source of "concurrent now".
+CREATE OR REPLACE VIEW {{db}}.serving_live_total AS
+SELECT
+    bucket_start,
+    bucket_peak,
+    ending_concurrency,
+    active_ms,
+    -- Exact time-weighted average concurrency across the 10-second bucket.
+    active_ms / 10000.0 AS avg_concurrency
+FROM {{db}}.serving_concurrency_live FINAL
+WHERE dim_mask = 0;
+
+-- Live per-title rows. ending_concurrency and active_ms may be summed across
+-- titles at one bucket_start; bucket_peak may not.
+CREATE OR REPLACE VIEW {{db}}.serving_live_content AS
+SELECT
+    bucket_start,
+    content_id,
+    dictGetOrDefault({{db}}.content_dict, 'title',      tuple(content_id), '')        AS title,
+    dictGetOrDefault({{db}}.content_dict, 'video_type', tuple(content_id), 'unknown') AS video_type,
+    dictGetOrDefault({{db}}.content_dict, 'category',   tuple(content_id), 'unknown') AS category,
+    bucket_peak,
+    ending_concurrency,
+    active_ms,
+    active_ms / 10000.0 AS avg_concurrency
+FROM {{db}}.serving_concurrency_live FINAL
+WHERE dim_mask = 4;
+
+-- The lagged analytical layer. No FINAL: the day-partition swap means every row
+-- present is already the current one.
+CREATE OR REPLACE VIEW {{db}}.serving_minute_current AS
+SELECT
+    minute_start,
+    dim_mask,
+    content_id,
+    if(content_id = 0, '', dictGetOrDefault({{db}}.content_dict, 'title', tuple(content_id), '')) AS title,
+    platform,
+    country,
+    app_version,
+    video_type,
+    category,
+    minute_peak,
+    ending_concurrency,
+    active_ms,
+    -- Exact time-weighted average concurrency across the minute. Safe to average
+    -- over a window and to sum across dimensions — unlike minute_peak.
+    active_ms / 60000.0 AS avg_concurrency,
+    sessions_active,
+    sessions_started,
+    sessions_ended
+FROM {{db}}.serving_concurrency_minute;
