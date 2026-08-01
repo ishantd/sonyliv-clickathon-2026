@@ -450,22 +450,34 @@ var verifyChecks = []struct {
                  - (SELECT count() FROM {db}.events_clean) AS collapsed_by_merges`,
 	},
 	{
-		// Keys whose copies disagree on more than the lineage columns. Zero is
-		// the normal state; the supplied extract has exactly one. A non-zero
-		// number here is not an error — it is the count of rows whose payload
-		// was chosen by the documented last-write-wins rule rather than being
-		// unambiguous, and it belongs in the run report either way.
-		"conflicting-payload keys (resolved by row_version, not silently dropped)",
+		// Keys whose copies disagree on more than the lineage columns — rows
+		// whose payload was chosen by the documented last-write-wins rule
+		// rather than being unambiguous. Not an error, but it belongs in the
+		// run report either way. The supplied extract has exactly one.
+		//
+		// Read from events_raw, NOT events_clean. This is the one check that
+		// cannot be done on the clean layer at all: ReplacingMergeTree deletes
+		// the losing copy, so once a merge has run the conflict is gone and the
+		// panel silently reports zero. Confirmed against the live service —
+		// events_clean returned 0 while events_raw still held both rows.
+		//
+		// That asymmetry is the whole reason the landing zone is not itself a
+		// ReplacingMergeTree; this panel is what makes the property visible
+		// rather than merely asserted.
+		"conflicting-payload keys in events_raw (resolved by row_version, not silently dropped)",
 		`SELECT
-             count()      AS conflicting_keys,
-             sum(copies)  AS rows_involved
+             count()                  AS conflicting_keys,
+             sum(copies)              AS rows_involved,
+             sum(distinct_payloads)   AS distinct_payloads
          FROM (
-             SELECT count() AS copies
-             FROM {db}.events_clean
-             GROUP BY session_key, event_ts, event_type, event
-             HAVING uniqExact((user_id, content_id, platform, app_version, country,
-                               audio_language, subtitle_language, player_version,
-                               session_start_ts)) > 1
+             SELECT
+                 count() AS copies,
+                 uniqExact((user_id, content_id, platform, app_version, country,
+                            audio_language, subtitle_language, player_version,
+                            session_start_epoch)) AS distinct_payloads
+             FROM {db}.events_raw
+             GROUP BY video_session_id, event_timestamp, event_type, event
+             HAVING distinct_payloads > 1
          )`,
 	},
 	{
