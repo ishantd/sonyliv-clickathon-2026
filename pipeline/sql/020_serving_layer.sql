@@ -254,11 +254,38 @@ ALTER TABLE sonyliv.session_live_state
 --   Today's answer happens to be unaffected (peak with all zero-net buckets
 --   removed is still 2,305), so this is a latent hole, not a present error.
 --
+-- ROLLUP MASK. A UInt16 BITMASK, matching solution/policy.yaml exactly:
+--
+--     platform = 1   country = 2   content_id = 4   video_type = 8
+--     default_masks: 0, 1, 2, 4, 8, 3, 5, 9, 12, 15
+--
+-- The four dimension columns are always present; the ones NOT in the mask carry
+-- a neutral value ('' or 0). Same shape as solution/sql/20_publish_boundaries.sql,
+-- which is the contract the rest of the repo already implements.
+--
+-- An earlier draft of this file invented its own scheme --
+-- Enum8('global'=0,'platform'=1,'country'=2,'video_type'=3) -- with no
+-- content_id and no combination masks. That was wrong twice: it dropped six of
+-- the ten documented masks, and its mask 3 meant video_type where policy.yaml's
+-- mask 3 means platform+country. The same integer meaning two different things
+-- in one repo is precisely the silent-wrong-answer shape this project exists to
+-- avoid. Do not re-derive a mask scheme; read policy.yaml.
+--
+-- Only masks 0 and 15 are strictly necessary for CORRECTNESS: mask 15 is the
+-- finest grain, and summing its deltas over the unwanted dimensions yields
+-- exactly the coarser mask's delta stream, whose running max is the correct
+-- peak. (Peaks do not sum; deltas do, and the peak comes from the deltas.) The
+-- other eight are materialized purely so a common query does not pay that
+-- summation. Cost at current scale is trivial -- 63,894 intervals x 2 boundaries
+-- x 10 masks = 1,277,880 rows before collapse.
+--
 -- SORT KEY = the summing key, so it must be exactly the grain at which two
--- boundaries are the same thing. (policy_version, clip_variant, mask_id,
--- dim_value, boundary_ts): every read fixes the first four and ranges on the
--- last. Two intervals opening at the same millisecond in the same slice sum to
--- opens = 2, which is correct and is what CollapsingMergeTree cannot express.
+-- boundaries are the same thing. Dimensions are ordered by their bit value so
+-- the key reads the same way policy.yaml does. Within any one mask the unused
+-- dimensions are constant, so they cost nothing and the key behaves as
+-- (mask, used dimensions, boundary_ts). Two intervals opening at the same
+-- millisecond in the same slice sum to opens = 2, which is correct and is what
+-- CollapsingMergeTree cannot express.
 --
 -- No built_at / no ingest metadata column. Any column here that is neither in
 -- the sort key nor in the summed list keeps an arbitrary first-row value on
@@ -276,20 +303,14 @@ CREATE TABLE IF NOT EXISTS sonyliv.concurrency_deltas
     policy_version  LowCardinality(String),
     clip_variant    Enum8('unclipped' = 1, 'clipped' = 2),
 
-    -- Rollup masks are enumerated, not free-form, so a typo is a parse error
-    -- rather than a silently empty slice.
-    --
-    -- content_id is deliberately NOT a mask. Projected at 1B events/day the two
-    -- content-grained masks alone are 136.8M rows/day and SummingMergeTree
-    -- collapses them ~1.00x at any density -- they cost full price and buy
-    -- nothing. Serve content drill-downs from the interval table with a bounded
-    -- time filter instead (see the note at the end of this file).
-    mask_id         Enum8('global' = 0, 'platform' = 1, 'country' = 2, 'video_type' = 3),
+    rollup_mask     UInt16 COMMENT 'Bitmask: platform=1, country=2, content_id=4, video_type=8. See solution/policy.yaml rollup_mask_bits',
 
-    -- '' for the global mask. Kept as a readable value rather than a hash:
-    -- at these cardinalities LowCardinality(String) is smaller than a UInt64
-    -- hash, and it joins back without a lookup table.
-    dim_value       LowCardinality(String),
+    -- Neutral value when the corresponding bit is NOT set in rollup_mask, so a
+    -- row is self-describing and a mask filter alone never mixes grains.
+    platform        LowCardinality(String) COMMENT 'Empty string when bit 1 is clear',
+    country         LowCardinality(String) COMMENT 'Empty string when bit 2 is clear',
+    content_id      Int64                  COMMENT '0 when bit 4 is clear. Int64: the catalogue contains a negative id',
+    video_type      LowCardinality(String) COMMENT 'Empty string when bit 8 is clear',
 
     boundary_ts     DateTime64(3, 'UTC') COMMENT 'Half-open [start, end): a start at T raises the curve at T, an end at T lowers it at T',
 
@@ -297,7 +318,7 @@ CREATE TABLE IF NOT EXISTS sonyliv.concurrency_deltas
     closes          UInt32
 )
 ENGINE = SummingMergeTree((opens, closes))
-ORDER BY (policy_version, clip_variant, mask_id, dim_value, boundary_ts)
+ORDER BY (policy_version, clip_variant, rollup_mask, platform, country, content_id, video_type, boundary_ts)
 SETTINGS
     non_replicated_deduplication_window = 1000,
     replicated_deduplication_window = 1000,
@@ -330,8 +351,11 @@ CREATE TABLE IF NOT EXISTS sonyliv.concurrency_bucket_net
 (
     policy_version  LowCardinality(String),
     clip_variant    Enum8('unclipped' = 1, 'clipped' = 2),
-    mask_id         Enum8('global' = 0, 'platform' = 1, 'country' = 2, 'video_type' = 3),
-    dim_value       LowCardinality(String),
+    rollup_mask     UInt16,
+    platform        LowCardinality(String),
+    country         LowCardinality(String),
+    content_id      Int64,
+    video_type      LowCardinality(String),
     bucket          DateTime('UTC') COMMENT 'toStartOfMinute(boundary_ts)',
 
     opens           UInt64,
@@ -339,7 +363,7 @@ CREATE TABLE IF NOT EXISTS sonyliv.concurrency_bucket_net
     n_deltas        UInt64 COMMENT 'Correctness column: keeps a net-zero bucket from being deleted on merge'
 )
 ENGINE = SummingMergeTree((opens, closes, n_deltas))
-ORDER BY (policy_version, clip_variant, mask_id, dim_value, bucket)
+ORDER BY (policy_version, clip_variant, rollup_mask, platform, country, content_id, video_type, bucket)
 SETTINGS
     non_replicated_deduplication_window = 1000,
     replicated_deduplication_window = 1000,
@@ -370,14 +394,17 @@ AS
 SELECT
     policy_version,
     clip_variant,
-    mask_id,
-    dim_value,
+    rollup_mask,
+    platform,
+    country,
+    content_id,
+    video_type,
     toStartOfMinute(boundary_ts) AS bucket,
     sum(opens)                   AS opens,
     sum(closes)                  AS closes,
     count()                      AS n_deltas
 FROM sonyliv.concurrency_deltas
-GROUP BY policy_version, clip_variant, mask_id, dim_value, bucket;
+GROUP BY policy_version, clip_variant, rollup_mask, platform, country, content_id, video_type, bucket;
 
 
 -- ----------------------------------------------------------------------------
@@ -406,8 +433,11 @@ CREATE TABLE IF NOT EXISTS sonyliv.concurrency_day_anchor
 (
     policy_version  LowCardinality(String),
     clip_variant    Enum8('unclipped' = 1, 'clipped' = 2),
-    mask_id         Enum8('global' = 0, 'platform' = 1, 'country' = 2, 'video_type' = 3),
-    dim_value       LowCardinality(String),
+    rollup_mask     UInt16,
+    platform        LowCardinality(String),
+    country         LowCardinality(String),
+    content_id      Int64,
+    video_type      LowCardinality(String),
     day             Date,
 
     level           Int64 COMMENT 'Absolute concurrency at 00:00:00.000 UTC on `day`. Signed: a negative value is a bug, not a state.',
@@ -415,7 +445,7 @@ CREATE TABLE IF NOT EXISTS sonyliv.concurrency_day_anchor
     computed_at     DateTime64(3, 'UTC') DEFAULT now64(3, 'UTC')
 )
 ENGINE = ReplacingMergeTree(computed_at)
-ORDER BY (policy_version, clip_variant, mask_id, dim_value, day)
+ORDER BY (policy_version, clip_variant, rollup_mask, platform, country, content_id, video_type, day)
 SETTINGS
     non_replicated_deduplication_window = 1000,
     replicated_deduplication_window = 1000,
@@ -489,26 +519,34 @@ ALTER TABLE sonyliv.pipeline_watermark
 -- and equal to the next window's base, a candidate there. Counted twice, never
 -- missed.
 --
+--   WITH slice AS (rollup_mask = {m:UInt16}
+--                  AND platform = {pf:String} AND country = {co:String}
+--                  AND content_id = {ci:Int64} AND video_type = {vt:String})
+--   -- pass '' / 0 for every dimension whose bit is clear in {m}
 --   WITH base AS (
 --     SELECT (SELECT level FROM sonyliv.concurrency_day_anchor FINAL
---              WHERE ... AND day = toDate({w0:DateTime64(3)}))
+--              WHERE <slice> AND day = toDate({w0:DateTime64(3)}))
 --            + sum(opens) - sum(closes) AS lvl
 --     FROM sonyliv.concurrency_bucket_net
---     WHERE policy_version = {p:String} AND clip_variant = {v:String}
---       AND mask_id = {m:String} AND dim_value = {d:String}
+--     WHERE policy_version = {p:String} AND clip_variant = {v:String} AND <slice>
 --       AND bucket >= toStartOfDay({w0:DateTime64(3)}) AND bucket < {w0:DateTime64(3)}
 --   ),
 --   inner_prefix AS (
 --     SELECT sum(sum(opens) - sum(closes))
 --              OVER (ORDER BY boundary_ts ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS pfx
 --     FROM sonyliv.concurrency_deltas
---     WHERE policy_version = {p:String} AND clip_variant = {v:String}
---       AND mask_id = {m:String} AND dim_value = {d:String}
+--     WHERE policy_version = {p:String} AND clip_variant = {v:String} AND <slice>
 --       AND boundary_ts >= {w0:DateTime64(3)} AND boundary_ts < {w1:DateTime64(3)}
 --     GROUP BY boundary_ts
 --   )
 --   SELECT greatest((SELECT lvl FROM base),
 --                   (SELECT lvl FROM base) + (SELECT max(pfx) FROM inner_prefix)) AS peak;
+--
+-- An UNMATERIALIZED mask (6, 7, 10, 11, 13, 14) is served by the same query
+-- against rollup_mask = 15 with the unwanted dimensions dropped from the
+-- GROUP BY -- the summed deltas are exactly that mask's delta stream, and the
+-- running max over them is its exact peak. Never sum the coarser masks'
+-- *peaks*; those genuinely do not compose.
 --
 -- Two things in that query are load-bearing and look optional:
 --   * GROUP BY boundary_ts BEFORE the running sum is what implements stop-wins
@@ -517,8 +555,17 @@ ALTER TABLE sonyliv.pipeline_watermark
 --   * greatest(base, ...) covers a window whose every transition is negative:
 --     it peaks at W0, where there is no transition to be the argmax.
 --
--- CONTENT DRILL-DOWN. Not a mask (see concurrency_deltas). Served from
--- active_intervals with a bounded time filter -- but note that active_intervals
+-- CONTENT DRILL-DOWN is now served by masks 4, 5, 12 and 15, per policy.yaml --
+-- it is no longer pushed onto the interval table. The scale caveat still stands
+-- and should be revisited before running at 1B events/day: the content-grained
+-- masks are projected at 136.8M rows/day and SummingMergeTree collapses them
+-- ~1.00x at any density, so they cost full price. At the current 1.3M rows the
+-- trade is not worth making, and correctness against an unknown benchmark query
+-- set beats a storage optimisation. If it ever has to give, drop masks 5 and 12
+-- (derivable from 15) before dropping 4.
+--
+-- The paragraph below applies to any query that does reach for the interval
+-- table directly -- note that active_intervals
 -- is ORDER BY (policy_version, clip_variant, session_key, start_time), so
 -- start_time sits behind session_key's 10,866 distinct values and a range
 -- predicate prunes nothing. Measured analogue on events_clean: a 1-hour

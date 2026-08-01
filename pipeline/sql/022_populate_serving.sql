@@ -114,8 +114,7 @@ SELECT throwIf(
 -- Statement A: boundaries -> concurrency_deltas.
 --
 -- Each interval emits +1 at start_time and +1 close at end_time, replicated
--- across the four rollup masks. 31,947 intervals x 2 boundaries x 4 masks =
--- 255,576 rows before the Summing key collapses coincident boundaries.
+-- across all ten rollup masks from solution/policy.yaml.
 --
 -- GROUP BY here rather than leaving it to the merge, for two reasons: the merge
 -- is eventual and may never run, and pre-aggregating means the inserted block
@@ -128,18 +127,24 @@ SELECT throwIf(
 -- re-adding a boundary per ping. Omitted here because a frozen extract has no
 -- unsealed intervals: evaluation_as_of already sits past the last event.
 --
--- content_id is deliberately not a mask. Projected at 1B events/day the two
--- content-grained masks are 136.8M rows/day collapsing ~1.00x -- full price,
--- no benefit. Content drill-downs come from the interval table instead.
+-- THE TEN MASKS ARE WRITTEN OUT LITERALLY, not computed from the bits. They
+-- have to be diffable by eye against solution/policy.yaml `default_masks`,
+-- because getting one wrong produces a populated, plausible, wrong slice rather
+-- than an error. Bits: platform=1, country=2, content_id=4, video_type=8.
+-- 63,894 intervals x 2 boundaries x 10 masks = 1,277,880 rows before collapse.
 -- ----------------------------------------------------------------------------
 
 INSERT INTO sonyliv.concurrency_deltas
-    (policy_version, clip_variant, mask_id, dim_value, boundary_ts, opens, closes)
+    (policy_version, clip_variant, rollup_mask, platform, country, content_id,
+     video_type, boundary_ts, opens, closes)
 SELECT
     policy_version,
     clip_variant,
-    CAST(mask_name AS Enum8('global' = 0, 'platform' = 1, 'country' = 2, 'video_type' = 3)) AS mask_id,
-    CAST(dim_raw AS LowCardinality(String)) AS dim_value,
+    rollup_mask,
+    CAST(platform_v   AS LowCardinality(String)) AS platform,
+    CAST(country_v    AS LowCardinality(String)) AS country,
+    content_id_v                                 AS content_id,
+    CAST(video_type_v AS LowCardinality(String)) AS video_type,
     boundary_ts,
     sum(is_open)  AS opens,
     sum(is_close) AS closes
@@ -148,8 +153,11 @@ FROM
     SELECT
         i.policy_version AS policy_version,
         i.clip_variant   AS clip_variant,
-        m.1              AS mask_name,
-        m.2              AS dim_raw,
+        m.1              AS rollup_mask,
+        m.2              AS platform_v,
+        m.3              AS country_v,
+        m.4              AS content_id_v,
+        m.5              AS video_type_v,
         b.1              AS boundary_ts,
         b.2              AS is_open,
         b.3              AS is_close
@@ -161,18 +169,26 @@ FROM
             (i.start_time, toUInt32(1), toUInt32(0)),
             (i.end_time,   toUInt32(0), toUInt32(1))
         ] AS b
-    -- Four masks. The global mask carries '' rather than a sentinel string, so
-    -- a mistyped dimension filter returns nothing instead of the global total.
+    -- (mask, platform, country, content_id, video_type). A dimension whose bit
+    -- is clear carries the neutral value, so a mask filter alone can never mix
+    -- grains and a mistyped dimension returns nothing rather than the total.
     ARRAY JOIN
         [
-            ('global',     ''),
-            ('platform',   toString(i.platform)),
-            ('country',    toString(i.country)),
-            ('video_type', toString(i.video_type))
+            -- mask  platform                country                content_id           video_type
+            (toUInt16( 0), '',                    '',                    toInt64(0),          ''                     ),
+            (toUInt16( 1), toString(i.platform),  '',                    toInt64(0),          ''                     ),
+            (toUInt16( 2), '',                    toString(i.country),   toInt64(0),          ''                     ),
+            (toUInt16( 4), '',                    '',                    i.content_id,        ''                     ),
+            (toUInt16( 8), '',                    '',                    toInt64(0),          toString(i.video_type) ),
+            (toUInt16( 3), toString(i.platform),  toString(i.country),   toInt64(0),          ''                     ),
+            (toUInt16( 5), toString(i.platform),  '',                    i.content_id,        ''                     ),
+            (toUInt16( 9), toString(i.platform),  '',                    toInt64(0),          toString(i.video_type) ),
+            (toUInt16(12), '',                    '',                    i.content_id,        toString(i.video_type) ),
+            (toUInt16(15), toString(i.platform),  toString(i.country),   i.content_id,        toString(i.video_type) )
         ] AS m
     WHERE i.policy_version = {policy_version:String}
 )
-GROUP BY policy_version, clip_variant, mask_id, dim_value, boundary_ts
+GROUP BY policy_version, clip_variant, rollup_mask, platform, country, content_id, video_type, boundary_ts
 SETTINGS
     -- Belt, not braces. This catches an exact single-block replay; it does NOT
     -- make a large INSERT SELECT idempotent, because the token is suffixed per
@@ -201,17 +217,19 @@ SETTINGS
 -- ----------------------------------------------------------------------------
 
 INSERT INTO sonyliv.concurrency_day_anchor
-    (policy_version, clip_variant, mask_id, dim_value, day, level)
+    (policy_version, clip_variant, rollup_mask, platform, country, content_id, video_type, day, level)
 WITH
     daily AS
     (
         SELECT
-            policy_version, clip_variant, mask_id, dim_value,
+            policy_version, clip_variant, rollup_mask,
+            platform, country, content_id, video_type,
             toDate(bucket)                     AS day,
             toInt64(sum(opens) - sum(closes))  AS net
         FROM sonyliv.concurrency_bucket_net
         WHERE policy_version = {policy_version:String}
-        GROUP BY policy_version, clip_variant, mask_id, dim_value, day
+        GROUP BY policy_version, clip_variant, rollup_mask,
+                 platform, country, content_id, video_type, day
     ),
     span AS
     (
@@ -227,21 +245,29 @@ WITH
         SELECT
             d.policy_version AS policy_version,
             d.clip_variant   AS clip_variant,
-            d.mask_id        AS mask_id,
-            d.dim_value      AS dim_value,
+            d.rollup_mask    AS rollup_mask,
+            d.platform       AS platform,
+            d.country        AS country,
+            d.content_id     AS content_id,
+            d.video_type     AS video_type,
             (SELECT first_day FROM span) + toIntervalDay(offset) AS day
-        FROM (SELECT DISTINCT policy_version, clip_variant, mask_id, dim_value FROM daily) AS d
+        FROM (SELECT DISTINCT policy_version, clip_variant, rollup_mask,
+                     platform, country, content_id, video_type FROM daily) AS d
         ARRAY JOIN range((SELECT n_days FROM span)) AS offset
     )
 SELECT
     s.policy_version,
     s.clip_variant,
-    s.mask_id,
-    s.dim_value,
+    s.rollup_mask,
+    s.platform,
+    s.country,
+    s.content_id,
+    s.video_type,
     s.day,
     sum(ifNull(dl.net, 0)) OVER
     (
-        PARTITION BY s.policy_version, s.clip_variant, s.mask_id, s.dim_value
+        PARTITION BY s.policy_version, s.clip_variant, s.rollup_mask,
+                     s.platform, s.country, s.content_id, s.video_type
         ORDER BY s.day
         ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
     ) AS level
@@ -249,8 +275,11 @@ FROM spine AS s
 LEFT JOIN daily AS dl
     ON  s.policy_version = dl.policy_version
     AND s.clip_variant   = dl.clip_variant
-    AND s.mask_id        = dl.mask_id
-    AND s.dim_value      = dl.dim_value
+    AND s.rollup_mask    = dl.rollup_mask
+    AND s.platform       = dl.platform
+    AND s.country        = dl.country
+    AND s.content_id     = dl.content_id
+    AND s.video_type     = dl.video_type
     AND s.day            = dl.day
 SETTINGS
     join_algorithm = 'full_sorting_merge',
@@ -410,7 +439,7 @@ FROM
 (
     SELECT clip_variant, sum(opens) AS delta_opens
     FROM sonyliv.concurrency_deltas
-    WHERE policy_version = {policy_version:String} AND mask_id = 'global'
+    WHERE policy_version = {policy_version:String} AND rollup_mask = 0
     GROUP BY clip_variant
 ) AS d
 INNER JOIN
@@ -429,7 +458,7 @@ SELECT throwIf(
         (
             SELECT clip_variant, sum(opens) AS delta_opens
             FROM sonyliv.concurrency_deltas
-            WHERE policy_version = {policy_version:String} AND mask_id = 'global'
+            WHERE policy_version = {policy_version:String} AND rollup_mask = 0
             GROUP BY clip_variant
         ) AS d
         INNER JOIN
@@ -465,7 +494,7 @@ FROM
         SELECT clip_variant, boundary_ts AS ts,
                toInt64(sum(opens)) - toInt64(sum(closes)) AS net
         FROM sonyliv.concurrency_deltas
-        WHERE policy_version = {policy_version:String} AND mask_id = 'global'
+        WHERE policy_version = {policy_version:String} AND rollup_mask = 0
         GROUP BY clip_variant, ts
     )
 )
@@ -490,13 +519,13 @@ WITH
             ifNull((SELECT level FROM sonyliv.concurrency_day_anchor FINAL
                     WHERE policy_version = {policy_version:String}
                       AND clip_variant = {clip_variant:String}
-                      AND mask_id = 'global' AND dim_value = ''
+                      AND rollup_mask = 0 AND platform = '' AND country = '' AND content_id = 0 AND video_type = ''
                       AND day = toDate(w0)), 0)
             + ifNull((SELECT toInt64(sum(opens)) - toInt64(sum(closes))
                       FROM sonyliv.concurrency_bucket_net
                       WHERE policy_version = {policy_version:String}
                         AND clip_variant = {clip_variant:String}
-                        AND mask_id = 'global' AND dim_value = ''
+                        AND rollup_mask = 0 AND platform = '' AND country = '' AND content_id = 0 AND video_type = ''
                         AND bucket >= toStartOfDay(w0) AND bucket < w0), 0) AS lvl
     ),
     inner_prefix AS
@@ -508,7 +537,7 @@ WITH
         FROM sonyliv.concurrency_deltas
         WHERE policy_version = {policy_version:String}
           AND clip_variant = {clip_variant:String}
-          AND mask_id = 'global' AND dim_value = ''
+          AND rollup_mask = 0 AND platform = '' AND country = '' AND content_id = 0 AND video_type = ''
           AND boundary_ts >= w0 AND boundary_ts < w1
         GROUP BY boundary_ts
     )
