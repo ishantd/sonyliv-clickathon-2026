@@ -1,0 +1,129 @@
+{
+  "name": "SonyLIV — Pipeline & query observability",
+  "tags": [
+    "sonyliv",
+    "pipeline",
+    "observability"
+  ],
+  "tiles": [
+    {
+      "name": "Stream ingest lag p50 / p95 / p99 (seconds)",
+      "x": 0,
+      "y": 0,
+      "w": 12,
+      "h": 8,
+      "config": {
+        "displayType": "line",
+        "configType": "sql",
+        "connectionId": "__CONNECTION_ID__",
+        "fillNulls": false,
+        "sqlTemplate": "SELECT $__timeInterval(_ingested_at) AS ts, round(quantile(0.50)(dateDiff('millisecond', event_timestamp, _ingested_at)) / 1000.0, 3) AS p50, round(quantile(0.95)(dateDiff('millisecond', event_timestamp, _ingested_at)) / 1000.0, 3) AS p95, round(quantile(0.99)(dateDiff('millisecond', event_timestamp, _ingested_at)) / 1000.0, 3) AS p99 FROM __DATABASE__.events_raw WHERE $__timeFilter(_ingested_at) AND _source_file NOT LIKE 'csv:%' GROUP BY ts ORDER BY ts"
+      }
+    },
+    {
+      "name": "Rows ingested per second, by producer",
+      "x": 12,
+      "y": 0,
+      "w": 12,
+      "h": 8,
+      "config": {
+        "displayType": "line",
+        "configType": "sql",
+        "connectionId": "__CONNECTION_ID__",
+        "fillNulls": false,
+        "sqlTemplate": "SELECT $__timeInterval(_ingested_at) AS ts, _source_file AS producer, round(count() / $__interval_s, 1) AS rows_per_second FROM __DATABASE__.events_raw WHERE $__timeFilter(_ingested_at) GROUP BY ts, producer ORDER BY ts"
+      }
+    },
+    {
+      "name": "Read volume per serving query — this replica",
+      "x": 0,
+      "y": 8,
+      "w": 24,
+      "h": 9,
+      "config": {
+        "displayType": "table",
+        "configType": "sql",
+        "connectionId": "__CONNECTION_ID__",
+        "sqlTemplate": "SELECT normalized_query_hash AS query_hash, any(substring(query, 1, 110)) AS query_sample, count() AS runs, formatReadableQuantity(round(avg(read_rows))) AS avg_read_rows, formatReadableSize(round(avg(read_bytes))) AS avg_read_bytes, round(quantile(0.50)(query_duration_ms)) AS p50_ms, round(quantile(0.99)(query_duration_ms)) AS p99_ms, formatReadableSize(max(memory_usage)) AS peak_memory FROM system.query_log WHERE type = 'QueryFinish' AND $__timeFilter(event_time) AND positionCaseInsensitive(query, 'serving_') > 0 AND positionCaseInsensitive(query, 'system.query_log') = 0 GROUP BY query_hash ORDER BY avg(read_rows) DESC LIMIT 30"
+      }
+    },
+    {
+      "name": "Rollup build duration by layer (ms)",
+      "x": 0,
+      "y": 17,
+      "w": 12,
+      "h": 8,
+      "config": {
+        "displayType": "line",
+        "configType": "sql",
+        "connectionId": "__CONNECTION_ID__",
+        "fillNulls": false,
+        "sqlTemplate": "SELECT $__timeInterval(built_at) AS ts, layer, max(build_ms) AS build_ms FROM __DATABASE__.serving_watermark_history WHERE $__timeFilter(built_at) GROUP BY ts, layer ORDER BY ts"
+      }
+    },
+    {
+      "name": "Recompute backlog — sessions dirtied per minute",
+      "x": 12,
+      "y": 17,
+      "w": 12,
+      "h": 8,
+      "config": {
+        "displayType": "line",
+        "configType": "sql",
+        "connectionId": "__CONNECTION_ID__",
+        "fillNulls": false,
+        "sqlTemplate": "SELECT $__timeInterval(last_ingested_at) AS ts, uniqExact(session_key) AS sessions_dirtied FROM __DATABASE__.dirty_sessions WHERE $__timeFilter(last_ingested_at) GROUP BY ts ORDER BY ts"
+      }
+    },
+    {
+      "name": "Layer freshness",
+      "x": 0,
+      "y": 25,
+      "w": 8,
+      "h": 6,
+      "config": {
+        "displayType": "table",
+        "configType": "sql",
+        "connectionId": "__CONNECTION_ID__",
+        "sqlTemplate": "SELECT layer, watermark_ts, dateDiff('second', watermark_ts, now64(3)) AS behind_seconds, rows_out, build_ms, policy_version FROM __DATABASE__.serving_watermark FINAL ORDER BY layer"
+      }
+    },
+    {
+      "name": "Dedup collapse — landed vs resolved",
+      "x": 8,
+      "y": 25,
+      "w": 8,
+      "h": 6,
+      "config": {
+        "displayType": "table",
+        "configType": "sql",
+        "connectionId": "__CONNECTION_ID__",
+        "sqlTemplate": "SELECT (SELECT count() FROM __DATABASE__.events_raw) AS landed_rows, (SELECT count() FROM __DATABASE__.events_dedup) AS resolved_rows, landed_rows - resolved_rows AS collapsed, round(100.0 * (landed_rows - resolved_rows) / nullIf(landed_rows, 0), 4) AS collapsed_pct, (SELECT count() FROM __DATABASE__.ingest_rejects) AS rejected_rows"
+      }
+    },
+    {
+      "name": "Storage and compression — this replica",
+      "x": 16,
+      "y": 25,
+      "w": 8,
+      "h": 6,
+      "config": {
+        "displayType": "table",
+        "configType": "sql",
+        "connectionId": "__CONNECTION_ID__",
+        "sqlTemplate": "SELECT table, formatReadableQuantity(sum(rows)) AS rows, formatReadableSize(sum(bytes_on_disk)) AS on_disk, round(sum(data_uncompressed_bytes) / nullIf(sum(data_compressed_bytes), 0), 1) AS compression_x, count() AS active_parts FROM system.parts WHERE database = '__DATABASE__' AND active GROUP BY table ORDER BY sum(bytes_on_disk) DESC"
+      }
+    },
+    {
+      "name": "What this dashboard is evidence for",
+      "x": 0,
+      "y": 31,
+      "w": 24,
+      "h": 7,
+      "config": {
+        "displayType": "markdown",
+        "markdown": "### Observing the pipeline, not the product\n\n`docs/DECISIONS.md` D3 committed ClickStack to observing this pipeline's own behaviour — ingest lag, rollup latency, serving query cost — rather than only visualising the answer. These are those tiles.\n\n**Read volume per serving query** is the one to look at first. Query read volume is a judged criterion, so this tile is the artifact rather than a decoration: it reports `read_rows`, `read_bytes` and duration per normalised query against anything touching a `serving_` table, straight from `system.query_log`. The point the serving design is making is visible here — a dashboard tile reads a few thousand pre-aggregated rows instead of scanning 905,558 events, because the expensive per-session work happened once in `session_intervals` and every rollup below it is a pure function of that table.\n\n**These two tiles read the answering replica only.** On ClickHouse Cloud `system.query_log` and `system.parts` are per-node, so a cluster-wide reading needs `clusterAllReplicas(...)` — which `sonyliv_svc` cannot use today: it already holds `SELECT` on both tables but not `READ ON REMOTE`. Rather than ship two tiles that render as empty boxes, they query the local node and say so in their titles. To widen them, run `GRANT READ ON REMOTE TO sonyliv_svc` as an admin and wrap both table references in `clusterAllReplicas(default, ...)`. Until then, read the numbers as a lower bound on cluster-wide work, not as the total.\n\n**Ingest lag** is `_ingested_at - event_timestamp`, which is why `events_raw` keeps both. The bulk CSV backfill is excluded (`_source_file NOT LIKE 'csv:%'`): loading a week-old extract shows a lag of days, which is arithmetically true and tells you nothing about the stream, while flattening every real value into the axis. A rising p99 with a flat p50 is late arrivals, not a slow writer — and late arrivals are expected here, not an incident: 7.0% of rows in the extract arrive out of order. Do not alert on their existence, only on the watermark falling behind.\n\n**Recompute backlog** counts sessions marked by the insert-time materialized view on `events_raw`. It is what makes the live loop proportional to what changed rather than to the size of history: a pass recomputes only dirtied sessions, so a ten-second cadence stays viable as the history grows."
+      }
+    }
+  ]
+}

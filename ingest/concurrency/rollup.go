@@ -49,6 +49,11 @@ const DefaultHeartbeatTimeoutMS = 120_000
 // scan meaningfully.
 const LiveLookbackDays = 3
 
+// LiveBucket is the live layer's grain. It MUST match the bucket_ms literal in
+// sql/020_rollup_live.sql; Live() aligns its window to this, and a mismatch would
+// silently produce partial buckets again.
+const LiveBucket = 10 * time.Second
+
 // Runner executes the pipeline against one ClickHouse service.
 type Runner struct {
 	Client             *chx.Client
@@ -222,12 +227,21 @@ func (r *Runner) Intervals(ctx context.Context, sessionKeys []uint64, evaluation
 // Best-effort by construction: it publishes without waiting for the late-arrival
 // window to close, so a late event can change an already-published bucket. That
 // is the trade a "right now" number makes, and the dashboard says so.
+//
+// windowEnd is aligned DOWN to a bucket boundary, and that is load-bearing. The
+// rollup clips intervals to the window, so a window ending mid-bucket clips every
+// still-open session at that instant — which makes the trailing bucket's
+// ending_concurrency 0 and its active_ms a fraction of the truth. Measured before
+// this alignment: a live layer at ~600 concurrent reported "concurrent now" as 0,
+// every pass, because the newest bucket was always the broken one. Aligning down
+// costs up to one bucket of freshness and removes the artefact entirely.
 func (r *Runner) Live(ctx context.Context, windowStart, windowEnd time.Time) (Stats, error) {
 	started := time.Now()
 	sql, err := r.statement("020_rollup_live.sql")
 	if err != nil {
 		return Stats{}, err
 	}
+	windowEnd = windowEnd.Truncate(LiveBucket)
 
 	before, err := r.scalarUint64(ctx, fmt.Sprintf("SELECT count() FROM %s.serving_concurrency_live", r.Client.Database))
 	if err != nil {
