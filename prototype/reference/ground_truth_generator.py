@@ -1,3 +1,21 @@
+# =====================================================================
+# SUPERSEDED by ground_truth_generator.sql — DO NOT RUN.
+#
+# Kept only as the record of how the original ground truth was derived.
+# It cannot execute as written:
+#   * chdb is not installed
+#   * line 2 hardcodes a scratchpad path from a different machine
+#   * raw_events.parquet is not in the repo
+#
+# It is also SEMANTICALLY STALE: it has no playback axis, so it counts
+# paused-in-foreground sessions as active. That contradicts
+# solution/policy.yaml and pipeline/sql/011_build_active_intervals.sql.
+# See docs/DECISIONS.md D1 (revised 2026-08-02).
+#
+# ground_truth_generator.sql reproduces this file's exact output when its
+# pause exclusion is disabled (2970 @ 10:56, 2965 @ 10:59, 2940 @ 10:58),
+# which is how the replacement was verified.
+# =====================================================================
 import chdb, time, os
 os.chdir('/private/tmp/claude-501/-Users-dahiya-Work-sonyliv/fb664459-f44c-49cf-b6a2-4edcd8a9c7a7/scratchpad')
 from chdb import session
