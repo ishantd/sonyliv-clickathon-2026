@@ -13,17 +13,31 @@ CONTENT_CSV ?= $(DATA)/ch-hackathon-content-data.csv
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | column -t -s ':'
 
+## web: rebuild the Next.js dashboard and stage its static export for embedding
+##      Requires Node >= 20.9 (Next 16). The export is committed, so `make build`
+##      works with no Node toolchain — run this only after changing dashboard/.
+web:
+	cd ../dashboard && npm ci --silent && npm run build
+	rm -rf internal/mock/web && mkdir -p internal/mock/web
+	cp -R ../dashboard/out/. internal/mock/web/
+	@echo "staged $$(du -sh internal/mock/web | cut -f1) into internal/mock/web"
+
 ## build: compile all binaries into ./bin
 build:
 	@mkdir -p $(BIN)
 	go build -o $(BIN)/sonyliv-ingest ./cmd/sonyliv-ingest
 	go build -o $(BIN)/sonyliv-gen    ./cmd/sonyliv-gen
 	go build -o $(BIN)/sonyliv-api    ./cmd/sonyliv-api
-	@echo "built $(BIN)/sonyliv-ingest, $(BIN)/sonyliv-gen and $(BIN)/sonyliv-api"
+	go build -o $(BIN)/sonyliv-mock   ./cmd/sonyliv-mock
+	@echo "built sonyliv-ingest, sonyliv-gen, sonyliv-api and sonyliv-mock in $(BIN)"
 
 ## api: run the ingest API against the configured service (needs SONYLIV_API_TOKEN)
 api: build
 	$(BIN)/sonyliv-api --listen 127.0.0.1:8080
+
+## mock: serve the load simulator and the event stepper on localhost:8088
+mock: build
+	$(BIN)/sonyliv-mock
 
 ## test: run unit tests
 test:
@@ -85,4 +99,4 @@ ch-down:
 clean:
 	rm -rf $(BIN)
 
-.PHONY: help build api test check doctor schema schema-print load verify demo loadtest ch-up ch-down clean
+.PHONY: help web build api mock test check doctor schema schema-print load verify demo loadtest ch-up ch-down clean
