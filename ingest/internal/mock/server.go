@@ -14,7 +14,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/sonyliv-clickathon/ingest/internal/chx"
+	"github.com/sonyliv-clickathon/ingest/internal/fleet"
 )
 
 // The `all:` prefix is REQUIRED, not stylistic. Next's static export contains
@@ -25,11 +28,12 @@ import (
 //go:embed all:web
 var webFS embed.FS
 
-// Server serves the two dashboards and their control API.
+// Server serves the dashboards and their control API.
 type Server struct {
 	client     *chx.Client
 	runner     *Runner
 	manual     *Manual
+	fleet      *fleet.Fleet
 	token      string
 	corsOrigin string
 	timeoutMS  int64
@@ -46,17 +50,41 @@ type Server struct {
 // output: 'export'. Empty in production, where the exported files are served from
 // this same binary and the API is same-origin.
 func NewServer(client *chx.Client, token, corsOrigin, selfURL string, timeoutMS int64) *Server {
-	return &Server{
+	runner := NewRunner(client, selfURL, token)
+	s := &Server{
 		client:     client,
-		runner:     NewRunner(client, selfURL, token),
+		runner:     runner,
 		manual:     NewManual(client, timeoutMS),
 		token:      token,
 		corsOrigin: corsOrigin,
 		timeoutMS:  timeoutMS,
 	}
+	// The fleet evaluates the same lease the stepper and the pipeline do. Passing
+	// timeoutMS rather than a constant is what keeps its graph comparable to
+	// ClickHouse's: a mismatch here would show up as a permanent gap between the two
+	// lines that has nothing to do with either implementation being wrong.
+	s.fleet = fleet.New(
+		&fleetSink{client: client, runner: runner, runID: uuid.New()},
+		time.Duration(timeoutMS)*time.Millisecond,
+		time.Now().UnixNano(),
+	)
+	return s
 }
 
+// Run drives the fleet until ctx is cancelled. Call it once, in a goroutine.
+//
+// Separate from Handler because the fleet keeps emitting events whether or not
+// anyone is looking at the dashboard — that is what makes it a simulator rather
+// than a UI.
+func (s *Server) Run(ctx context.Context) { s.fleet.Run(ctx) }
+
 // Handler builds the route table.
+// UseExternalAPI points "api"-sink load runs at a sonyliv-api endpoint rather
+// than at this process's own /api/events.
+func (s *Server) UseExternalAPI(url, token string, insecure bool) {
+	s.runner.UseExternalAPI(url, token, insecure)
+}
+
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
@@ -104,6 +132,16 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/manual/sessions", s.handleManualList)
 	api.HandleFunc("POST /api/manual/event", s.handleManualEvent)
 	api.HandleFunc("GET /api/manual/session/{vsid}", s.handleManualState)
+
+	// The fleet: a controllable population of autonomously ticking sessions.
+	api.HandleFunc("POST /api/fleet/sessions", s.handleFleetCreate)
+	api.HandleFunc("GET /api/fleet/sessions", s.handleFleetList)
+	api.HandleFunc("GET /api/fleet/sessions/{id}", s.handleFleetGet)
+	api.HandleFunc("POST /api/fleet/sessions/{id}/command", s.handleFleetCommand)
+	api.HandleFunc("POST /api/fleet/clear-ended", s.handleFleetClearEnded)
+	api.HandleFunc("GET /api/fleet/stats", s.handleFleetStats)
+	api.HandleFunc("GET /api/fleet/dimensions", s.handleFleetDimensions)
+	api.HandleFunc("GET /api/fleet/curve", s.handleFleetCurve)
 
 	mux.Handle("/api/", s.cors(s.auth(api)))
 	return mux

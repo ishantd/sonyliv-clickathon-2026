@@ -34,9 +34,36 @@ Group=sonyliv
 # through the deploy path. See README.md.
 EnvironmentFile=/etc/sonyliv/sonyliv.env
 
-# All configuration comes from the environment file so tuning listen address,
+# Configuration comes from the environment file so tuning the listen address,
 # batch size or worker count needs a `systemctl restart`, not a redeploy.
-ExecStart=/usr/local/bin/sonyliv-api
+#
+# SONYLIV_API_LISTEN is expanded by systemd from the EnvironmentFile above. The
+# binary's own default is 127.0.0.1:8080; set 0.0.0.0:8080 in the env file to
+# serve the VPC.
+#
+# 0.0.0.0 is the right default on this box, not a compromise: the instance has no
+# public IPv4 (IMDS returns 404 for public-ipv4) and a single ENI, so the bind
+# address cannot expose anything the security group does not already allow --
+# while pinning a specific private IP would break the unit the moment the
+# instance is replaced, and can silently miss a path if traffic arrives on
+# another interface. The network boundary belongs in the security group.
+#
+# TLS: SONYLIV_API_TLS_CERT/KEY point at a self-signed pair. That is adequate
+# here -- the bearer token is the authentication, TLS is transport encryption
+# only, and the host is reachable solely over a private path. Clients need -k.
+# SONYLIV_API_TLS_ARGS carries the whole flag pair, or is empty for plaintext.
+# Unquoted $VAR (not ${VAR}) so systemd word-splits it and an empty value
+# disappears entirely -- with ${VAR} an empty value becomes an empty argument and
+# --tls-cert would swallow the next flag.
+ExecStart=/usr/local/bin/sonyliv-api --listen ${SONYLIV_API_LISTEN} $SONYLIV_API_TLS_ARGS $SONYLIV_API_AUTH_ARGS
+
+# Port 443 is privileged and this runs as an unprivileged user, so grant exactly
+# the one capability that allows binding it -- not root. CapabilityBoundingSet
+# caps what the process could ever hold; AmbientCapabilities is what it actually
+# gets. Both are needed, and both survive NoNewPrivileges because systemd applies
+# the ambient set at exec.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 Restart=always
 RestartSec=2

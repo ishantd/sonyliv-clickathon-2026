@@ -2,6 +2,13 @@ import type {
   Action,
   ContentInfo,
   CurveResponse,
+  FleetCommand,
+  FleetCurveResponse,
+  FleetDimensions,
+  FleetFilter,
+  FleetSession,
+  FleetSpec,
+  FleetStatsResponse,
   SessionState,
   SimParams,
   SimStatus,
@@ -21,6 +28,46 @@ import type {
  */
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
+/**
+ * Bearer token for /api/, kept in localStorage.
+ *
+ * The Go service refuses to bind a non-loopback address unless --token is set,
+ * because /api/ writes to ClickHouse. That guard is the reason this exists: on
+ * loopback the token is empty and every request works without one, but the moment
+ * the service is exposed the browser has to present it, and a static export has
+ * nowhere to bake a secret at build time. So it is entered once and stored.
+ *
+ * localStorage rather than a cookie: there is no server to set one, the value is
+ * only ever read by this origin's own fetches, and it survives a reload — which
+ * matters because changing the token reloads the page to re-run every SWR fetch.
+ */
+const TOKEN_KEY = "sonyliv-mock.token";
+
+/** Dispatched when the service answers 401, so the UI can prompt for a token. */
+export const UNAUTHORIZED_EVENT = "sonyliv-mock:unauthorized";
+
+export function getToken(): string {
+  // Guarded: this module is imported during the static export's prerender, where
+  // window does not exist.
+  if (typeof window === "undefined") return "";
+  try {
+    return window.localStorage.getItem(TOKEN_KEY) ?? "";
+  } catch {
+    // Private-mode Safari throws on localStorage access rather than returning null.
+    return "";
+  }
+}
+
+export function setToken(token: string): void {
+  if (typeof window === "undefined") return;
+  try {
+    if (token) window.localStorage.setItem(TOKEN_KEY, token);
+    else window.localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* nothing useful to do; the header simply will not be sent */
+  }
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,
@@ -32,13 +79,30 @@ export class ApiError extends Error {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = getToken();
   const res = await fetch(`${API_BASE}${path}`, {
     ...init,
     headers: {
       ...(init?.body ? { "Content-Type": "application/json" } : {}),
+      // Only sent when set, so loopback use with no --token is unchanged.
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...init?.headers,
     },
   });
+
+  // Surface 401 before parsing: the body is Go's plain-text "unauthorized", which
+  // would otherwise fail JSON parsing and be reported as "not the API".
+  if (res.status === 401) {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT));
+    }
+    throw new ApiError(
+      token
+        ? "401 unauthorized: the stored token was rejected."
+        : "401 unauthorized: this service requires a token.",
+      401,
+    );
+  }
 
   const text = await res.text();
   let body: unknown;
@@ -116,7 +180,59 @@ export const api = {
 
   manualState: (session: string) =>
     request<SessionState>(`/api/manual/session/${session}`),
+
+  fleetCreate: (spec: FleetSpec) =>
+    request<{ created: number; sessions: FleetSession[] }>(
+      "/api/fleet/sessions",
+      { method: "POST", body: JSON.stringify(spec) },
+    ),
+
+  fleetCommand: (id: string, command: FleetCommand) =>
+    request<{ session: FleetSession; wrote: number }>(
+      `/api/fleet/sessions/${id}/command`,
+      { method: "POST", body: JSON.stringify({ command }) },
+    ),
+
+  fleetClearEnded: () =>
+    request<{ removed: number }>("/api/fleet/clear-ended", { method: "POST" }),
+
+  fleetStats: () => request<FleetStatsResponse>("/api/fleet/stats"),
+
+  fleetDimensions: () => request<FleetDimensions>("/api/fleet/dimensions"),
+
+  fleetCurve: (filter: FleetFilter, minutes: number) =>
+    request<FleetCurveResponse>(
+      `/api/fleet/curve?minutes=${minutes}&${filterQuery(filter)}`,
+    ),
 };
+
+/**
+ * Serialises a filter for the query string.
+ *
+ * One helper for both the listing and the curve, deliberately. The two must narrow
+ * to the same set of sessions or the graph's comparison would be answering a
+ * different question from the table beside it — and the Go side derives the
+ * ClickHouse scope from the same filter, so a mismatch here would split all three.
+ *
+ * Keys are emitted in a fixed order so equal filters produce equal strings, which
+ * is what lets SWR dedupe and cache by path.
+ */
+export function filterQuery(filter: FleetFilter): string {
+  const keys: (keyof FleetFilter)[] = [
+    "content_id",
+    "video_type",
+    "platform",
+    "app_version",
+    "country",
+    "phase",
+  ];
+  const qs = new URLSearchParams();
+  for (const k of keys) {
+    const v = filter[k];
+    if (v) qs.set(k, v);
+  }
+  return qs.toString();
+}
 
 // ---------------------------------------------------------------------------
 // Formatting. Centralised so the same number never renders two ways.

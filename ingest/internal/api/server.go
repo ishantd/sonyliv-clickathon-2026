@@ -51,8 +51,15 @@ type Rejecter interface {
 
 // Options configures the server.
 type Options struct {
-	// Token is the required bearer credential. Server refuses to start if empty.
+	// Token is the bearer credential. Server refuses to start if empty unless
+	// AllowUnauthenticated is set.
 	Token string
+	// AllowUnauthenticated permits an empty Token, serving open writes. Only
+	// defensible where the network is the boundary -- a host with no public
+	// address, reachable over a private path. It is a flag rather than an
+	// inferred default so the decision is visible wherever the service is
+	// launched.
+	AllowUnauthenticated bool
 
 	// BatchSize caps rows per chunk. It also keeps _batch_row_seq inside the 20
 	// bits row_version allots it — see chunk() in ingest.go.
@@ -113,12 +120,16 @@ type Server struct {
 // Fail-closed at construction: this endpoint writes into the landing zone of a
 // production ClickHouse, so "the operator forgot the flag" must not be a way to
 // end up serving unauthenticated writes.
-var ErrNoToken = errors.New("api: auth token is required (set SONYLIV_API_TOKEN)")
+var ErrNoToken = errors.New("api: auth token is required (set SONYLIV_API_TOKEN), or pass --allow-unauthenticated")
 
 // NewServer validates options and wires the handler.
 func NewServer(w Writer, r Rejecter, ping func(context.Context) error, opts Options) (*Server, error) {
 	opts.withDefaults()
-	if opts.Token == "" {
+	// Still fail-closed on an EMPTY token: forgetting the credential must not be
+	// a way to end up serving open writes. AllowUnauthenticated is the deliberate
+	// opt-out, so an open endpoint is always something someone chose in the unit
+	// file rather than something that happened.
+	if opts.Token == "" && !opts.AllowUnauthenticated {
 		return nil, ErrNoToken
 	}
 	if opts.MaxRows < opts.BatchSize {
@@ -166,6 +177,11 @@ func (s *Server) Handler() http.Handler {
 
 // auth compares the bearer token in constant time.
 func (s *Server) auth(next http.Handler) http.Handler {
+	if s.opts.Token == "" {
+		// Open by explicit request. No wrapper at all rather than a per-request
+		// branch, so the fast path carries no cost and the intent is legible.
+		return next
+	}
 	want := []byte("Bearer " + s.opts.Token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		got := []byte(r.Header.Get("Authorization"))

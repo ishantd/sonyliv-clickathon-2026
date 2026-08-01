@@ -122,12 +122,39 @@ type Runner struct {
 	// endpoint when Params.Sink is "api".
 	selfURL string
 	token   string
+
+	// When set, "api" runs POST to this full endpoint URL instead of back into
+	// this process. That is what makes the dashboard a client of sonyliv-api
+	// rather than a second, parallel writer into events_raw.
+	apiURL      string
+	apiToken    string
+	apiInsecure bool
 }
 
 // NewRunner builds an idle runner. selfURL is this server's own base URL, used
 // only by the "api" sink.
 func NewRunner(client *chx.Client, selfURL, token string) *Runner {
 	return &Runner{client: client, selfURL: selfURL, token: token}
+}
+
+// UseExternalAPI directs "api" runs at a sonyliv-api endpoint. url must be the
+// full path, e.g. https://127.0.0.1/v1/events. insecure skips certificate
+// verification, for a self-signed loopback pair.
+func (r *Runner) UseExternalAPI(url, token string, insecure bool) {
+	r.apiURL, r.apiToken, r.apiInsecure = url, token, insecure
+}
+
+// apiEndpoint reports the configured sonyliv-api endpoint, if any.
+//
+// Shared with the fleet so both producers resolve "where do events go" from one
+// place. Without this the fleet could be writing directly to ClickHouse while a
+// load run goes through the ingest service, and the two populations would be
+// subject to different validation.
+func (r *Runner) apiEndpoint() (url, token string, insecure, ok bool) {
+	if r.apiURL == "" {
+		return "", "", false, false
+	}
+	return r.apiURL, r.apiToken, r.apiInsecure, true
 }
 
 // orDefault resolves an optional rate: nil takes the measured value, an explicit
@@ -218,10 +245,19 @@ func (r *Runner) Start(ctx context.Context, p Params) (*Status, error) {
 		AsyncInsert: p.Async,
 	})
 	if p.Sink == "api" {
-		if r.selfURL == "" {
-			return nil, errors.New(`sink "api" needs the server's own URL; start with --listen on a resolvable address`)
+		// Prefer an explicitly configured sonyliv-api endpoint. Falling back to
+		// the mock's own /api/events keeps the simulator usable standalone, but
+		// when --api-url is set the generated load goes through the real ingest
+		// service -- so it is subject to the same validation, dedup token and
+		// audit rows as any external producer, and shows up in its /v1/stats.
+		switch {
+		case r.apiURL != "":
+			dest = NewAPISink(r.apiURL, r.apiToken, r.apiInsecure)
+		case r.selfURL != "":
+			dest = NewAPISink(r.selfURL+"/api/events", r.token, false)
+		default:
+			return nil, errors.New(`sink "api" needs --api-url, or --listen on a resolvable address`)
 		}
-		dest = NewAPISink(r.selfURL, r.token)
 	}
 
 	runCtx, cancel := context.WithCancel(context.Background())

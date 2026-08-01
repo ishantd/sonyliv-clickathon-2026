@@ -39,24 +39,29 @@ const (
 
 // actionEvents maps a button to the (event_type, event) pairs it emits.
 //
+// The pairs themselves live in internal/model, because internal/fleet emits the
+// same wire strings and a second literal here would be a silent classifier
+// disagreement — the kind that shows up as a concurrency figure a few percent
+// wrong with nothing in the logs to explain it.
+//
 // ActionRateChange emits BOTH halves at the SAME millisecond, because that is
 // what the real client does — 365 of 380 speed pairs in the supplied extract share
 // a timestamp. It is here so the dashboard can demonstrate why classing them as
 // pause/resume is unsafe: under stop-wins precedence the pair would collapse to
 // STOPPED with no resume left to reopen it, which cost 41.9 hours of active time
 // across 174 sessions when measured.
-var actionEvents = map[Action][][2]string{
-	ActionStart:      {{"VideoSessionStart", "VideoSessionStart"}},
-	ActionPlay:       {{"VideoPlay", "Play"}},
-	ActionPause:      {{"VideoHeartbeat", "pause"}},
-	ActionResume:     {{"VideoHeartbeat", "resume"}},
-	ActionBackground: {{"AppBackgrounded", "AppBackgrounded"}},
-	ActionForeground: {{"AppForegrounded", "AppForegrounded"}},
-	ActionHeartbeat:  {{"VideoHeartbeat", "network-activity"}},
-	ActionError:      {{"VideoError", "VideoError"}},
-	ActionEnd:        {{"VideoSessionEnd", "VideoSessionEnd"}},
-	ActionAdBreak:    {{"VideoHeartbeat", "AdPause"}},
-	ActionRateChange: {{"VideoHeartbeat", "speed-pause"}, {"VideoHeartbeat", "speed-resume"}},
+var actionEvents = map[Action][]model.EventPair{
+	ActionStart:      {model.PairSessionStart},
+	ActionPlay:       {model.PairPlay},
+	ActionPause:      {model.PairPause},
+	ActionResume:     {model.PairResume},
+	ActionBackground: {model.PairBackground},
+	ActionForeground: {model.PairForeground},
+	ActionHeartbeat:  {model.PairHeartbeat},
+	ActionError:      {model.PairError},
+	ActionEnd:        {model.PairSessionEnd},
+	ActionAdBreak:    {model.PairAdPause},
+	ActionRateChange: {model.PairSpeedPause, model.PairSpeedResume},
 }
 
 // ManualSession is one hand-driven session and its event-time cursor.
@@ -195,8 +200,8 @@ func (m *Manual) Send(ctx context.Context, vsid string, action Action, advance t
 			UserID:         snapshot.UserID,
 			ContentID:      snapshot.ContentID,
 
-			EventType:      p[0],
-			Event:          p[1],
+			EventType:      p.Type,
+			Event:          p.Event,
 			EventTimestamp: stamp,
 			// Every event of a session carries the same session_start_epoch;
 			// events_raw relies on it being constant per session for its

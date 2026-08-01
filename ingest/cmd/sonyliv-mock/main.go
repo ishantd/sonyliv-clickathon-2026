@@ -46,6 +46,20 @@ func run() error {
 	listen := fs.String("listen", "127.0.0.1:8088", "address to serve on")
 	token := fs.String("token", os.Getenv("MOCK_TOKEN"), "bearer token gating /api/ (empty = no auth; only safe on loopback)")
 	envPath := fs.String("env", "", "path to .env")
+	// Point load runs at the real ingest service. With this set, generated events
+	// go through sonyliv-api and are subject to its validation, dedup token and
+	// audit rows -- so the dashboard is a producer, not a second writer racing it
+	// into events_raw.
+	apiURL := fs.String("api-url", os.Getenv("SONYLIV_API_URL"),
+		"sonyliv-api ingest endpoint for sink=api, e.g. https://127.0.0.1/v1/events (empty = post to this process)")
+	apiToken := fs.String("api-token", os.Getenv("SONYLIV_API_TOKEN"), "bearer token for --api-url")
+	apiInsecure := fs.Bool("api-insecure", false, "skip TLS verification for --api-url (self-signed loopback)")
+	// Serve TLS when both are given. Needed where 443 is the only inbound port a
+	// security group allows, which is the case for a box in a private subnet.
+	allowOpen := fs.Bool("allow-unauthenticated", false,
+		"serve /api/ unauthenticated on a non-loopback address; only safe where the network is the boundary")
+	tlsCert := fs.String("tls-cert", os.Getenv("MOCK_TLS_CERT"), "PEM certificate; enables TLS when set with -tls-key")
+	tlsKey := fs.String("tls-key", os.Getenv("MOCK_TLS_KEY"), "PEM private key; enables TLS when set with -tls-cert")
 	timeoutMS := fs.Int64("heartbeat-timeout-ms", 120_000,
 		"liveness lease the stepper evaluates against; must match the pipeline's")
 	// Only needed for `next dev`, which serves the dashboard from :3000 while this
@@ -59,9 +73,10 @@ func run() error {
 		return err
 	}
 
-	if *token == "" && !isLoopback(*listen) {
+	if *token == "" && !isLoopback(*listen) && !*allowOpen {
 		return fmt.Errorf("--listen %s is not loopback and --token is empty: "+
-			"refusing to expose an unauthenticated write endpoint to ClickHouse", *listen)
+			"refusing to expose an unauthenticated write endpoint to ClickHouse "+
+			"(pass --allow-unauthenticated to override)", *listen)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -92,6 +107,16 @@ func run() error {
 	}
 
 	srv := mock.NewServer(client, *token, *corsOrigin, selfURL, *timeoutMS)
+	if *apiURL != "" {
+		srv.UseExternalAPI(*apiURL, *apiToken, *apiInsecure)
+	}
+	// Both or neither: a cert without a key would start plaintext on 443 and look
+	// like it worked.
+	useTLS := *tlsCert != "" || *tlsKey != ""
+	if useTLS && (*tlsCert == "" || *tlsKey == "") {
+		return errors.New("-tls-cert and -tls-key must be given together")
+	}
+
 	httpSrv := &http.Server{
 		Addr:              *listen,
 		Handler:           srv.Handler(),
@@ -102,8 +127,14 @@ func run() error {
 		// slow-loris protection.
 	}
 
+	// The fleet ticks whether or not a browser is attached, so it runs for the
+	// lifetime of the process rather than being driven by requests.
+	go srv.Run(ctx)
+
 	errCh := make(chan error, 1)
 	go func() {
+		fmt.Printf("session fleet   http://%s/fleet\n", *listen)
+		fmt.Printf("live graph      http://%s/live\n", *listen)
 		fmt.Printf("load simulator  http://%s/\n", *listen)
 		fmt.Printf("event stepper   http://%s/manual\n", *listen)
 		if *token == "" {
@@ -112,7 +143,13 @@ func run() error {
 		if *corsOrigin != "" {
 			fmt.Printf("CORS: allowing %s (for `next dev`)\n", *corsOrigin)
 		}
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var serveErr error
+		if useTLS {
+			serveErr = httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		} else {
+			serveErr = httpSrv.ListenAndServe()
+		}
+		if err := serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()

@@ -44,6 +44,15 @@ func run() error {
 	workers := fs.Int("workers", 4, "concurrent INSERT streams per request")
 	retries := fs.Int("retries", 3, "retry attempts per chunk (same dedup token)")
 	drain := fs.Duration("drain-timeout", api.DefaultDrainTimeout, "how long to let in-flight requests finish on SIGTERM")
+	// Serve TLS when both are given. Needed where the only inbound port a
+	// security group allows is 443, which is the common case on a box in a
+	// private subnet. A self-signed pair is fine there: the bearer token is the
+	// authentication, TLS is only transport encryption, and callers reach the
+	// host over a private path already. Clients then need --insecure/-k.
+	tlsCert := fs.String("tls-cert", "", "PEM certificate; enables TLS when set with -tls-key")
+	tlsKey := fs.String("tls-key", "", "PEM private key; enables TLS when set with -tls-cert")
+	allowOpen := fs.Bool("allow-unauthenticated", false,
+		"serve without a bearer token; only safe where the network is the boundary")
 	showVersion := fs.Bool("version", false, "print version and exit")
 
 	if err := fs.Parse(os.Args[1:]); err != nil {
@@ -62,7 +71,7 @@ func run() error {
 	// Read the credential before dialling: refusing to start is the right failure
 	// for a write endpoint, and it should happen before anything observable.
 	token := os.Getenv("SONYLIV_API_TOKEN")
-	if token == "" {
+	if token == "" && !*allowOpen {
 		return api.ErrNoToken
 	}
 
@@ -94,13 +103,14 @@ func run() error {
 	writer := api.NewLoaderWriter(client, audit, *workers, *retries, *batchSize)
 
 	srv, err := api.NewServer(writer, audit, client.Conn.Ping, api.Options{
-		Token:         token,
-		BatchSize:     *batchSize,
-		MaxRows:       *maxRows,
-		MaxBodyBytes:  *maxBody,
-		MaxInFlight:   *maxInflight,
-		SyncThreshold: *syncThresh,
-		Log:           log,
+		Token:                token,
+		AllowUnauthenticated: *allowOpen,
+		BatchSize:            *batchSize,
+		MaxRows:              *maxRows,
+		MaxBodyBytes:         *maxBody,
+		MaxInFlight:          *maxInflight,
+		SyncThreshold:        *syncThresh,
+		Log:                  log,
 	})
 	if err != nil {
 		return err
@@ -119,13 +129,26 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	// Both or neither: a cert without a key would otherwise start plaintext on
+	// 443 and look like it worked.
+	useTLS := *tlsCert != "" || *tlsKey != ""
+	if useTLS && (*tlsCert == "" || *tlsKey == "") {
+		return errors.New("-tls-cert and -tls-key must be given together")
+	}
+
 	errCh := make(chan error, 1)
 	go func() {
 		log.Info("listening",
-			"addr", *listen, "version", version, "clickhouse", serverVersion,
+			"addr", *listen, "tls", useTLS, "version", version, "clickhouse", serverVersion,
 			"database", cfg.Database, "run_id", writer.RunID().String(),
 			"batch_size", *batchSize, "sync_threshold", *syncThresh, "max_inflight", *maxInflight)
-		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		var err error
+		if useTLS {
+			err = httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			errCh <- err
 		}
 	}()

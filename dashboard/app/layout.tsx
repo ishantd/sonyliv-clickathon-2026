@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
 import { Nav } from "@/components/Nav";
+import { TokenGate } from "@/components/TokenGate";
 
 /*
   No next/font/google here, deliberately.
@@ -25,6 +26,7 @@ export default function RootLayout({
     <html lang="en" className="h-full">
       <body className="flex min-h-full flex-col">
         <Nav />
+        <TokenGate />
         <main className="mx-auto w-full max-w-[80rem] flex-1 px-5 pt-6 pb-16">
           {children}
         </main>

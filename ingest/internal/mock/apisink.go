@@ -3,6 +3,7 @@ package mock
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -46,12 +47,28 @@ type APISink struct {
 	started time.Time
 }
 
-// NewAPISink targets an ingest endpoint. token may be empty.
-func NewAPISink(baseURL, token string) *APISink {
+// NewAPISink posts to a full ingest endpoint URL. token may be empty.
+//
+// The URL is passed whole rather than assembled from a base, because the two
+// endpoints this targets have different paths: the mock's own /api/events, and
+// sonyliv-api's /v1/events. Appending a fixed path meant the sink could only
+// ever talk to itself.
+//
+// insecure skips certificate verification, which is needed when sonyliv-api is
+// reached over loopback HTTPS with a self-signed pair. It is scoped to this
+// client so nothing else inherits it.
+func NewAPISink(endpointURL, token string, insecure bool) *APISink {
+	transport := http.DefaultTransport
+	if insecure {
+		t := http.DefaultTransport.(*http.Transport).Clone()
+		t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // self-signed loopback, deliberate
+		transport = t
+	}
 	return &APISink{
-		url:   baseURL + "/api/events",
+		url:   endpointURL,
 		token: token,
 		client: &http.Client{
+			Transport: transport,
 			// Generous: wait_for_async_insert=1 means the endpoint blocks until
 			// ClickHouse has flushed the buffer, so a chunk's round trip includes a
 			// server-side flush.
