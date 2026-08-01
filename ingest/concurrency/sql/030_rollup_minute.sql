@@ -20,8 +20,25 @@
 -- each other on an overlapping window, so the duplicated core cannot drift
 -- silently.
 --
+-- THE LAG IS ENFORCED HERE, NOT BY SKIPPING DAYS
+-- ---------------------------------------------------------------------------
+-- publish_until is the newest instant this layer is willing to show, normally
+-- the ingest watermark minus the configured lag. Minutes at or after it are not
+-- written at all, so the layer never shows a number it will have to revise.
+--
+-- Applying the lag at MINUTE granularity is the whole point. Holding back a
+-- whole DAY cannot express it: the open day's midnight is always older than any
+-- cutoff, so a day-level test publishes today right up to the freshest minute —
+-- which is what the live layer is for, and makes "corrected, published on a lag"
+-- a false claim.
+--
+-- Clipping here also composes with the partition swap: REPLACE PARTITION
+-- replaces the whole day, so a minute past the cutoff is simply absent until a
+-- later rebuild includes it. Absent is correct for an unsettled minute.
+--
 -- Parameters (textual {{db}}; the rest bound server-side):
 --   {service_date:String}   the UTC day to rebuild, 'YYYY-MM-DD'
+--   {publish_until:String}  exclusive upper bound on minute_start
 --   {lookback_days:UInt16}  how far back to scan session_intervals partitions
 --
 -- No {version:UInt64}: the target is a plain MergeTree replaced by partition
@@ -33,7 +50,10 @@ INSERT INTO {{db}}.serving_concurrency_minute_staging
      minute_peak, ending_concurrency, active_ms, sessions_active, sessions_started, sessions_ended)
 WITH
     toDateTime64(concat({service_date:String}, ' 00:00:00.000'), 3, 'UTC') AS win_start,
-    win_start + toIntervalDay(1)                                          AS win_end,
+    -- The day, or the publish cutoff, whichever comes first. Taking the min here
+    -- rather than filtering later also narrows the interval scan itself.
+    least(win_start + toIntervalDay(1),
+          toDateTime64({publish_until:String}, 3, 'UTC'))                 AS win_end,
     60000 AS bucket_ms,
 
     bounds AS

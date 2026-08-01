@@ -54,6 +54,21 @@ const LiveLookbackDays = 3
 // silently produce partial buckets again.
 const LiveBucket = 10 * time.Second
 
+// MinuteBucket is the lagged layer's grain, and MUST match the bucket_ms literal
+// in sql/030_rollup_minute.sql. Minute() aligns its publish cutoff to this for the
+// same reason Live() aligns its window: a cutoff landing mid-bucket publishes a
+// partial bucket, which is worse than publishing nothing.
+const MinuteBucket = time.Minute
+
+// DefaultLag is how far behind the ingest watermark the minute layer publishes.
+//
+// It exists to let the late-arrival window close before a number is shown.
+// Measured on the extract: 7.0% of rows arrive out of order, and the generator's
+// own --late-max default is 2m, so five minutes clears both with room. It does not
+// clear the p99 within-session lateness of 2.3h — nothing short of hours does,
+// which is precisely why there is a best-effort live layer as well as this one.
+const DefaultLag = 5 * time.Minute
+
 // Runner executes the pipeline against one ClickHouse service.
 type Runner struct {
 	Client             *chx.Client
@@ -295,12 +310,13 @@ func (r *Runner) Live(ctx context.Context, windowStart, windowEnd time.Time) (St
 // An empty staging partition means the day genuinely has no concurrency, and the
 // destination partition is dropped instead of swapped: REPLACE PARTITION from a
 // source that has no such partition is not a reliable way to express deletion.
-func (r *Runner) Minute(ctx context.Context, day time.Time) (Stats, error) {
+func (r *Runner) Minute(ctx context.Context, day, publishUntil time.Time) (Stats, error) {
 	started := time.Now()
 	sql, err := r.statement("030_rollup_minute.sql")
 	if err != nil {
 		return Stats{}, err
 	}
+	publishUntil = publishUntil.Truncate(MinuteBucket)
 
 	date := day.UTC().Format("2006-01-02")
 	partID := day.UTC().Format("20060102") // matches PARTITION BY toYYYYMMDD(minute_start)
@@ -316,6 +332,7 @@ func (r *Runner) Minute(ctx context.Context, day time.Time) (Stats, error) {
 
 	if err := r.Client.Conn.Exec(ctx, sql,
 		chx.Named("service_date", date),
+		chx.Named("publish_until", tsParam(publishUntil)),
 		chx.Named("lookback_days", r.LookbackDays),
 	); err != nil {
 		return Stats{}, fmt.Errorf("rollup minute %s: %w", date, err)
@@ -345,11 +362,14 @@ func (r *Runner) Minute(ctx context.Context, day time.Time) (Stats, error) {
 		}
 	}
 
-	// The day is corrected as of the end of the day, or the ingest watermark if
-	// the day is still open. Claiming end-of-day for today would overstate it.
+	// The watermark is what this layer will actually SHOW, so it is the publish
+	// cutoff clipped to the day — not end-of-day and not the ingest watermark.
+	// Reporting either of those would claim freshness the layer deliberately does
+	// not have, and the freshness tile would then read near-zero while the newest
+	// visible minute was five minutes old.
 	watermark := day.UTC().Add(24 * time.Hour)
-	if now, err := r.Watermark(ctx); err == nil && now.Before(watermark) {
-		watermark = now
+	if publishUntil.Before(watermark) {
+		watermark = publishUntil
 	}
 
 	st := Stats{Layer: "minute", WatermarkTS: watermark, RowsOut: staged, Build: time.Since(started), PartitionsIn: 1}

@@ -30,10 +30,12 @@ func cmdConcurrency(ctx context.Context, args []string) error {
 		"UTC day for --layer minute, YYYY-MM-DD (default: every day with active time)")
 	liveWindow := fs.Duration("live-window", 30*time.Minute,
 		"how much trailing time the live layer rebuilds each pass")
-	lag := fs.Duration("lag", 5*time.Minute,
+	lag := fs.Duration("lag", concurrency.DefaultLag,
 		"how far behind the ingest watermark the minute layer publishes, so the late-arrival window has closed")
 	loop := fs.Duration("loop", 0,
 		"repeat every interval instead of running once (0 = run once)")
+	minuteEvery := fs.Duration("minute-every", time.Minute,
+		"in --loop mode, how often to also rebuild the minute layer (0 = never)")
 	full := fs.Bool("full", false,
 		"recompute every session rather than only those dirtied since the last pass")
 	timeoutMS := fs.Uint64("heartbeat-timeout-ms", concurrency.DefaultHeartbeatTimeoutMS,
@@ -66,6 +68,10 @@ func cmdConcurrency(ctx context.Context, args []string) error {
 	// lastPass seeds the dirty-session query. Zero on the first pass means "every
 	// session dirtied at any point", which is the correct cold start.
 	var lastPass time.Time
+	// The minute layer rebuilds whole day partitions, so it runs on its own slower
+	// cadence rather than every live tick. Zero value means "never run yet", so the
+	// first pass always builds it.
+	var lastMinute time.Time
 
 	pass := func() error {
 		switch *layer {
@@ -75,7 +81,19 @@ func cmdConcurrency(ctx context.Context, args []string) error {
 			if err := runIntervals(ctx, r, *full, *dirtyCap, &lastPass); err != nil {
 				return err
 			}
-			return runLive(ctx, r, *liveWindow)
+			if err := runLive(ctx, r, *liveWindow); err != nil {
+				return err
+			}
+			// Without this the minute layer never advances in a live loop, and its
+			// freshness tile reports "time since someone last ran it by hand" —
+			// which grows without bound and looks exactly like a stalled pipeline.
+			if *loop > 0 && *minuteEvery > 0 && time.Since(lastMinute) >= *minuteEvery {
+				if err := runMinute(ctx, r, "", *lag); err != nil {
+					return err
+				}
+				lastMinute = time.Now()
+			}
+			return nil
 		case "minute":
 			return runMinute(ctx, r, *day, *lag)
 		case "all":
@@ -170,16 +188,25 @@ func runLive(ctx context.Context, r *concurrency.Runner, window time.Duration) e
 
 // runMinute rebuilds either one named day or every day holding active time.
 //
-// The lag is applied by refusing to rebuild a day whose end has not yet cleared
-// the watermark minus lag. That is what makes this the correctable layer: it does
-// not publish a minute until late events for it have had time to arrive.
+// The lag is enforced as a publish cutoff at MINUTE granularity, not by skipping
+// days. An earlier version tested whether a whole day had cleared the watermark
+// minus lag, which cannot express this: the open day's midnight is always older
+// than any cutoff, so today was published right up to the freshest minute — making
+// "corrected, published on a lag" a claim the layer did not honour. The cutoff is
+// passed into the rollup, which simply does not write minutes at or after it.
 func runMinute(ctx context.Context, r *concurrency.Runner, day string, lag time.Duration) error {
+	watermark, err := r.Watermark(ctx)
+	if err != nil {
+		return fmt.Errorf("read ingest watermark: %w", err)
+	}
+	publishUntil := watermark.Add(-lag)
+
 	if day != "" {
 		d, err := time.ParseInLocation("2006-01-02", day, time.UTC)
 		if err != nil {
 			return fmt.Errorf("--day %q: %w", day, err)
 		}
-		st, err := r.Minute(ctx, d)
+		st, err := r.Minute(ctx, d, publishUntil)
 		if err != nil {
 			return err
 		}
@@ -196,32 +223,26 @@ func runMinute(ctx context.Context, r *concurrency.Runner, day string, lag time.
 		return nil
 	}
 
-	watermark, err := r.Watermark(ctx)
-	if err != nil {
-		return err
-	}
-	cutoff := watermark.Add(-lag)
-
-	var built, held int
+	var built, skipped int
 	for _, d := range days {
-		// A day is publishable once its own minutes are all older than the
-		// cutoff, OR when it is the current open day — the open day is rebuilt
-		// every pass by design, since that is where new data lands.
-		if d.After(cutoff) {
-			held++
+		// A day starting at or after the cutoff has nothing publishable in it yet.
+		// Rebuilding it would drop its partition, so leave it alone entirely.
+		if !d.Before(publishUntil) {
+			skipped++
 			continue
 		}
-		st, err := r.Minute(ctx, d)
+		st, err := r.Minute(ctx, d, publishUntil)
 		if err != nil {
 			return err
 		}
 		fmt.Printf("%s day=%s\n", st, d.Format("2006-01-02"))
 		built++
 	}
-	if held > 0 {
-		fmt.Printf("minute     %d day(s) held back: not yet %s behind the watermark %s\n",
-			held, lag, watermark.Format("2006-01-02 15:04:05"))
+	fmt.Printf("minute     %d day(s) rebuilt, published through %s (watermark %s less %s)\n",
+		built, publishUntil.Truncate(concurrency.MinuteBucket).Format("2006-01-02 15:04:05"),
+		watermark.Format("15:04:05"), lag)
+	if skipped > 0 {
+		fmt.Printf("minute     %d day(s) not yet publishable\n", skipped)
 	}
-	fmt.Printf("minute     %d day(s) rebuilt\n", built)
 	return nil
 }
