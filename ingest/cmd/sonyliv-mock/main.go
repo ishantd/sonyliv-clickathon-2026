@@ -143,7 +143,19 @@ func run() error {
 
 	// The fleet ticks whether or not a browser is attached, so it runs for the
 	// lifetime of the process rather than being driven by requests.
-	go srv.Run(ctx)
+	//
+	// Its completion is waited on at shutdown, not abandoned. This used to be a
+	// bare `go srv.Run(ctx)`, and the race was real rather than theoretical: on
+	// SIGTERM the run loop flushes its last events AND persists the sessions those
+	// events just changed, but main returned as soon as the HTTP server closed, so
+	// the process could exit between the two. The result was sessions whose
+	// VideoSessionEnd reached ClickHouse while fleet_sessions still said they were
+	// open — 1,470 of them, found as a constant gap on the comparison graph.
+	fleetDone := make(chan struct{})
+	go func() {
+		defer close(fleetDone)
+		srv.Run(ctx)
+	}()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -183,7 +195,22 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return httpSrv.Shutdown(shutdownCtx)
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		return err
+	}
+
+	// Wait for the fleet to write its last batch and persist the state that batch
+	// produced. Bounded, because a wedged ClickHouse must not stop the process from
+	// exiting — but a timeout here means the two are out of step, so say so rather
+	// than exiting quietly.
+	select {
+	case <-fleetDone:
+		fmt.Println("fleet flushed and persisted")
+	case <-time.After(30 * time.Second):
+		fmt.Fprintln(os.Stderr,
+			"warning: fleet did not finish flushing in 30s; persisted state may lag the events already written")
+	}
+	return nil
 }
 
 // isLoopback reports whether the listen address is bound to localhost only.

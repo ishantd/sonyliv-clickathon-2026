@@ -47,6 +47,14 @@ CREATE TABLE IF NOT EXISTS {{db}}.fleet_sessions
     -- becomes an unattended writer.
     expires_at        DateTime64(3, 'UTC'),
 
+    -- Who drives. Autonomous sessions pause, background and end themselves from
+    -- the measured rates; manual ones hold whatever an operator set. The two
+    -- schedule columns are the autonomous plan, unset for manual — persisted so a
+    -- restart resumes a session's own lifecycle instead of restarting it.
+    mode              LowCardinality(String) DEFAULT 'manual',
+    ends_at           DateTime64(3, 'UTC')   DEFAULT toDateTime64(0, 3, 'UTC'),
+    next_behaviour    DateTime64(3, 'UTC')   DEFAULT toDateTime64(0, 3, 'UTC'),
+
     -- The five terms of the activity predicate, stored individually because that
     -- is how the pipeline models them. foreground and playing are independent:
     -- collapsing them was measured at 38,958 disagreements across 98.8% of
@@ -91,3 +99,20 @@ ORDER BY video_session_id
 TTL toDateTime(updated_at) + INTERVAL 7 DAY
 SETTINGS index_granularity = 8192
 COMMENT 'Simulator bookkeeping: one replaceable row per interactive fleet session.';
+
+
+-- Migrations. CREATE TABLE IF NOT EXISTS is a no-op on a table that already
+-- exists, so columns added after the first deploy need their own statement —
+-- otherwise the schema step reports success while the new columns are missing,
+-- which is exactly how this was found.
+--
+-- ADD COLUMN IF NOT EXISTS is idempotent, so these stay in the file rather than
+-- becoming a one-off script somebody has to remember to run.
+ALTER TABLE {{db}}.fleet_sessions
+    ADD COLUMN IF NOT EXISTS mode LowCardinality(String) DEFAULT 'manual';
+
+ALTER TABLE {{db}}.fleet_sessions
+    ADD COLUMN IF NOT EXISTS ends_at DateTime64(3, 'UTC') DEFAULT toDateTime64(0, 3, 'UTC');
+
+ALTER TABLE {{db}}.fleet_sessions
+    ADD COLUMN IF NOT EXISTS next_behaviour DateTime64(3, 'UTC') DEFAULT toDateTime64(0, 3, 'UTC');

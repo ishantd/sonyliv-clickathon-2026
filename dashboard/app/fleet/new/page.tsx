@@ -14,7 +14,7 @@ import {
   StatGrid,
 } from "@/components/ui";
 import { api, fetcher, num } from "@/lib/api";
-import type { ContentInfo, FleetStatsResponse } from "@/lib/types";
+import type { ContentInfo, FleetMode, FleetStatsResponse } from "@/lib/types";
 
 /**
  * The session creator.
@@ -39,6 +39,7 @@ export default function CreateSessionsPage() {
   const [country, setCountry] = useState("india");
   const [cadence, setCadence] = useState(30);
   const [ttl, setTtl] = useState(60);
+  const [mode, setMode] = useState<FleetMode>("manual");
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<unknown>(null);
@@ -71,6 +72,7 @@ export default function CreateSessionsPage() {
         country,
         cadence_seconds: cadence,
         ttl_minutes: ttl,
+        mode,
       });
       router.push("/fleet/");
     } catch (e) {
@@ -88,6 +90,28 @@ export default function CreateSessionsPage() {
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_20rem]">
       <div className="grid gap-4">
+        <Panel title="who drives">
+          <div className="grid gap-2 sm:grid-cols-2">
+            <ModeCard
+              on={mode === "manual"}
+              onClick={() => setMode("manual")}
+              title="Manual"
+              body="Sessions hold whatever state you put them in and just heartbeat. You pause, background, silence and end them by hand."
+            />
+            <ModeCard
+              on={mode === "autonomous"}
+              onClick={() => setMode("autonomous")}
+              title="Autonomous"
+              body="Sessions pause, background and end themselves from the measured rates — 2.5 pauses and 1.35 backgrounds per session, 12-minute median life. A large batch of these is the load test."
+            />
+          </div>
+          <Caveat>
+            Either way every session stays individually addressable: an autonomous
+            session can still be opened, paused by hand, or silenced. The mode
+            decides who acts, not whether you can.
+          </Caveat>
+        </Panel>
+
         <Panel title="content">
           <ContentPicker
             onPick={setContent}
@@ -183,6 +207,7 @@ export default function CreateSessionsPage() {
           <div className="mt-3">
             <StatGrid>
               <Stat label="steady rate" value={`${eventsPerSec.toFixed(1)}/s`} />
+              <Stat label="mode" value={mode} tone={mode === "autonomous" ? "live" : "muted"} />
               <Stat label="events total" value={num(Math.round(eventsPerSec * ttl * 60))} />
               <Stat
                 label="live now"
@@ -235,6 +260,20 @@ export default function CreateSessionsPage() {
             <span className="text-ink">silence</span> or end any one of them.
           </li>
           <li>
+            {mode === "autonomous" ? (
+              <>
+                Each session then{" "}
+                <span className="text-ink">runs its own lifecycle</span> — pauses,
+                backgrounds and an ending drawn from the measured distributions.
+              </>
+            ) : (
+              <>
+                Each session then holds its state until{" "}
+                <span className="text-ink">you change it</span>.
+              </>
+            )}
+          </li>
+          <li>
             After <span className="text-ink">{ttl} minutes</span> each session
             ends itself with a real <code>VideoSessionEnd</code>, so a fleet left
             running stops on its own.
@@ -252,5 +291,46 @@ export default function CreateSessionsPage() {
         </Caveat>
       </Panel>
     </div>
+  );
+}
+
+/**
+ * The mode choice, as two cards rather than a select.
+ *
+ * It is the first decision on the page and it changes what every field below
+ * means, so it gets room to explain itself. A two-option dropdown labelled "mode"
+ * would hide the only thing a first-time reader needs to know.
+ */
+function ModeCard({
+  on,
+  onClick,
+  title,
+  body,
+}: {
+  on: boolean;
+  onClick: () => void;
+  title: string;
+  body: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={on}
+      className={`rounded border p-3 text-left transition-colors ${
+        on
+          ? "border-accent bg-accent-wash"
+          : "border-line bg-sunken hover:border-ink-3"
+      }`}
+    >
+      <span
+        className={`block text-[0.8125rem] font-semibold ${on ? "text-accent" : "text-ink"}`}
+      >
+        {title}
+      </span>
+      <span className="mt-1 block text-[0.6875rem] leading-snug text-ink-3">
+        {body}
+      </span>
+    </button>
   );
 }

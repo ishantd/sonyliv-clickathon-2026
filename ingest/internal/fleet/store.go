@@ -36,6 +36,9 @@ type Persisted struct {
 	StartEpoch     time.Time
 	CadenceSeconds int
 	ExpiresAt      time.Time
+	Mode           string
+	EndsAt         time.Time
+	NextBehaviour  time.Time
 
 	Started      bool
 	Ended        bool
@@ -88,6 +91,9 @@ func (r *Registry) snapshot() []Persisted {
 			StartEpoch:     s.StartEpoch,
 			CadenceSeconds: int(s.Cadence / time.Second),
 			ExpiresAt:      s.ExpiresAt,
+			Mode:           string(s.Mode),
+			EndsAt:         s.endsAt,
+			NextBehaviour:  s.nextBehaviour,
 			Started:        s.started, Ended: s.ended,
 			Foreground: s.foreground, Playing: s.playing, Heartbeating: s.heartbeating,
 			LastEligible: s.lastEligible,
@@ -161,10 +167,13 @@ func (r *Registry) Restore(rows []Persisted, now time.Time) []model.RawEvent {
 			ID: p.ID, UserID: p.UserID,
 			ContentID: p.ContentID, ContentTitle: p.ContentTitle, VideoType: p.VideoType,
 			Platform: p.Platform, AppVersion: p.AppVersion, Country: p.Country,
-			StartEpoch: p.StartEpoch,
-			Cadence:    time.Duration(p.CadenceSeconds) * time.Second,
-			ExpiresAt:  p.ExpiresAt,
-			started:    p.Started, ended: p.Ended,
+			StartEpoch:    p.StartEpoch,
+			Cadence:       time.Duration(p.CadenceSeconds) * time.Second,
+			ExpiresAt:     p.ExpiresAt,
+			Mode:          Mode(p.Mode),
+			endsAt:        p.EndsAt,
+			nextBehaviour: p.NextBehaviour,
+			started:       p.Started, ended: p.Ended,
 			foreground: p.Foreground, playing: p.Playing, heartbeating: p.Heartbeating,
 			lastEligible: p.LastEligible,
 			openSince:    p.OpenSince,
@@ -174,6 +183,9 @@ func (r *Registry) Restore(rows []Persisted, now time.Time) []model.RawEvent {
 		}
 		if s.Cadence <= 0 {
 			s.Cadence = DefaultCadence
+		}
+		if s.Mode == "" {
+			s.Mode = ModeManual
 		}
 
 		// Retire anything whose TTL elapsed while the process was down, at the

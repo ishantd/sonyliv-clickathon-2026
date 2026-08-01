@@ -121,22 +121,22 @@ func (c *Config) Defaults() {
 		c.TargetConcurrency = 500
 	}
 	if c.HeartbeatInterval <= 0 {
-		c.HeartbeatInterval = 40 * time.Second
+		c.HeartbeatInterval = MeasuredHeartbeatInterval
 	}
 	if c.SessionMedian <= 0 {
-		c.SessionMedian = 12 * time.Minute
+		c.SessionMedian = MeasuredSessionMedian
 	}
 	if c.SessionP99 <= 0 {
-		c.SessionP99 = 74 * time.Minute
+		c.SessionP99 = MeasuredSessionP99
 	}
 	if c.BackgroundEpisodes <= 0 {
-		c.BackgroundEpisodes = 1.35
+		c.BackgroundEpisodes = MeasuredBackgroundEpisodes
 	}
 	if c.PauseEpisodes <= 0 {
-		c.PauseEpisodes = 2.5
+		c.PauseEpisodes = MeasuredPauseEpisodes
 	}
 	if c.ErrorProbability <= 0 {
-		c.ErrorProbability = 0.027
+		c.ErrorProbability = MeasuredErrorProbability
 	}
 	if c.LateMax <= 0 {
 		c.LateMax = 2 * time.Minute
@@ -508,10 +508,34 @@ func (g *Generator) lognormalDuration() time.Duration {
 // of how people use a player, not of the scenario being simulated. The episode
 // *counts* are configurable; their durations are not.
 const (
-	bgWindowMedian    = 35100 * time.Millisecond
-	bgWindowP90       = 511600 * time.Millisecond
-	pauseWindowMedian = 20800 * time.Millisecond
-	pauseWindowP90    = 290700 * time.Millisecond
+	bgWindowMedian    = BgWindowMedian
+	bgWindowP90       = BgWindowP90
+	pauseWindowMedian = PauseWindowMedian
+	pauseWindowP90    = PauseWindowP90
+)
+
+// Measured behaviour, exported so a second producer can reuse the numbers rather
+// than copy them.
+//
+// internal/fleet's autonomous mode drives its own sessions from these. Two
+// producers with independently-typed magic numbers would drift, and the drift
+// would show up as two simulators that disagree about what "realistic" means —
+// with nothing in either one pointing at the cause.
+const (
+	MeasuredHeartbeatInterval  = 40 * time.Second
+	MeasuredSessionMedian      = 12 * time.Minute
+	MeasuredSessionP99         = 74 * time.Minute
+	MeasuredBackgroundEpisodes = 1.35
+	MeasuredPauseEpisodes      = 2.5
+	MeasuredErrorProbability   = 0.027
+
+	BgWindowMedian    = 35100 * time.Millisecond
+	BgWindowP90       = 511600 * time.Millisecond
+	PauseWindowMedian = 20800 * time.Millisecond
+	PauseWindowP90    = 290700 * time.Millisecond
+
+	// Z90 is the standard-normal quantile the lognormal draws are fitted at.
+	Z90 = z90
 )
 
 // backgroundWindow draws how long a session stays backgrounded.

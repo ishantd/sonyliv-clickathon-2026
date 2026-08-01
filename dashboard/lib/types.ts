@@ -140,6 +140,16 @@ export type FleetPhase =
   | "expired"
   | "ended";
 
+/**
+ * Who drives a session.
+ *
+ * `autonomous` sessions pause, background and end themselves from the rates
+ * measured on the supplied extract — a hundred thousand of them is the load test,
+ * on the same write path, with every session still individually addressable.
+ * `manual` sessions hold whatever state an operator put them in.
+ */
+export type FleetMode = "manual" | "autonomous";
+
 /** Operator actions, matching fleet.Command. `silence` writes no event at all. */
 export type FleetCommand =
   | "pause"
@@ -163,6 +173,7 @@ export interface FleetSession {
   cadence_seconds: number;
   /** When the simulator retires this session on its own, with a real session_end. */
   expires_at: string;
+  mode: FleetMode;
 
   phase: FleetPhase;
   active: boolean;
@@ -192,6 +203,8 @@ export interface FleetStats {
   expired: number;
   ended: number;
   events_sent: number;
+  autonomous: number;
+  manual: number;
 }
 
 /** Health of the write path. A fleet line with no ClickHouse line under it is
@@ -268,6 +281,7 @@ export interface FleetSpec {
   country: string;
   cadence_seconds: number;
   ttl_minutes: number;
+  mode: FleetMode;
 }
 
 export interface FleetDimensions {
@@ -285,6 +299,7 @@ export interface FleetFilter {
   app_version?: string;
   country?: string;
   phase?: string;
+  mode?: string;
 }
 
 /** The stepper's buttons, matching mock.Action on the Go side. */

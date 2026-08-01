@@ -82,6 +82,7 @@ func fleetFilter(r *http.Request) fleet.Filter {
 		AppVersion: q.Get("app_version"),
 		Country:    q.Get("country"),
 		Phase:      q.Get("phase"),
+		Mode:       q.Get("mode"),
 	}
 }
 
@@ -126,9 +127,15 @@ func (s *Server) handleFleetCreate(w http.ResponseWriter, r *http.Request) {
 	// dashboard's next curve poll scopes itself from that table.
 	s.fleet.PersistNow(r.Context())
 
+	// A sample, not the whole batch: 100,000 views is a multi-megabyte body that
+	// the create page throws away — it redirects to the listing, which pages.
+	sample := views
+	if len(sample) > 20 {
+		sample = sample[:20]
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"created":  len(views),
-		"sessions": views,
+		"sessions": sample,
 	})
 }
 
@@ -259,7 +266,17 @@ func (s *Server) handleFleetDimensions(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleFleetClearEnded(w http.ResponseWriter, r *http.Request) {
 	// ClearEnded, not RemoveEnded: the store needs tombstones, or the next restart
 	// resurrects every session the operator just cleared.
-	writeJSON(w, http.StatusOK, map[string]any{"removed": s.fleet.ClearEnded(r.Context())})
+	removed, err := s.fleet.ClearEnded(r.Context())
+	if err != nil {
+		// 207: the memory side succeeded and the durable side did not, and the
+		// count is still worth reporting. A bare 500 would suggest nothing happened.
+		writeJSON(w, http.StatusMultiStatus, map[string]any{
+			"removed": removed,
+			"error":   err.Error(),
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"removed": removed})
 }
 
 // handleFleetCurve returns both lines: what the fleet recorded, and what the

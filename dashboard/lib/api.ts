@@ -243,6 +243,7 @@ export function filterQuery(filter: FleetFilter): string {
     "app_version",
     "country",
     "phase",
+    "mode",
   ];
   const qs = new URLSearchParams();
   for (const k of keys) {

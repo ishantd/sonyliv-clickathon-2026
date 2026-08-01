@@ -112,6 +112,16 @@ type Session struct {
 	// events_raw forever — a demo quietly becoming an unattended writer.
 	ExpiresAt time.Time `json:"expires_at"`
 
+	// Mode decides who drives. Manual sessions hold whatever state an operator put
+	// them in; autonomous ones pause, background and end themselves from the
+	// measured rates. Both are still individually addressable — the mode changes
+	// who acts, not whether you can.
+	Mode Mode `json:"mode"`
+
+	// endsAt and nextBehaviour are the autonomous schedule. Unset for manual.
+	endsAt        time.Time
+	nextBehaviour time.Time
+
 	started      bool
 	ended        bool
 	foreground   bool
@@ -159,6 +169,10 @@ type Spec struct {
 	// TTLMinutes is how long the session lives before the simulator ends it
 	// cleanly. Zero takes DefaultTTL.
 	TTLMinutes int `json:"ttl_minutes"`
+
+	// Mode is manual (default) or autonomous. Autonomous sessions drive their own
+	// lifecycle, which is what makes a large batch of them a load test.
+	Mode Mode `json:"mode"`
 }
 
 // hexID mints a 64-character uppercase hex id, matching the source format.
@@ -190,6 +204,7 @@ func newSession(sp Spec, now time.Time) *Session {
 		StartEpoch:   now,
 		Cadence:      time.Duration(sp.CadenceSeconds) * time.Second,
 		ExpiresAt:    now.Add(time.Duration(sp.TTLMinutes) * time.Minute),
+		Mode:         sp.Mode,
 		heartbeating: true,
 		dirty:        true,
 	}

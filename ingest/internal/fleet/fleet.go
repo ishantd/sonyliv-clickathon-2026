@@ -116,14 +116,24 @@ func (f *Fleet) Reconcile(ctx context.Context) (int, error) {
 // Overrides the Registry method of the same name so the store cannot keep handing
 // back rows the operator already cleared — without the tombstone, the next restart
 // would resurrect every session the list was emptied of.
-func (f *Fleet) ClearEnded(ctx context.Context) int {
+// Returns the count cleared and any tombstone-write error.
+//
+// The error is returned rather than only logged, because a tombstone that did not
+// land is not a logging concern: the sessions are gone from memory but still live
+// in the store, so the next restart resurrects every one of them. Reporting
+// "removed 103,470" while the durable state disagrees is the failure mode that
+// hid this for two restarts.
+func (f *Fleet) ClearEnded(ctx context.Context) (int, error) {
 	ids := f.Registry.RemoveEnded()
-	if len(ids) > 0 && f.store != nil {
-		if err := f.store.Save(ctx, removedRows(ids, time.Now().UTC())); err != nil {
-			log.Printf("fleet: tombstone %d cleared sessions: %v", len(ids), err)
-		}
+	if len(ids) == 0 || f.store == nil {
+		return len(ids), nil
 	}
-	return len(ids)
+	if err := f.store.Save(ctx, removedRows(ids, time.Now().UTC())); err != nil {
+		log.Printf("fleet: tombstone %d cleared sessions: %v", len(ids), err)
+		return len(ids), fmt.Errorf("cleared %d sessions in memory but the tombstones did not land, "+
+			"so they will return on restart: %w", len(ids), err)
+	}
+	return len(ids), nil
 }
 
 // PersistNow flushes changed sessions immediately instead of waiting for the tick.
@@ -235,11 +245,13 @@ func (f *Fleet) Run(ctx context.Context) {
 			continue
 		}
 
-		// Size-triggered flush, checked after any append. Without it a 2,000-session
-		// create would sit in the buffer for up to a second before moving.
-		if len(buf) >= flushRows {
-			send(buf)
-			buf = buf[:0]
+		// Size-triggered flush, in bounded chunks. Without the loop a create of
+		// 100,000 sessions would arrive as one 200,000-row slice and go out as a
+		// single insert; the chunking keeps every insert the same shape whether it
+		// came from a heartbeat tick or a bulk create.
+		for len(buf) >= flushRows {
+			send(buf[:flushRows])
+			buf = append(buf[:0], buf[flushRows:]...)
 		}
 	}
 }

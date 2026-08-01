@@ -108,6 +108,12 @@ export default function FleetPage() {
     }
   }
 
+  function setModeTab(mode: string | undefined) {
+    setFilter({ ...filter, mode });
+    setOffset(0);
+    clearSelection();
+  }
+
   async function clearEnded() {
     setBusy(true);
     setError(null);
@@ -163,6 +169,30 @@ export default function FleetPage() {
         </div>
         <ErrorNote error={error} />
       </Panel>
+
+      {/* Mode tabs, above the dimension filter and not inside it. Mode is not a
+          dimension — it is which population you are looking at, and burying it in
+          a row of selects would make the two fleets feel like one filtered list. */}
+      <div className="flex gap-1" role="tablist" aria-label="Session population">
+        <ModeTab
+          label="All"
+          count={stats?.total}
+          on={!filter.mode}
+          onClick={() => setModeTab(undefined)}
+        />
+        <ModeTab
+          label="Autonomous"
+          count={stats?.autonomous}
+          on={filter.mode === "autonomous"}
+          onClick={() => setModeTab("autonomous")}
+        />
+        <ModeTab
+          label="Manual"
+          count={stats?.manual}
+          on={filter.mode === "manual"}
+          onClick={() => setModeTab("manual")}
+        />
+      </div>
 
       <Panel title="filter">
         <FleetFilters
@@ -228,6 +258,7 @@ export default function FleetPage() {
                   <Th>phase</Th>
                   <Th>session</Th>
                   <Th>content</Th>
+                  <Th>mode</Th>
                   <Th>platform</Th>
                   <Th right>events</Th>
                   <Th right>active</Th>
@@ -277,6 +308,15 @@ export default function FleetPage() {
                       </span>
                       <span className="ml-1.5 font-mono text-[0.6875rem] text-ink-3">
                         {s.content_id}
+                      </span>
+                    </Td>
+                    <Td>
+                      <span
+                        className={`font-mono text-[0.6875rem] ${
+                          s.mode === "autonomous" ? "text-ink-2" : "text-ink-3"
+                        }`}
+                      >
+                        {s.mode === "autonomous" ? "auto" : "manual"}
                       </span>
                     </Td>
                     <Td>
@@ -356,5 +396,36 @@ function Td({
     >
       {children}
     </td>
+  );
+}
+
+function ModeTab({
+  label,
+  count,
+  on,
+  onClick,
+}: {
+  label: string;
+  count: number | undefined;
+  on: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="tab"
+      aria-selected={on}
+      onClick={onClick}
+      className={`rounded-t border-b-2 px-3 py-1.5 text-[0.8125rem] transition-colors ${
+        on
+          ? "border-accent text-accent"
+          : "border-transparent text-ink-3 hover:text-ink"
+      }`}
+    >
+      {label}
+      <span className="tnum ml-1.5 font-mono text-[0.6875rem] text-ink-3">
+        {num(count)}
+      </span>
+    </button>
   );
 }

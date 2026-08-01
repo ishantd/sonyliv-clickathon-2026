@@ -17,8 +17,11 @@ import (
 // more importantly, bounds the ClickHouse comparison query in curve.go, which
 // scopes by an IN list of session ids.
 const (
-	MaxPerCreate = 2000
-	MaxLive      = 10000
+	// One request can create a whole load test. The response does not carry a view
+	// per session — at this size that would be a multi-megabyte JSON body nobody
+	// reads — so the handler returns a count and a sample.
+	MaxPerCreate = 100000
+	MaxLive      = 200000
 
 	DefaultCadence = 30 * time.Second
 	MinCadence     = 5 * time.Second
@@ -47,6 +50,7 @@ type View struct {
 	StartEpoch     time.Time `json:"start_epoch"`
 	CadenceSeconds int       `json:"cadence_seconds"`
 	ExpiresAt      time.Time `json:"expires_at"`
+	Mode           Mode      `json:"mode"`
 
 	Phase  Phase `json:"phase"`
 	Active bool  `json:"active"`
@@ -74,6 +78,7 @@ type Filter struct {
 	AppVersion string
 	Country    string
 	Phase      string
+	Mode       string
 }
 
 // matches tests a session directly rather than a built View.
@@ -99,6 +104,8 @@ func (f Filter) matches(s *Session, phase Phase) bool {
 		return false
 	case f.Phase != "" && string(phase) != f.Phase:
 		return false
+	case f.Mode != "" && string(s.Mode) != f.Mode:
+		return false
 	}
 	return true
 }
@@ -118,6 +125,8 @@ type Stats struct {
 	Expired      int `json:"expired"`
 	Ended        int `json:"ended"`
 	EventsSent   int `json:"events_sent"`
+	Autonomous   int `json:"autonomous"`
+	Manual       int `json:"manual"`
 }
 
 // Registry owns the live sessions.
@@ -158,6 +167,7 @@ func (r *Registry) view(s *Session, now time.Time) *View {
 		StartEpoch:     s.StartEpoch,
 		CadenceSeconds: int(s.Cadence / time.Second),
 		ExpiresAt:      s.ExpiresAt,
+		Mode:           s.Mode,
 		Phase:          s.phase(now, r.timeout),
 		Active:         s.isActive(now, r.timeout),
 		Started:        s.started, Ended: s.ended,
@@ -215,6 +225,14 @@ func (r *Registry) Create(sp Spec, now time.Time) ([]*View, []model.RawEvent, er
 	}
 	sp.TTLMinutes = int(ttl / time.Minute)
 
+	switch sp.Mode {
+	case "":
+		sp.Mode = ModeManual
+	case ModeManual, ModeAutonomous:
+	default:
+		return nil, nil, fmt.Errorf("unknown mode %q", sp.Mode)
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -235,6 +253,9 @@ func (r *Registry) Create(sp Spec, now time.Time) ([]*View, []model.RawEvent, er
 		// `cadence` seconds — a sawtooth that is an artifact of the simulator, not
 		// a property of the workload it is meant to imitate.
 		s.nextTick = now.Add(time.Duration(r.rng.Int63n(int64(cadence))))
+		if s.Mode == ModeAutonomous {
+			s.planAutonomous(r.rng, now)
+		}
 
 		rows = append(rows, s.apply(model.PairSessionStart, now, r.timeout, batchID, seq))
 		seq++
@@ -478,6 +499,18 @@ func (r *Registry) Sweep(now time.Time) []model.RawEvent {
 			continue
 		}
 
+		// Autonomous sessions decide their own next move. Evaluated here rather
+		// than on a second scheduler because the sweep is already walking every
+		// session — this costs one time comparison each, not another goroutine.
+		if !s.ended && s.Mode == ModeAutonomous {
+			if pair, ok := s.autoStep(r.rng, now); ok {
+				rows = append(rows, s.apply(pair, now, r.timeout, batchID, uint32(len(rows))))
+				if s.ended {
+					continue
+				}
+			}
+		}
+
 		if s.ended || !s.heartbeating || now.Before(s.nextTick) {
 			continue
 		}
@@ -499,6 +532,11 @@ func (r *Registry) Stats(now time.Time) Stats {
 	for _, s := range r.sessions {
 		s.reconcile(now, r.timeout)
 		st.EventsSent += s.eventsSent
+		if s.Mode == ModeAutonomous {
+			st.Autonomous++
+		} else {
+			st.Manual++
+		}
 		switch s.phase(now, r.timeout) {
 		case PhaseActive:
 			st.Active++
