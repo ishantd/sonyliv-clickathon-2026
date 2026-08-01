@@ -495,7 +495,38 @@ var verifyChecks = []struct {
          ORDER BY table`,
 	},
 	{
-		"compression by column of sl_raw_events (top 12 by on-disk size)",
+		// The headline compression number, read from system.parts, which
+		// reports byte totals for every part format. This is the figure to
+		// quote; the per-column breakdown below is not always available.
+		"compression of sl_raw_events (by part format)",
+		`SELECT
+             part_type,
+             count()                                AS parts,
+             formatReadableSize(sum(bytes_on_disk)) AS on_disk,
+             formatReadableSize(sum(data_uncompressed_bytes)) AS uncompressed,
+             round(sum(data_uncompressed_bytes) / greatest(sum(bytes_on_disk), 1), 1) AS ratio,
+             round(sum(bytes_on_disk) / greatest(sum(rows), 1), 1) AS bytes_per_row
+         FROM system.parts
+         WHERE active AND database = '{db}' AND table = 'sl_raw_events'
+         GROUP BY part_type
+         ORDER BY part_type`,
+	},
+	{
+		// Restricted to Wide parts on purpose.
+		//
+		// system.parts_columns stores per-column byte counts only for the Wide
+		// format; a Compact part keeps every column in one file and reports
+		// zero for all of them. Without the filter this panel prints a full
+		// table of 0.00 B, which reads as missing data rather than as an
+		// unavailable statistic.
+		//
+		// Whether parts are Wide is decided by min_bytes_for_wide_part (10 MiB
+		// of uncompressed data per part by default). ClickHouse Cloud raises
+		// that — object storage prefers fewer, larger files — so this panel is
+		// routinely empty there while the table above still answers the
+		// question. Forcing Wide parts to populate a report would be the wrong
+		// trade against the storage layer.
+		"compression by column of sl_raw_events (Wide parts only; empty on Compact-only storage such as Cloud)",
 		`SELECT
              column,
              formatReadableSize(sum(column_data_compressed_bytes))   AS compressed,
@@ -503,6 +534,7 @@ var verifyChecks = []struct {
              round(sum(column_data_uncompressed_bytes) / greatest(sum(column_data_compressed_bytes), 1), 1) AS ratio
          FROM system.parts_columns
          WHERE active AND database = '{db}' AND table = 'sl_raw_events'
+           AND part_type = 'Wide'
          GROUP BY column
          ORDER BY sum(column_data_compressed_bytes) DESC
          LIMIT 12`,
