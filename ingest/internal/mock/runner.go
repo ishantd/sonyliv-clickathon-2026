@@ -53,6 +53,16 @@ type Params struct {
 	BatchSize int  `json:"batch_size"`
 	Workers   int  `json:"workers"`
 	Async     bool `json:"async"`
+
+	// Sink chooses where generated events go:
+	//   "direct" (default) — chx.Loader over the native protocol. Fastest.
+	//   "api"              — POST to /api/events, so the load run is a real client
+	//                        of the ingest endpoint and exercises its decoding,
+	//                        validation, chunking and async-insert path.
+	// "api" is slower by design: JSON plus an HTTP round trip is what a real
+	// producer pays, so a rate measured through it is a rate a producer could
+	// expect.
+	Sink string `json:"sink"`
 }
 
 // Status is the polled view of a run.
@@ -88,7 +98,7 @@ type run struct {
 	contentRequested int
 	contentResolved  int
 
-	loader *chx.Loader
+	sink sink
 
 	mu         sync.Mutex
 	summary    *generator.Summary
@@ -107,11 +117,17 @@ type Runner struct {
 	mu      sync.Mutex
 	client  *chx.Client
 	current *run
+
+	// selfURL and token let a run POST back into this same process's ingest
+	// endpoint when Params.Sink is "api".
+	selfURL string
+	token   string
 }
 
-// NewRunner builds an idle runner.
-func NewRunner(client *chx.Client) *Runner {
-	return &Runner{client: client}
+// NewRunner builds an idle runner. selfURL is this server's own base URL, used
+// only by the "api" sink.
+func NewRunner(client *chx.Client, selfURL, token string) *Runner {
+	return &Runner{client: client, selfURL: selfURL, token: token}
 }
 
 // orDefault resolves an optional rate: nil takes the measured value, an explicit
@@ -157,11 +173,22 @@ func (r *Runner) Start(ctx context.Context, p Params) (*Status, error) {
 		DuplicateFraction: orDefault(p.DupFraction, 0.005),
 	}
 	// Defaults fills every behavioural knob we do not expose (heartbeat cadence,
-	// session-duration shape, bg/pause episode counts, late and duplicate
-	// fractions) with the values measured from the supplied extract. Turning
-	// those by hand is how you accidentally generate traffic that no longer
-	// resembles the real stream.
+	// session-duration shape, bg/pause episode counts) with the values measured
+	// from the supplied extract. Turning those by hand is how you accidentally
+	// generate traffic that no longer resembles the real stream.
 	cfg.Defaults()
+
+	// Flush a partial batch roughly once per wall-clock second in live mode.
+	// Config.Defaults() cannot do this — it does not know SpeedFactor is set — so
+	// cmd/sonyliv-gen applies the same rule at main.go:134 and this must too.
+	//
+	// Without it the generator buffers until BatchSize, so a run emits ONE chunk at
+	// the end: the curve stays flat and then jumps, and the "api" sink makes a
+	// single giant POST instead of the many small ones a producer actually sends.
+	// Both defeat the point of watching a load run.
+	if cfg.FlushEvery == 0 && cfg.SpeedFactor > 0 {
+		cfg.FlushEvery = time.Duration(cfg.SpeedFactor * float64(time.Second))
+	}
 
 	gen, err := generator.New(cfg, content)
 	if err != nil {
@@ -176,7 +203,7 @@ func (r *Runner) Start(ctx context.Context, p Params) (*Status, error) {
 	}
 
 	runID := uuid.New()
-	loader := chx.NewLoader(r.client, chx.LoaderOptions{
+	var dest sink = chx.NewLoader(r.client, chx.LoaderOptions{
 		Source: "mock-dashboard",
 		RunID:  runID,
 		// The generator's own fingerprint covers the config AND the content
@@ -190,6 +217,12 @@ func (r *Runner) Start(ctx context.Context, p Params) (*Status, error) {
 		MaxRetries:  3,
 		AsyncInsert: p.Async,
 	})
+	if p.Sink == "api" {
+		if r.selfURL == "" {
+			return nil, errors.New(`sink "api" needs the server's own URL; start with --listen on a resolvable address`)
+		}
+		dest = NewAPISink(r.selfURL, r.token)
+	}
 
 	runCtx, cancel := context.WithCancel(context.Background())
 	rn := &run{
@@ -200,7 +233,7 @@ func (r *Runner) Start(ctx context.Context, p Params) (*Status, error) {
 		done:             make(chan struct{}),
 		contentRequested: requested,
 		contentResolved:  len(content),
-		loader:           loader,
+		sink:             dest,
 	}
 
 	r.mu.Lock()
@@ -263,7 +296,7 @@ func (rn *run) execute(ctx context.Context, gen *generator.Generator, batchSize 
 		genDone <- genResult{s, err}
 	}()
 
-	_, loadErr := rn.loader.Run(ctx, chunks)
+	_, loadErr := rn.sink.Run(ctx, chunks)
 	res := <-genDone
 	summary, genErr := res.summary, res.err
 
@@ -325,7 +358,7 @@ func (r *Runner) Status() Status {
 	finished, runErr, summary, finishedAt := rn.finished, rn.err, rn.summary, rn.finishedAt
 	rn.mu.Unlock()
 
-	s := rn.loader.Stats()
+	s := rn.sink.Stats()
 
 	// Freeze elapsed and the rate once the run ends. Loader.Stats keeps measuring
 	// against wall clock, so a finished run's throughput would otherwise decay

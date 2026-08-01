@@ -42,6 +42,12 @@ export interface SimParams {
   batch_size: number;
   workers: number;
   async: boolean;
+  /**
+   * "direct" writes over the ClickHouse native protocol; "api" makes the
+   * generator a real client of POST /api/events, exercising that endpoint's
+   * decoding, validation, chunking and async-insert path on every run.
+   */
+  sink: "direct" | "api";
 }
 
 export interface SimStatus {

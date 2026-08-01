@@ -83,7 +83,15 @@ func run() error {
 	}
 	fmt.Printf("connected to %s (ClickHouse %s)\n", cfg.Redacted(), version)
 
-	srv := mock.NewServer(client, *token, *corsOrigin, *timeoutMS)
+	// The generator's "api" sink POSTs back into this same process, so it needs a
+	// URL that resolves from here. A bare ":8088" or "0.0.0.0:8088" is a valid
+	// listen address but not a valid target, so normalise it to loopback.
+	selfURL := "http://" + *listen
+	if h := (*listen)[:max(lastColon(*listen), 0)]; h == "" || h == "0.0.0.0" || h == "[::]" {
+		selfURL = "http://127.0.0.1" + (*listen)[lastColon(*listen):]
+	}
+
+	srv := mock.NewServer(client, *token, *corsOrigin, selfURL, *timeoutMS)
 	httpSrv := &http.Server{
 		Addr:              *listen,
 		Handler:           srv.Handler(),

@@ -45,10 +45,10 @@ type Server struct {
 // next.config rewrites cannot bridge them because rewrites are unsupported under
 // output: 'export'. Empty in production, where the exported files are served from
 // this same binary and the API is same-origin.
-func NewServer(client *chx.Client, token, corsOrigin string, timeoutMS int64) *Server {
+func NewServer(client *chx.Client, token, corsOrigin, selfURL string, timeoutMS int64) *Server {
 	return &Server{
 		client:     client,
-		runner:     NewRunner(client),
+		runner:     NewRunner(client, selfURL, token),
 		manual:     NewManual(client, timeoutMS),
 		token:      token,
 		corsOrigin: corsOrigin,
@@ -90,6 +90,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/", http.FileServerFS(sub))
 
 	api := http.NewServeMux()
+	// The ingest endpoint. Separate from the generator's control endpoints below:
+	// this one RECEIVES events from any producer, those START and STOP the
+	// generator. With Params.Sink = "api" the generator becomes a client of this.
+	api.HandleFunc("POST /api/events", s.handleEvents)
+
 	api.HandleFunc("GET /api/content", s.handleContent)
 	api.HandleFunc("POST /api/sim/start", s.handleSimStart)
 	api.HandleFunc("POST /api/sim/stop", s.handleSimStop)

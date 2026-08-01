@@ -35,6 +35,7 @@ export default function LoadSimulator() {
     batchSize: 50_000,
     workers: 6,
     async: false,
+    sink: "direct" as "direct" | "api",
   });
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) =>
     setForm((f) => ({ ...f, [k]: v }));
@@ -86,6 +87,7 @@ export default function LoadSimulator() {
         batch_size: form.batchSize,
         workers: form.workers,
         async: form.async,
+        sink: form.sink,
       });
     } catch (e) {
       setError(e);
@@ -105,7 +107,12 @@ export default function LoadSimulator() {
     }
   }
 
-  const droppedContent =
+  // Two different situations, and conflating them produced a wrong message:
+  //   pinned ids  -> "N of M ids were not in the catalogue" (a real problem)
+  //   sample size -> the catalogue simply has fewer rows than you asked to sample
+  //                  (normal, and not about missing ids at all)
+  const pinnedRun = (status?.params?.content_ids?.length ?? 0) > 0;
+  const contentShortfall =
     status && status.content_requested > status.content_resolved
       ? status.content_requested - status.content_resolved
       : 0;
@@ -295,6 +302,25 @@ export default function LoadSimulator() {
                 </Field>
               </div>
 
+              <Field
+                label="write path"
+                hint={
+                  form.sink === "api"
+                    ? "the generator POSTs to /api/events, so every run exercises the ingest endpoint end to end — slower by design, since JSON plus a round trip is what a real producer pays"
+                    : "ClickHouse native protocol, straight through chx.Loader"
+                }
+              >
+                <select
+                  value={form.sink}
+                  onChange={(e) =>
+                    set("sink", e.target.value as "direct" | "api")
+                  }
+                >
+                  <option value="direct">direct — native protocol</option>
+                  <option value="api">api — POST /api/events</option>
+                </select>
+              </Field>
+
               <label className="flex flex-wrap items-center gap-2 text-xs text-ink-2">
                 <input
                   type="checkbox"
@@ -397,12 +423,18 @@ export default function LoadSimulator() {
               )}
             </div>
 
-            {droppedContent > 0 && (
-              <p className="mt-3 font-mono text-xs text-bad">
-                {droppedContent} of {status?.content_requested} content ids were
-                not in the catalogue and were ignored.
-              </p>
-            )}
+            {contentShortfall > 0 &&
+              (pinnedRun ? (
+                <p className="mt-3 font-mono text-xs text-bad">
+                  {contentShortfall} of {status?.content_requested} pinned content
+                  ids are not in the catalogue and were ignored.
+                </p>
+              ) : (
+                <p className="mt-3 font-mono text-xs text-ink-3">
+                  Catalogue holds {status?.content_resolved} rows, fewer than the{" "}
+                  {status?.content_requested} requested — sampled all of them.
+                </p>
+              ))}
           </Panel>
 
           <Panel title="sessions active per minute">
