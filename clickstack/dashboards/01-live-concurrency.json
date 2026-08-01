@@ -46,7 +46,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-live-content__",
-        "sqlTemplate": "SELECT sum(ending_concurrency) AS concurrent_now FROM __DATABASE__.serving_live_content WHERE $__filters AND bucket_start = (SELECT max(bucket_start) FROM __DATABASE__.serving_live_content WHERE $__timeFilter(bucket_start))"
+        "sqlTemplate": "SELECT sum(ending_concurrency) AS concurrent_now FROM __DATABASE__.serving_live_content WHERE $__filters AND bucket_start = (SELECT max(bucket_start) FROM __DATABASE__.serving_live_content WHERE ($__timeFilter(bucket_start) AND bucket_start < $__toTime))"
       }
     },
     {
@@ -59,7 +59,7 @@
         "displayType": "number",
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
-        "sqlTemplate": "SELECT max(bucket_peak) AS exact_peak FROM __DATABASE__.serving_live_total WHERE $__timeFilter(bucket_start)"
+        "sqlTemplate": "SELECT max(bucket_peak) AS exact_peak FROM __DATABASE__.serving_live_total WHERE ($__timeFilter(bucket_start) AND bucket_start < $__toTime)"
       }
     },
     {
@@ -73,7 +73,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-live-content__",
-        "sqlTemplate": "SELECT round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_live_content WHERE $__timeFilter(bucket_start) AND $__filters"
+        "sqlTemplate": "SELECT round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_live_content WHERE ($__timeFilter(bucket_start) AND bucket_start < $__toTime) AND $__filters"
       }
     },
     {
@@ -100,7 +100,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "fillNulls": false,
-        "sqlTemplate": "SELECT $__timeInterval(bucket_start) AS ts, max(bucket_peak) AS peak, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS time_weighted_average FROM __DATABASE__.serving_live_total WHERE $__timeFilter(bucket_start) GROUP BY ts ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(bucket_start) AS ts, max(bucket_peak) AS peak, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS time_weighted_average FROM __DATABASE__.serving_live_total WHERE ($__timeFilter(bucket_start) AND bucket_start < $__toTime) GROUP BY ts ORDER BY ts"
       }
     },
     {
@@ -115,7 +115,7 @@
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-live-content__",
         "fillNulls": false,
-        "sqlTemplate": "SELECT $__timeInterval(bucket_start) AS ts, title, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_live_content WHERE $__timeFilter(bucket_start) AND $__filters AND content_id IN (SELECT content_id FROM __DATABASE__.serving_live_content WHERE $__timeFilter(bucket_start) AND $__filters GROUP BY content_id ORDER BY sum(active_ms) DESC LIMIT 8) GROUP BY ts, title ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(bucket_start) AS ts, title, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_live_content WHERE ($__timeFilter(bucket_start) AND bucket_start < $__toTime) AND $__filters AND content_id IN (SELECT content_id FROM __DATABASE__.serving_live_content WHERE ($__timeFilter(bucket_start) AND bucket_start < $__toTime) AND $__filters GROUP BY content_id ORDER BY sum(active_ms) DESC LIMIT 8) GROUP BY ts, title ORDER BY ts"
       }
     },
     {
@@ -129,7 +129,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-live-content__",
-        "sqlTemplate": "SELECT title, video_type, category, max(bucket_peak) AS exact_peak, argMax(ending_concurrency, bucket_start) AS now, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_live_content WHERE $__timeFilter(bucket_start) AND $__filters GROUP BY title, video_type, category ORDER BY max(bucket_peak) DESC LIMIT 25"
+        "sqlTemplate": "SELECT title, video_type, category, max(bucket_peak) AS exact_peak, argMax(ending_concurrency, bucket_start) AS now, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_live_content WHERE ($__timeFilter(bucket_start) AND bucket_start < $__toTime) AND $__filters GROUP BY title, video_type, category ORDER BY max(bucket_peak) DESC LIMIT 25"
       }
     },
     {

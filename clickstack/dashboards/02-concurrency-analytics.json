@@ -72,7 +72,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT round(sum(active_ms) / greatest(dateDiff('millisecond', greatest($__fromTime_ms, min(minute_start)), least($__toTime_ms, max(minute_start) + toIntervalMinute(1))), 1), 6) AS avg_concurrency FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND $__timeFilter(minute_start) AND $__filters"
+        "sqlTemplate": "SELECT round(sum(active_ms) / greatest(dateDiff('millisecond', greatest($__fromTime_ms, min(minute_start)), least($__toTime_ms, max(minute_start) + toIntervalMinute(1))), 1), 6) AS avg_concurrency FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters"
       }
     },
     {
@@ -87,7 +87,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND $__timeFilter(minute_start) AND $__filters"
+        "sqlTemplate": "SELECT round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters"
       }
     },
     {
@@ -102,7 +102,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND $__timeFilter(minute_start) AND $__filters"
+        "sqlTemplate": "SELECT sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters"
       }
     },
     {
@@ -118,7 +118,7 @@
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
         "fillNulls": false,
-        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, platform, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND $__timeFilter(minute_start) AND $__filters GROUP BY ts, platform ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, platform, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, platform ORDER BY ts"
       }
     },
     {
@@ -134,7 +134,7 @@
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
         "fillNulls": false,
-        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, video_type, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND $__timeFilter(minute_start) AND $__filters GROUP BY ts, video_type ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, video_type, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, video_type ORDER BY ts"
       }
     },
     {
@@ -149,7 +149,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT category, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND $__timeFilter(minute_start) AND $__filters GROUP BY category ORDER BY viewer_hours DESC LIMIT 12"
+        "sqlTemplate": "SELECT category, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY category ORDER BY viewer_hours DESC LIMIT 12"
       }
     },
     {
@@ -164,7 +164,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT title, video_type, category, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, sum(sessions_started) AS sessions, round(sum(active_ms) / nullIf(sum(sessions_started), 0) / 60000.0, 1) AS avg_minutes_per_session FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND $__timeFilter(minute_start) AND $__filters AND title != '' GROUP BY title, video_type, category ORDER BY viewer_hours DESC LIMIT 25"
+        "sqlTemplate": "SELECT title, video_type, category, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, sum(sessions_started) AS sessions, round(sum(active_ms) / nullIf(sum(sessions_started), 0) / 60000.0, 1) AS avg_minutes_per_session FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters AND title != '' GROUP BY title, video_type, category ORDER BY viewer_hours DESC LIMIT 25"
       }
     },
     {
@@ -178,7 +178,7 @@
         "displayType": "number",
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
-        "sqlTemplate": "SELECT max(minute_peak) AS exact_peak FROM __DATABASE__.serving_minute_current WHERE dim_mask = 0 AND $__timeFilter(minute_start)"
+        "sqlTemplate": "SELECT max(minute_peak) AS exact_peak FROM __DATABASE__.serving_minute_current WHERE dim_mask = 0 AND ($__timeFilter(minute_start) AND minute_start < $__toTime)"
       }
     },
     {
@@ -206,7 +206,7 @@
         "displayType": "table",
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
-        "sqlTemplate": "SELECT argMax(minute_start, minute_peak) AS peak_minute, max(minute_peak) AS exact_peak, round(max(active_ms) / 60000.0, 2) AS avg_concurrency_that_minute FROM __DATABASE__.serving_minute_current WHERE dim_mask = 0 AND $__timeFilter(minute_start) HAVING count() > 0"
+        "sqlTemplate": "SELECT argMax(minute_start, minute_peak) AS peak_minute, max(minute_peak) AS exact_peak, round(max(active_ms) / 60000.0, 2) AS avg_concurrency_that_minute FROM __DATABASE__.serving_minute_current WHERE dim_mask = 0 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) HAVING count() > 0"
       }
     },
     {
@@ -220,7 +220,7 @@
         "displayType": "bar",
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
-        "sqlTemplate": "SELECT platform, max(minute_peak) AS exact_peak FROM __DATABASE__.serving_minute_current WHERE dim_mask = 1 AND $__timeFilter(minute_start) GROUP BY platform ORDER BY exact_peak DESC"
+        "sqlTemplate": "SELECT platform, max(minute_peak) AS exact_peak FROM __DATABASE__.serving_minute_current WHERE dim_mask = 1 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) GROUP BY platform ORDER BY exact_peak DESC"
       }
     },
     {
@@ -234,7 +234,7 @@
         "displayType": "table",
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
-        "sqlTemplate": "SELECT app_version, max(minute_peak) AS exact_peak, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_minute_current WHERE dim_mask = 16 AND $__timeFilter(minute_start) GROUP BY app_version ORDER BY exact_peak DESC LIMIT 25"
+        "sqlTemplate": "SELECT app_version, max(minute_peak) AS exact_peak, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_minute_current WHERE dim_mask = 16 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) GROUP BY app_version ORDER BY exact_peak DESC LIMIT 25"
       }
     },
     {
@@ -248,7 +248,7 @@
         "displayType": "table",
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
-        "sqlTemplate": "SELECT category, max(minute_peak) AS exact_peak, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_minute_current WHERE dim_mask = 32 AND $__timeFilter(minute_start) GROUP BY category ORDER BY exact_peak DESC LIMIT 25"
+        "sqlTemplate": "SELECT category, max(minute_peak) AS exact_peak, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours FROM __DATABASE__.serving_minute_current WHERE dim_mask = 32 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) GROUP BY category ORDER BY exact_peak DESC LIMIT 25"
       }
     },
     {

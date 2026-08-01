@@ -1,6 +1,6 @@
 # ClickStack dashboards
 
-Four dashboards over the serving tables, created through the managed ClickStack
+Five dashboards over the serving tables, created through the managed ClickStack
 API rather than clicked together by hand — so they are diffable, reviewable, and
 reproducible on another service.
 
@@ -10,6 +10,7 @@ reproducible on another service.
 | `dashboards/02-concurrency-analytics.json` | Corrected concurrency at 1-minute grain, filterable by platform / app version / content type / category |
 | `dashboards/03-pipeline-observability.json` | Ingest lag, rollup latency, recompute backlog, and read volume per serving query |
 | `dashboards/04-grouped-viewers.json` | Stacked-bar breakdown; pick the group-by key from a tab bar |
+| `dashboards/05-benchmark-answers.json` | The scored benchmark set: peak and average per grouping, at minute/hour/day, with query evidence |
 | `sources.json` | The four ClickStack sources the tiles bind to |
 | `apply.sh` | Create-or-update everything. Idempotent |
 | `csapi.sh` | One authenticated request against the ClickStack API |
@@ -140,6 +141,22 @@ at all. `active_ms` is additive, so a stack of per-platform bars sums to exactly
 true overall average — verified: mask 63 grouped by platform totals 855.603469 over
 the hot hour, identical to the ungrouped mask 0 figure, and the shares sum to 100.00.
 Stacked peaks would total more viewers than were ever simultaneously present.
+
+## Two ClickStack traps these dashboards work around
+
+**`$__timeFilter` is inclusive at both ends.** A 10:00–11:00 selection returns 61
+minutes, not 60. Every window here adds an explicit `AND <col> < $__toTime` to make it
+half-open `[from, to)`, matching the pipeline's interval convention. Without it the
+time-weighted average ran **4.3% high**, because the numerator counted 61 minutes while
+the denominator capped at the selected span. If a minute count ever reads 61, that
+guard has been dropped.
+
+**Timestamps render in the browser's timezone; the pipeline is UTC end to end.** On an
+IST machine the 10:55 UTC peak minute displays as 16:25, and picking "10:00–11:00" in
+the date control selects 04:30–05:30 UTC — a quiet period on this extract that reads a
+peak of 10 rather than 2,305. Drive the range from UTC epochs when a number has to be
+comparable to a reference figure:
+`?from=1785060000000&to=1785063600000` is the canonical hot hour.
 
 ## Reference figures
 

@@ -35,6 +35,7 @@ SonyLIV — Live concurrency	Concurrent viewers now
 SonyLIV — Concurrency analytics (lagged)	Time-weighted average concurrency
 SonyLIV — Pipeline & query observability	Stream ingest lag
 SonyLIV — Grouped viewers	Average concurrent viewers by platform
+SonyLIV — Benchmark answers	Benchmark answer set
 EOF
 )
 
