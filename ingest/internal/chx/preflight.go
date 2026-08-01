@@ -95,8 +95,12 @@ func (c *Client) Preflight(ctx context.Context) (*PreflightReport, error) {
 	if r.Deployment, err = c.deployment(ctx); err != nil {
 		return nil, err
 	}
+	// The `default` column, not `value`. This connection sets async_insert=0
+	// for the bulk path, and `value` reports that override straight back — the
+	// pipeline's own setting dressed up as the server's, which is worse than
+	// printing nothing.
 	if err := c.Conn.QueryRow(ctx,
-		"SELECT value FROM system.settings WHERE name = 'async_insert'").Scan(&r.AsyncInsertDefault); err != nil {
+		"SELECT default FROM system.settings WHERE name = 'async_insert'").Scan(&r.AsyncInsertDefault); err != nil {
 		r.AsyncInsertDefault = "unknown"
 	}
 	if err := c.Conn.QueryRow(ctx,
@@ -118,20 +122,24 @@ func (c *Client) Preflight(ctx context.Context) (*PreflightReport, error) {
 
 // deployment distinguishes ClickHouse Cloud from a self-managed server.
 //
-// It matters because Cloud silently substitutes SharedMergeTree for MergeTree,
-// which moves deduplication onto a different, timer-expiring window.
+// It matters because Cloud substitutes SharedMergeTree for MergeTree, which
+// moves deduplication onto a different, timer-expiring window.
+//
+// Detected from cloud_mode. An earlier version inferred it from
+// default_table_engine and got it wrong against a real service: Cloud reports
+// ReplicatedMergeTree there while actually creating SharedMergeTree tables, so
+// a genuine Cloud service was labelled self-managed.
 func (c *Client) deployment(ctx context.Context) (string, error) {
-	var defaultEngine string
-	// Present and set to a Shared* engine only on Cloud.
-	err := c.Conn.QueryRow(ctx,
-		"SELECT value FROM system.settings WHERE name = 'default_table_engine'").Scan(&defaultEngine)
-	if err != nil || defaultEngine == "" {
-		return "self-managed (MergeTree)", nil
+	var cloudMode bool
+	if err := c.Conn.QueryRow(ctx,
+		"SELECT value = '1' FROM system.settings WHERE name = 'cloud_mode'").Scan(&cloudMode); err != nil {
+		// Older servers predate the setting; absence means not Cloud.
+		return "self-managed", nil
 	}
-	if strings.Contains(strings.ToLower(defaultEngine), "shared") {
-		return fmt.Sprintf("ClickHouse Cloud (%s — deduplication uses the replicated window)", defaultEngine), nil
+	if cloudMode {
+		return "ClickHouse Cloud — tables become Shared*MergeTree, deduplication uses the replicated window", nil
 	}
-	return fmt.Sprintf("self-managed (default_table_engine=%s)", defaultEngine), nil
+	return "self-managed", nil
 }
 
 // tableSettings reads the deduplication settings in force for one table.

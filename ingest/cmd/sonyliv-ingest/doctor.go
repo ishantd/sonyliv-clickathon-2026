@@ -57,9 +57,11 @@ func cmdDoctor(ctx context.Context, args []string) error {
 
 	if len(report.Tables) > 0 {
 		fmt.Println("deduplication settings in place (blank = table not created yet):")
-		fmt.Printf("  %-18s %-20s %-10s %-10s %s\n", "table", "engine", "non_repl", "repl", "repl_seconds")
+		// 24 wide: SharedReplacingMergeTree is the longest engine name this
+		// pipeline creates, and it is what Cloud makes of sl_content_dim.
+		fmt.Printf("  %-18s %-24s %-10s %-10s %s\n", "table", "engine", "non_repl", "repl", "repl_seconds")
 		for _, tb := range report.Tables {
-			fmt.Printf("  %-18s %-20s %-10s %-10s %s\n",
+			fmt.Printf("  %-18s %-24s %-10s %-10s %s\n",
 				tb.Name, dash(tb.Engine), dash(tb.NonReplicatedWindow), dash(tb.ReplicatedWindow), dash(tb.ReplicatedWindowSeconds))
 		}
 		fmt.Println()

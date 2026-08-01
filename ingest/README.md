@@ -134,9 +134,10 @@ Every subcommand takes `--env <path>` to select a `.env`; without it the nearest
 Row counts against the source, exact-duplicate rate, content-dictionary join
 coverage, the normalized event taxonomy, the language-normalization effect, the
 ingest audit trail, quarantined rows, dirty-session queue depth, parts per
-partition, and per-column compression.
+partition, compression by part format, and — where the format allows it —
+compression by column.
 
-Measured on the supplied extract (single-node Docker, ClickHouse 26.7.1):
+Measured on ClickHouse Cloud 26.2.1 (ap-south-1), supplied extract:
 
 ```
 events 905,558 · sessions 10,866 · users 9,618
@@ -147,13 +148,27 @@ unjoinable content  0 of 3,357 distinct ids
 subtitle values     11 raw -> 5 normalized
 audio values        41 raw -> 17 normalized
 
-sl_raw_events       6.33 MiB on disk / 168.46 MiB uncompressed (26.6x, 7.3 B/row)
-                    16 parts, 7 partitions, max 4 parts per partition
-load                19 batches, 638 ms, insert p50 65 ms / p99 141 ms, 0 retries
+sl_raw_events       4.78 MiB on disk / 175.03 MiB uncompressed (36.6x)
+                    16 parts, 7 partitions, max 4 per partition, all Compact
+load                19 batches, 2.76 s, insert p50 538 ms / p99 1.50 s, 0 retries
+replay              same file again: 905,558 -> 905,558, 0 rows added
 ```
 
-Those figures are a laptop, not a Cloud service. Benchmark numbers for the
-submission must come from `system.query_log` on the target service.
+The identical run on single-node Docker gives the same row counts and the same
+duplicate rate at 25.7x, so the correctness figures are engine-independent and
+only the storage numbers move.
+
+**Per-column compression is empty on Cloud, and that is not a fault.**
+`system.parts_columns` stores per-column byte counts only for Wide parts; a
+Compact part holds every column in one file and reports zero for all of them.
+`min_bytes_for_wide_part` decides which you get (10 MiB of uncompressed data per
+part by default), and Cloud raises it because object storage prefers fewer,
+larger files. The by-part-format panel above answers the same question and works
+everywhere. Forcing Wide parts to populate a report would be the wrong trade
+against the storage layer.
+
+Latency figures are one client on one laptop against one region. Benchmark
+numbers for the submission should come from `system.query_log` on the service.
 
 ---
 
