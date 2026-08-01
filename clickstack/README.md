@@ -168,5 +168,9 @@ extract's own sessions so synthetic traffic cannot move a fixed number:
   `make rollup-live` fills it. A fresh seed each run is required — identical flags
   produce an identical dedup fingerprint and the load is silently skipped as a
   replay.
+- **A fresh loop pays a cold start.** `--loop` keeps an in-memory cursor of what it
+  last recomputed, so the first pass after a restart has no cursor, reads every
+  dirty session, and rebuilds every service day. Steady state is one day; the first
+  pass is all of them. Restarting the loop is therefore cheap but not free.
 - **Alerts are not wired.** The API supports them bound to dashboard tiles with
   webhook delivery, but there is no webhook destination to point them at yet.

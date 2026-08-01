@@ -382,20 +382,66 @@ func (r *Runner) Minute(ctx context.Context, day, publishUntil time.Time) (Stats
 // can extend past midnight into a day that has no events of its own — and that
 // day still needs minute rows.
 func (r *Runner) ServiceDays(ctx context.Context) ([]time.Time, error) {
-	q := fmt.Sprintf(`
-		SELECT DISTINCT toDate(d) AS service_date
-		FROM (
-			SELECT arrayJoin(arrayMap(
-				i -> toDateTime64(i, 3, 'UTC'),
-				range(
-					toUInt64(toUnixTimestamp(toStartOfDay(ivl.1))),
-					toUInt64(toUnixTimestamp(toStartOfDay(ivl.2))) + 86400,
-					86400))) AS d
-			FROM (SELECT arrayJoin(intervals) AS ivl FROM %s.session_intervals FINAL)
-		)
-		ORDER BY service_date`, r.Client.Database)
+	return r.ServiceDaysFor(ctx, nil)
+}
 
-	rows, err := r.Client.Conn.Query(ctx, q)
+// ServiceDaysFor lists the UTC days that the given sessions have active time in.
+// A nil or empty sessionKeys means every session.
+//
+// This is what makes an incremental minute rebuild possible. Without it the loop
+// rebuilt every service day on every pass, which on this extract meant rewriting
+// the 172,187-row hot day once a minute to publish a handful of newly settled
+// minutes — measured at 64 rebuilds and 1,005,500 rows rewritten per ten minutes.
+// Scoping to the days the recomputed sessions actually touch makes the work
+// proportional to what changed.
+func (r *Runner) ServiceDaysFor(ctx context.Context, sessionKeys []uint64) ([]time.Time, error) {
+	// Two derivations, because the scoped case has to over-approximate.
+	//
+	// Unscoped reads the days the intervals actually cover. Exact, and what a full
+	// rebuild wants.
+	//
+	// Scoped derives from session_start_date instead, expanded by LookbackDays.
+	// Reading current intervals would be unsound: if late data SHRINKS a session so
+	// its intervals no longer cross midnight, the day it used to occupy would not
+	// appear, would not be rebuilt, and would keep a stale row indefinitely. A
+	// session that loses all its active time reports no days at all.
+	// session_start_date is stable per session — it is the partition key of
+	// session_intervals precisely so a session never migrates — so
+	// [start_date, start_date + LookbackDays] always contains every day the session
+	// could touch, before or after the recompute.
+	//
+	// Over-approximating is the safe direction: 030 rebuilds a whole day from ALL
+	// sessions, so an extra day costs time and nothing else, whereas a missed day is
+	// silent staleness.
+	var q string
+	var args []any
+	if len(sessionKeys) == 0 {
+		q = fmt.Sprintf(`
+			SELECT DISTINCT toDate(d) AS service_date
+			FROM (
+				SELECT arrayJoin(arrayMap(
+					i -> toDateTime64(i, 3, 'UTC'),
+					range(
+						toUInt64(toUnixTimestamp(toStartOfDay(ivl.1))),
+						toUInt64(toUnixTimestamp(toStartOfDay(ivl.2))) + 86400,
+						86400))) AS d
+				FROM (SELECT arrayJoin(intervals) AS ivl FROM %s.session_intervals FINAL)
+			)
+			ORDER BY service_date`, r.Client.Database)
+	} else {
+		q = fmt.Sprintf(`
+			SELECT DISTINCT
+				session_start_date + toIntervalDay(arrayJoin(range(0, {span:UInt16}))) AS service_date
+			FROM %s.session_intervals FINAL
+			WHERE session_key IN {session_keys:Array(UInt64)}
+			ORDER BY service_date`, r.Client.Database)
+		args = []any{
+			chx.Named("session_keys", sessionKeys),
+			chx.Named("span", uint16(r.LookbackDays)+1),
+		}
+	}
+
+	rows, err := r.Client.Conn.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

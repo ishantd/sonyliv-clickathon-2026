@@ -76,9 +76,11 @@ func cmdConcurrency(ctx context.Context, args []string) error {
 	pass := func() error {
 		switch *layer {
 		case "intervals":
-			return runIntervals(ctx, r, *full, *dirtyCap, &lastPass)
+			_, err := runIntervals(ctx, r, *full, *dirtyCap, &lastPass)
+			return err
 		case "live":
-			if err := runIntervals(ctx, r, *full, *dirtyCap, &lastPass); err != nil {
+			touched, err := runIntervals(ctx, r, *full, *dirtyCap, &lastPass)
+			if err != nil {
 				return err
 			}
 			if err := runLive(ctx, r, *liveWindow); err != nil {
@@ -88,7 +90,9 @@ func cmdConcurrency(ctx context.Context, args []string) error {
 			// freshness tile reports "time since someone last ran it by hand" —
 			// which grows without bound and looks exactly like a stalled pipeline.
 			if *loop > 0 && *minuteEvery > 0 && time.Since(lastMinute) >= *minuteEvery {
-				if err := runMinute(ctx, r, "", *lag); err != nil {
+				// Scope the rebuild to the days the recomputed sessions occupy.
+				// A full sweep here rewrote every service day once a minute.
+				if err := runMinuteScoped(ctx, r, *lag, touched); err != nil {
 					return err
 				}
 				lastMinute = time.Now()
@@ -97,7 +101,7 @@ func cmdConcurrency(ctx context.Context, args []string) error {
 		case "minute":
 			return runMinute(ctx, r, *day, *lag)
 		case "all":
-			if err := runIntervals(ctx, r, true, *dirtyCap, &lastPass); err != nil {
+			if _, err := runIntervals(ctx, r, true, *dirtyCap, &lastPass); err != nil {
 				return err
 			}
 			if err := runLive(ctx, r, *liveWindow); err != nil {
@@ -137,17 +141,19 @@ func cmdConcurrency(ctx context.Context, args []string) error {
 // view on events_raw maintains. That makes a pass proportional to what actually
 // changed rather than to the size of the history — the difference between a
 // ten-second loop being viable and not.
-func runIntervals(ctx context.Context, r *concurrency.Runner, full bool, dirtyCap int, lastPass *time.Time) error {
+// The returned slice is the workset it recomputed: nil for a full rebuild (meaning
+// "every day"), empty for a pass with nothing to do.
+func runIntervals(ctx context.Context, r *concurrency.Runner, full bool, dirtyCap int, lastPass *time.Time) ([]uint64, error) {
 	watermark, err := r.Watermark(ctx)
 	if err != nil {
-		return fmt.Errorf("read ingest watermark: %w", err)
+		return nil, fmt.Errorf("read ingest watermark: %w", err)
 	}
 
 	var keys []uint64
 	if !full {
 		keys, err = r.DirtySessions(ctx, *lastPass, dirtyCap)
 		if err != nil {
-			return fmt.Errorf("read dirty sessions: %w", err)
+			return nil, fmt.Errorf("read dirty sessions: %w", err)
 		}
 		if len(keys) == 0 {
 			// Nothing new. Say so rather than rewriting every interval for no
@@ -155,17 +161,17 @@ func runIntervals(ctx context.Context, r *concurrency.Runner, full bool, dirtyCa
 			fmt.Printf("intervals  no sessions dirtied since %s, skipped\n",
 				lastPass.UTC().Format("15:04:05"))
 			*lastPass = time.Now().UTC()
-			return nil
+			return []uint64{}, nil
 		}
 		if len(keys) >= dirtyCap {
-			return fmt.Errorf("%d sessions dirtied, at or above --dirty-cap %d: "+
+			return nil, fmt.Errorf("%d sessions dirtied, at or above --dirty-cap %d: "+
 				"run once with --full rather than catching up in slices", len(keys), dirtyCap)
 		}
 	}
 
 	st, err := r.Intervals(ctx, keys, watermark)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	fmt.Println(st)
 	// The cursor is wall-clock, not the event watermark, because
@@ -173,7 +179,7 @@ func runIntervals(ctx context.Context, r *concurrency.Runner, full bool, dirtyCa
 	// when it happened. An event-time cursor would re-read the same sessions
 	// forever whenever the stream replays history — which is what a backfill is.
 	*lastPass = time.Now().UTC()
-	return nil
+	return keys, nil
 }
 
 func runLive(ctx context.Context, r *concurrency.Runner, window time.Duration) error {
@@ -194,6 +200,63 @@ func runLive(ctx context.Context, r *concurrency.Runner, window time.Duration) e
 // than any cutoff, so today was published right up to the freshest minute — making
 // "corrected, published on a lag" a claim the layer did not honour. The cutoff is
 // passed into the rollup, which simply does not write minutes at or after it.
+// runMinuteScoped rebuilds only the days that could have changed: the days the
+// recomputed sessions occupy, plus the day holding the publish cutoff.
+//
+// That last one is not optional. The cutoff advances every pass, so newly settled
+// minutes become publishable even when no session changed — without it, a quiet
+// stream would freeze the layer at whatever the cutoff was when the last session
+// moved.
+//
+// touched == nil means a full rebuild was requested; empty means nothing changed, in
+// which case only the cutoff day needs revisiting.
+func runMinuteScoped(ctx context.Context, r *concurrency.Runner, lag time.Duration, touched []uint64) error {
+	watermark, err := r.Watermark(ctx)
+	if err != nil {
+		return fmt.Errorf("read ingest watermark: %w", err)
+	}
+	publishUntil := watermark.Add(-lag)
+
+	var days []time.Time
+	if touched == nil {
+		if days, err = r.ServiceDays(ctx); err != nil {
+			return fmt.Errorf("list service days: %w", err)
+		}
+	} else if len(touched) > 0 {
+		if days, err = r.ServiceDaysFor(ctx, touched); err != nil {
+			return fmt.Errorf("list service days for workset: %w", err)
+		}
+	}
+
+	cutoffDay := publishUntil.UTC().Truncate(24 * time.Hour)
+	seen := false
+	for _, d := range days {
+		if d.Equal(cutoffDay) {
+			seen = true
+			break
+		}
+	}
+	if !seen {
+		days = append(days, cutoffDay)
+	}
+
+	var built int
+	for _, d := range days {
+		if !d.Before(publishUntil) {
+			continue
+		}
+		st, err := r.Minute(ctx, d, publishUntil)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("%s day=%s\n", st, d.Format("2006-01-02"))
+		built++
+	}
+	fmt.Printf("minute     %d day(s) rebuilt (scoped to %d changed session(s)), published through %s\n",
+		built, len(touched), publishUntil.Truncate(concurrency.MinuteBucket).Format("2006-01-02 15:04:05"))
+	return nil
+}
+
 func runMinute(ctx context.Context, r *concurrency.Runner, day string, lag time.Duration) error {
 	watermark, err := r.Watermark(ctx)
 	if err != nil {
