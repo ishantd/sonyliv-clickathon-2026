@@ -1,0 +1,121 @@
+package chx
+
+import (
+	"strings"
+	"testing"
+)
+
+// TestSplitStatementsIsCommentAware guards the DDL loader against the thing a
+// naive strings.Split(sql, ";") gets wrong: the schema is heavily commented and
+// those comments contain both semicolons and apostrophes.
+func TestSplitStatementsIsCommentAware(t *testing.T) {
+	sql := `
+-- A comment with a semicolon; and an apostrophe's worth of trouble.
+CREATE TABLE a (x UInt8) ENGINE = Memory;
+
+/* block comment;
+   spanning lines; with semicolons */
+CREATE TABLE b (
+    y String DEFAULT 'a;b',            -- literal containing a semicolon
+    z String MATERIALIZED splitByChar('-', y)[1]
+) ENGINE = Memory;
+`
+	got := splitStatements(sql)
+	if len(got) != 2 {
+		t.Fatalf("got %d statements, want 2:\n%q", len(got), got)
+	}
+	if !strings.HasPrefix(got[0], "CREATE TABLE a") {
+		t.Errorf("statement 0 = %q", got[0])
+	}
+	if !strings.Contains(got[1], `'a;b'`) {
+		t.Errorf("statement 1 lost its literal: %q", got[1])
+	}
+	if !strings.Contains(got[1], `splitByChar('-', y)`) {
+		t.Errorf("statement 1 lost the quoted dash: %q", got[1])
+	}
+	for i, s := range got {
+		if strings.Contains(s, "block comment") || strings.Contains(s, "worth of trouble") {
+			t.Errorf("statement %d retained a comment: %q", i, s)
+		}
+	}
+}
+
+// TestSplitStatementsHandlesEscapes: the schema uses '\x1F' in a string literal.
+func TestSplitStatementsHandlesEscapes(t *testing.T) {
+	sql := `SELECT concatWithSeparator('\x1F', a, b); SELECT 1;`
+	got := splitStatements(sql)
+	if len(got) != 2 {
+		t.Fatalf("got %d statements, want 2: %q", len(got), got)
+	}
+	if !strings.Contains(got[0], `'\x1F'`) {
+		t.Errorf("escape sequence mangled: %q", got[0])
+	}
+}
+
+// TestSchemaStatementsLoad checks the embedded DDL parses into the expected
+// objects — a missing file or a stray semicolon would otherwise only show up
+// against a live server.
+func TestSchemaStatementsLoad(t *testing.T) {
+	stmts, err := SchemaStatements()
+	if err != nil {
+		t.Fatalf("SchemaStatements: %v", err)
+	}
+	if len(stmts) == 0 {
+		t.Fatal("no statements loaded from the embedded sql/ directory")
+	}
+
+	joined := strings.ToUpper(strings.Join(func() []string {
+		out := make([]string, len(stmts))
+		for i, s := range stmts {
+			out[i] = s.SQL
+		}
+		return out
+	}(), "\n"))
+
+	for _, want := range []string{
+		"SL_CONTENT_DIM", "SL_CONTENT_CURRENT", "SL_CONTENT_DICT",
+		"SL_RAW_EVENTS", "SL_DIRTY_SESSIONS", "SL_RAW_TO_DIRTY_MV",
+		"SL_INGEST_BATCHES", "SL_INGEST_REJECTS",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("embedded schema is missing %s", want)
+		}
+	}
+
+	// Every statement must be idempotent, or `schema` stops being re-runnable.
+	for _, s := range stmts {
+		u := strings.ToUpper(s.SQL)
+		if !strings.Contains(u, "IF NOT EXISTS") && !strings.Contains(u, "OR REPLACE") {
+			t.Errorf("%s[%d] is not idempotent: %s", s.File, s.Index, s.Summary())
+		}
+	}
+}
+
+// TestRenderRedactsPassword: dry-run output and error messages are meant to be
+// pasted into a review, so the dictionary's credentials must not ride along.
+func TestRenderRedactsPassword(t *testing.T) {
+	c := &Client{Database: "default", user: "svc", password: "s3cr3t"}
+
+	const tmpl = `SOURCE(CLICKHOUSE(DB '{{db}}' USER '{{ch_user}}' PASSWORD '{{ch_password}}'))`
+
+	redacted := c.Render(tmpl, true)
+	if strings.Contains(redacted, "s3cr3t") {
+		t.Errorf("redacted render leaked the password: %s", redacted)
+	}
+	if !strings.Contains(redacted, "'default'") || !strings.Contains(redacted, "'svc'") {
+		t.Errorf("redacted render dropped non-secret substitutions: %s", redacted)
+	}
+
+	live := c.Render(tmpl, false)
+	if !strings.Contains(live, "'s3cr3t'") {
+		t.Errorf("live render did not substitute the password: %s", live)
+	}
+}
+
+func TestEscapeSQLString(t *testing.T) {
+	// A password containing a quote must not be able to close the literal.
+	got := escapeSQLString(`pa'ss\word`)
+	if want := `pa\'ss\\word`; got != want {
+		t.Errorf("escapeSQLString = %q, want %q", got, want)
+	}
+}

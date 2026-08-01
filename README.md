@@ -7,7 +7,17 @@ Problem statement reference: https://github.com/sidagarwal04/click-a-thon-2026/t
 
 ## Status
 
-Active build. The independent evidence-backed ClickHouse design, executable SQL,
+Active build.
+
+The **ingestion layer** is in [`ingest/`](ingest/README.md): a Go pipeline on the
+ClickHouse native connector that loads the two supplied CSVs, plus an event
+generator that drives a synthetic stream at a target concurrency through the same
+write path. Design record and measurements in
+[`ingest/ARCHITECTURE.md`](ingest/ARCHITECTURE.md). Verified end to end against
+the supplied extract: 905,558 events, 0 rejected, 0 unjoinable content ids,
+26.6x compression, and a byte-identical replay that adds no rows.
+
+The independent evidence-backed ClickHouse design, executable SQL,
 semantic policy, and embedded verification are in [`solution/`](solution/README.md).
 It was created during the 24-hour hack window and intentionally leaves the
 concurrent `docs/` / `prototype/` draft untouched for end-of-session comparison.
