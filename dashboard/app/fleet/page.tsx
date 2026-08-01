@@ -3,11 +3,17 @@
 import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
+import { BulkBar } from "@/components/BulkBar";
 import { FleetFilters } from "@/components/FleetFilters";
 import { PhaseBadge } from "@/components/PhaseBadge";
 import { Button, ErrorNote, Panel, Stat, StatGrid } from "@/components/ui";
 import { api, clockTime, fetcher, filterQuery, num, seconds } from "@/lib/api";
-import type { FleetFilter, FleetListResponse } from "@/lib/types";
+import type {
+  FleetBulkResult,
+  FleetCommand,
+  FleetFilter,
+  FleetListResponse,
+} from "@/lib/types";
 
 const PAGE = 50;
 
@@ -27,6 +33,17 @@ export default function FleetPage() {
   const [error, setError] = useState<unknown>(null);
   const [busy, setBusy] = useState(false);
 
+  // Selection is a set of ids, not row indexes: the table re-sorts nothing but it
+  // does refresh every 2s, and an index-based selection would silently retarget
+  // when a session is created or cleared under it.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  // "Everything matching the filter", including rows on pages never visited. The
+  // one thing an id list cannot express, so it is a separate mode rather than a
+  // very long array.
+  const [allMatching, setAllMatching] = useState(false);
+  const [bulkBusy, setBulkBusy] = useState<FleetCommand | null>(null);
+  const [bulkResult, setBulkResult] = useState<FleetBulkResult | null>(null);
+
   const qs = filterQuery(filter);
   const { data, mutate } = useSWR<FleetListResponse>(
     `/api/fleet/sessions?offset=${offset}&limit=${PAGE}&${qs}`,
@@ -37,6 +54,59 @@ export default function FleetPage() {
   const sessions = data?.sessions ?? [];
   const total = data?.total ?? 0;
   const stats = data?.stats;
+
+  // Not memoised: it is a map over at most PAGE strings, and memoising it would
+  // need `sessions` to be stable, which it is not while data is loading.
+  const pageIDs = sessions.map((s) => s.video_session_id);
+  const pageAllSelected =
+    pageIDs.length > 0 && pageIDs.every((id) => selected.has(id));
+
+  function clearSelection() {
+    setSelected(new Set());
+    setAllMatching(false);
+    setBulkResult(null);
+  }
+
+  function toggleOne(id: string) {
+    setAllMatching(false);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function togglePage() {
+    setAllMatching(false);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (pageAllSelected) pageIDs.forEach((id) => next.delete(id));
+      else pageIDs.forEach((id) => next.add(id));
+      return next;
+    });
+  }
+
+  async function runBulk(command: FleetCommand) {
+    setBulkBusy(command);
+    setError(null);
+    try {
+      // Ids for a tick-box selection; the filter only when the selection is
+      // explicitly "all matching", which is the case the browser has no ids for.
+      const target: { ids: string[] } | { all: true } = allMatching
+        ? { all: true }
+        : { ids: [...selected] };
+      const res = await api.fleetBulk(command, target, filter);
+      setBulkResult(res);
+      setSelected(new Set());
+      setAllMatching(false);
+      await mutate();
+    } catch (e) {
+      setError(e);
+    } finally {
+      setBulkBusy(null);
+    }
+  }
 
   async function clearEnded() {
     setBusy(true);
@@ -102,11 +172,40 @@ export default function FleetPage() {
             // Reset paging: page 3 of the old filter is rarely page 3 of the new
             // one, and landing past the end shows an empty table that looks broken.
             setOffset(0);
+            // And drop the selection: keeping ids that the new filter excludes
+            // would let a bulk action hit rows that are no longer on screen.
+            clearSelection();
           }}
         />
       </Panel>
 
       <Panel title={`sessions — ${num(total)} matching`}>
+        <BulkBar
+          count={selected.size}
+          allMatching={allMatching}
+          total={total}
+          busy={bulkBusy}
+          result={bulkResult}
+          onRun={runBulk}
+          onClear={clearSelection}
+        />
+
+        {/* Offered only when the page cannot express the whole selection. Ticking
+            every box on a 50-row page when 500 match is a reasonable thing to
+            mean either way, so the choice is made explicit rather than guessed. */}
+        {pageAllSelected && !allMatching && total > pageIDs.length && (
+          <p className="mb-3 font-mono text-xs text-ink-3">
+            All {num(pageIDs.length)} on this page selected.{" "}
+            <button
+              type="button"
+              onClick={() => setAllMatching(true)}
+              className="text-accent hover:underline"
+            >
+              Select all {num(total)} matching the filter
+            </button>
+          </p>
+        )}
+
         {sessions.length === 0 ? (
           <p className="font-mono text-xs text-ink-3">
             {total === 0
@@ -118,6 +217,14 @@ export default function FleetPage() {
             <table className="w-full text-[0.8125rem]">
               <thead>
                 <tr className="border-b border-line text-left">
+                  <th className="w-8 pb-2">
+                    <input
+                      type="checkbox"
+                      checked={pageAllSelected}
+                      onChange={togglePage}
+                      aria-label="Select every session on this page"
+                    />
+                  </th>
                   <Th>phase</Th>
                   <Th>session</Th>
                   <Th>content</Th>
@@ -131,8 +238,20 @@ export default function FleetPage() {
                 {sessions.map((s) => (
                   <tr
                     key={s.video_session_id}
-                    className="border-b border-line-soft last:border-b-0 hover:bg-sunken"
+                    className={`border-b border-line-soft last:border-b-0 hover:bg-sunken ${
+                      allMatching || selected.has(s.video_session_id)
+                        ? "bg-accent-wash/40"
+                        : ""
+                    }`}
                   >
+                    <td className="py-1.5">
+                      <input
+                        type="checkbox"
+                        checked={allMatching || selected.has(s.video_session_id)}
+                        onChange={() => toggleOne(s.video_session_id)}
+                        aria-label={`Select session ${s.video_session_id.slice(0, 12)}`}
+                      />
+                    </td>
                     <Td>
                       <PhaseBadge phase={s.phase} />
                     </Td>

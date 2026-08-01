@@ -244,6 +244,23 @@ export interface FleetCurveResponse {
   timeout_ms: number;
 }
 
+/**
+ * What a bulk command did.
+ *
+ * Counted rather than errored: a bulk pause over a filter always meets sessions the
+ * command is a no-op for, and failing because 3 of 500 were already paused would
+ * make the buttons unusable.
+ */
+export interface FleetBulkResult {
+  applied: number;
+  /** No-ops — already paused, already ended. Deliberately not written. */
+  skipped: number;
+  /** Ids the server no longer knows, e.g. selected then cleared. */
+  unknown: number;
+  wrote: number;
+  stats: FleetStats;
+}
+
 export interface FleetSpec {
   count: number;
   content_id: number;

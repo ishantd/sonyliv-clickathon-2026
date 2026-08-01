@@ -349,6 +349,128 @@ func TestFilterNarrowsListAndCurve(t *testing.T) {
 	}
 }
 
+// Bulk over a filter must touch exactly the matching sessions and nothing else.
+func TestCommandMatchingRespectsTheFilter(t *testing.T) {
+	r := NewRegistry(lease, 21)
+	a := spec(4)
+	a.Platform = "ANDROID_PHONE"
+	if _, _, err := r.Create(a, t0); err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	b := spec(3)
+	b.Platform = "FIRETV"
+	if _, _, err := r.Create(b, t0); err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+
+	res, rows, err := r.CommandMatching(Filter{Platform: "FIRETV"}, CmdPause, at(time.Second))
+	if err != nil {
+		t.Fatalf("bulk pause: %v", err)
+	}
+	if res.Applied != 3 || res.Skipped != 0 {
+		t.Fatalf("result %+v, want 3 applied / 0 skipped", res)
+	}
+	if len(rows) != 3 {
+		t.Fatalf("wrote %d rows, want 3", len(rows))
+	}
+
+	now := at(2 * time.Second)
+	if _, total := r.List(Filter{Phase: "paused"}, 0, 50, now); total != 3 {
+		t.Errorf("%d paused, want 3", total)
+	}
+	if _, total := r.List(Filter{Phase: "active"}, 0, 50, now); total != 4 {
+		t.Errorf("%d still active, want the 4 ANDROID_PHONE sessions", total)
+	}
+}
+
+// A no-op must be skipped, not written. Pausing 500 sessions of which 400 are
+// already paused should write 100 events — otherwise a bulk button becomes a way
+// to flood events_raw with events that change nothing.
+func TestBulkSkipsNoOpsAndEndedSessions(t *testing.T) {
+	r := NewRegistry(lease, 23)
+	views, _, err := r.Create(spec(5), t0)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	cmd(t, r, views[0].ID, CmdPause, at(time.Second)) // already paused
+	cmd(t, r, views[1].ID, CmdEnd, at(time.Second))   // ended
+
+	res, rows, err := r.CommandMatching(Filter{}, CmdPause, at(2*time.Second))
+	if err != nil {
+		t.Fatalf("bulk pause: %v", err)
+	}
+	// 3 still playing get paused; 1 already paused and 1 ended are skipped.
+	if res.Applied != 3 || res.Skipped != 2 {
+		t.Fatalf("result %+v, want 3 applied / 2 skipped", res)
+	}
+	if len(rows) != 3 {
+		t.Errorf("wrote %d rows, want 3 — no-ops must not be written", len(rows))
+	}
+
+	// The ended session stays ended.
+	if v := mustGet(t, r, views[1].ID, at(3*time.Second)); v.Phase != PhaseEnded {
+		t.Errorf("ended session became %s", v.Phase)
+	}
+}
+
+// Bulk over an explicit id list touches only those ids, and reports ids it no
+// longer knows rather than failing the batch.
+func TestCommandManyByID(t *testing.T) {
+	r := NewRegistry(lease, 27)
+	views, _, err := r.Create(spec(4), t0)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	ids := []string{views[0].ID, views[2].ID, "NOT-A-SESSION"}
+
+	res, rows, err := r.CommandMany(ids, CmdPause, at(time.Second))
+	if err != nil {
+		t.Fatalf("bulk: %v", err)
+	}
+	if res.Applied != 2 || res.Unknown != 1 {
+		t.Fatalf("result %+v, want 2 applied / 1 unknown", res)
+	}
+	if len(rows) != 2 {
+		t.Errorf("wrote %d rows, want 2", len(rows))
+	}
+	if _, total := r.List(Filter{Phase: "paused"}, 0, 50, at(2*time.Second)); total != 2 {
+		t.Errorf("%d paused, want 2", total)
+	}
+}
+
+// Silence in bulk still writes nothing — the property that makes it the
+// app-killed case has to survive the bulk path.
+func TestBulkSilenceWritesNothing(t *testing.T) {
+	r := NewRegistry(lease, 29)
+	if _, _, err := r.Create(spec(6), t0); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	res, rows, err := r.CommandMatching(Filter{}, CmdSilence, at(time.Second))
+	if err != nil {
+		t.Fatalf("bulk silence: %v", err)
+	}
+	if res.Applied != 6 {
+		t.Fatalf("applied %d, want 6", res.Applied)
+	}
+	if len(rows) != 0 {
+		t.Fatalf("wrote %d events, want 0", len(rows))
+	}
+	// Every lease runs out and no heartbeat renews it.
+	if st := r.Stats(at(200 * time.Second)); st.Expired != 6 {
+		t.Errorf("expired %d, want 6 (stats %+v)", st.Expired, st)
+	}
+}
+
+func TestBulkRejectsUnknownCommand(t *testing.T) {
+	r := NewRegistry(lease, 31)
+	if _, _, err := r.Create(spec(2), t0); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, _, err := r.CommandMatching(Filter{}, Command("obliterate"), t0); err == nil {
+		t.Error("want an error for an unknown command")
+	}
+}
+
 func TestListPagination(t *testing.T) {
 	r := NewRegistry(lease, 5)
 	if _, _, err := r.Create(spec(120), t0); err != nil {

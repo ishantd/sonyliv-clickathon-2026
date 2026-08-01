@@ -301,19 +301,8 @@ func (r *Registry) Command(id string, cmd Command, now time.Time) (*View, []mode
 
 	batchID := uuid.New()
 	var rows []model.RawEvent
-	add := func(p model.EventPair) {
-		rows = append(rows, s.apply(p, now, r.timeout, batchID, uint32(len(rows))))
-	}
 
 	switch cmd {
-	case CmdPause:
-		add(model.PairPause)
-	case CmdResume:
-		add(model.PairResume)
-	case CmdBackground:
-		add(model.PairBackground)
-	case CmdForeground:
-		add(model.PairForeground)
 	case CmdSilence:
 		s.reconcile(now, r.timeout)
 		s.heartbeating = false
@@ -321,15 +310,132 @@ func (r *Registry) Command(id string, cmd Command, now time.Time) (*View, []mode
 		s.reconcile(now, r.timeout)
 		s.heartbeating = true
 		s.nextTick = now
-	case CmdEnd:
-		if s.ended {
+	default:
+		pair, ok := commandPairs[cmd]
+		if !ok {
+			return nil, nil, fmt.Errorf("unknown command %q", cmd)
+		}
+		if cmd == CmdEnd && s.ended {
 			return r.view(s, now), nil, nil
 		}
-		add(model.PairSessionEnd)
-	default:
-		return nil, nil, fmt.Errorf("unknown command %q", cmd)
+		rows = append(rows, s.apply(pair, now, r.timeout, batchID, 0))
 	}
 	return r.view(s, now), rows, nil
+}
+
+// BulkResult reports what a bulk command did.
+//
+// Counted rather than errored: a bulk pause over a filter will always meet
+// sessions the command does not apply to, and failing the request because 3 of 500
+// were already paused would make the feature unusable.
+type BulkResult struct {
+	Applied int `json:"applied"`
+	// Skipped is sessions the command was a no-op for — already paused, already
+	// ended. Not an error, and deliberately not written: pausing 500 sessions of
+	// which 400 are already paused should write 100 events, not 500.
+	Skipped int `json:"skipped"`
+	// Unknown is ids that are no longer in the registry, which happens when a
+	// selection is acted on after a sweep removed something.
+	Unknown int `json:"unknown"`
+}
+
+// needsCommand reports whether cmd would actually change this session.
+//
+// Only consulted for bulk. A single-session command from the detail page is an
+// explicit act on one session and writes its event either way; a bulk command is a
+// sweep over a filter, where the no-ops are incidental.
+func needsCommand(s *Session, cmd Command) bool {
+	if s.ended {
+		return false
+	}
+	switch cmd {
+	case CmdPause:
+		return s.playing
+	case CmdResume:
+		return !s.playing
+	case CmdBackground:
+		return s.foreground
+	case CmdForeground:
+		return !s.foreground
+	case CmdSilence:
+		return s.heartbeating
+	case CmdUnsilence:
+		return !s.heartbeating
+	case CmdEnd:
+		return true
+	default:
+		return false
+	}
+}
+
+// applyBulk runs cmd over every session the chooser admits.
+//
+// One lock acquisition for the whole batch, and one batch of rows returned to the
+// caller to write outside the lock. Doing this as N calls to Command would take and
+// release the mutex N times while the sweep is trying to run.
+func (r *Registry) applyBulk(cmd Command, now time.Time,
+	chooser func(*Session) (admit, known bool), order []string) (BulkResult, []model.RawEvent, error) {
+
+	if _, ok := commandPairs[cmd]; !ok && cmd != CmdSilence && cmd != CmdUnsilence {
+		return BulkResult{}, nil, fmt.Errorf("unknown command %q", cmd)
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	batchID := uuid.New()
+	var res BulkResult
+	var rows []model.RawEvent
+
+	for _, id := range order {
+		s, ok := r.sessions[id]
+		if !ok {
+			res.Unknown++
+			continue
+		}
+		admit, _ := chooser(s)
+		if !admit {
+			continue
+		}
+		if !needsCommand(s, cmd) {
+			res.Skipped++
+			continue
+		}
+		switch cmd {
+		case CmdSilence:
+			s.reconcile(now, r.timeout)
+			s.heartbeating = false
+		case CmdUnsilence:
+			s.reconcile(now, r.timeout)
+			s.heartbeating = true
+			s.nextTick = now
+		default:
+			rows = append(rows, s.apply(commandPairs[cmd], now, r.timeout, batchID, uint32(len(rows))))
+		}
+		res.Applied++
+	}
+	return res, rows, nil
+}
+
+// CommandMany applies cmd to an explicit set of ids.
+func (r *Registry) CommandMany(ids []string, cmd Command, now time.Time) (BulkResult, []model.RawEvent, error) {
+	return r.applyBulk(cmd, now, func(*Session) (bool, bool) { return true, true }, ids)
+}
+
+// CommandMatching applies cmd to every session the filter admits.
+//
+// This is what "select all" posts. The filter is evaluated server-side against the
+// live registry rather than the client sending 2,000 ids — the page only ever holds
+// 50 of them, and a client-built list would also be stale by the time it arrived.
+func (r *Registry) CommandMatching(f Filter, cmd Command, now time.Time) (BulkResult, []model.RawEvent, error) {
+	// r.order is read under the lock applyBulk takes, so copy the ids first.
+	r.mu.Lock()
+	order := append([]string(nil), r.order...)
+	r.mu.Unlock()
+
+	return r.applyBulk(cmd, now, func(s *Session) (bool, bool) {
+		return r.selects(s, f, now), true
+	}, order)
 }
 
 // Sweep advances the clock: it closes lease-expired intervals and emits the

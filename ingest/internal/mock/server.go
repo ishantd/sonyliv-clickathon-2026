@@ -138,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/fleet/sessions", s.handleFleetList)
 	api.HandleFunc("GET /api/fleet/sessions/{id}", s.handleFleetGet)
 	api.HandleFunc("POST /api/fleet/sessions/{id}/command", s.handleFleetCommand)
+	api.HandleFunc("POST /api/fleet/bulk", s.handleFleetBulk)
 	api.HandleFunc("POST /api/fleet/clear-ended", s.handleFleetClearEnded)
 	api.HandleFunc("GET /api/fleet/stats", s.handleFleetStats)
 	api.HandleFunc("GET /api/fleet/dimensions", s.handleFleetDimensions)

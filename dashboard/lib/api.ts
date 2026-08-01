@@ -2,6 +2,7 @@ import type {
   Action,
   ContentInfo,
   CurveResponse,
+  FleetBulkResult,
   FleetCommand,
   FleetCurveResponse,
   FleetDimensions,
@@ -192,6 +193,23 @@ export const api = {
       `/api/fleet/sessions/${id}/command`,
       { method: "POST", body: JSON.stringify({ command }) },
     ),
+
+  /**
+   * One command over many sessions.
+   *
+   * `all` sends the filter instead of ids, so "select all matching" acts on every
+   * session the server can see rather than the 50 on this page — and cannot be
+   * stale by the time it arrives.
+   */
+  fleetBulk: (
+    command: FleetCommand,
+    target: { ids: string[] } | { all: true },
+    filter: FleetFilter,
+  ) =>
+    request<FleetBulkResult>(`/api/fleet/bulk?${filterQuery(filter)}`, {
+      method: "POST",
+      body: JSON.stringify({ command, ...target }),
+    }),
 
   fleetClearEnded: () =>
     request<{ removed: number }>("/api/fleet/clear-ended", { method: "POST" }),

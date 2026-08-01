@@ -49,6 +49,19 @@ const (
 	CmdEnd Command = "end"
 )
 
+// commandPairs maps a command to the event it writes.
+//
+// CmdSilence and CmdUnsilence are absent, and that absence is the definition:
+// they write nothing. A lookup miss is how the code distinguishes them, so adding
+// an entry here would silently make the app-killed case observable to the pipeline.
+var commandPairs = map[Command]model.EventPair{
+	CmdPause:      model.PairPause,
+	CmdResume:     model.PairResume,
+	CmdBackground: model.PairBackground,
+	CmdForeground: model.PairForeground,
+	CmdEnd:        model.PairSessionEnd,
+}
+
 // Phase is the coarse lifecycle label shown in the listing.
 type Phase string
 

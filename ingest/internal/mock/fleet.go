@@ -182,6 +182,62 @@ func (s *Server) handleFleetCommand(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+type fleetBulkReq struct {
+	Command fleet.Command `json:"command"`
+	// IDs is an explicit selection. Ignored when All is set.
+	IDs []string `json:"ids"`
+	// All applies the command to every session matching the query-string filter,
+	// including ones the client has never seen. That is what "select all matching"
+	// means when the page holds 50 of 2,000 rows — and evaluating the filter here
+	// rather than shipping 2,000 ids also means the set cannot be stale on arrival.
+	All bool `json:"all"`
+}
+
+// handleFleetBulk applies one command to many sessions.
+//
+// The filter comes from the query string, through the same fleetFilter helper the
+// listing uses, so "respects the current filter" is literally the same parse rather
+// than a second one that could drift.
+func (s *Server) handleFleetBulk(w http.ResponseWriter, r *http.Request) {
+	var req fleetBulkReq
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if !req.All && len(req.IDs) == 0 {
+		writeErr(w, http.StatusBadRequest,
+			errors.New(`nothing selected: pass "ids" or "all": true`))
+		return
+	}
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	var (
+		res  fleet.BulkResult
+		rows []model.RawEvent
+		err  error
+	)
+	if req.All {
+		res, rows, err = s.fleet.CommandMatching(fleetFilter(r), req.Command, now)
+	} else {
+		res, rows, err = s.fleet.CommandMany(req.IDs, req.Command, now)
+	}
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := s.fleet.Emit(r.Context(), rows); err != nil {
+		writeErr(w, http.StatusServiceUnavailable, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"applied": res.Applied,
+		"skipped": res.Skipped,
+		"unknown": res.Unknown,
+		"wrote":   len(rows),
+		"stats":   s.fleet.Stats(now),
+	})
+}
+
 func (s *Server) handleFleetStats(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"stats":      s.fleet.Stats(time.Now().UTC()),
