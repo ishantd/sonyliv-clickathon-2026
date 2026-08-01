@@ -149,34 +149,64 @@ Three of those panels are worth knowing how to read:
 - **`conflicting_keys`** is not an error. It counts event keys whose copies
   disagree on payload and were therefore resolved by the documented
   last-write-wins rule rather than being unambiguous. The supplied extract has
-  exactly one.
+  exactly one. It is read from `events_raw` and cannot be read from
+  `events_clean` — RMT deletes the losing copy, so the clean layer reports zero
+  once a merge has run.
 
-> **Numbers below predate the raw/clean split and have not been re-measured.**
-> They were taken against the previous single-table schema, where normalization
-> lived in `MATERIALIZED` columns on the landing table. Row counts, duplicate
-> rate and join coverage should carry over unchanged; the **storage figures will
-> not** — the pipeline now keeps a second, normalized copy of every event, and
-> the landing table lost its normalized columns. Re-run `verify` against the
-> service and replace this block before quoting any of it.
+Measured on ClickHouse Cloud 26.2 (`sonyliv`, aws ap-south-1, 2 replicas),
+supplied extract, post-split schema:
 
 ```
 events 905,558 · sessions 10,866 · users 9,618
 range  2026-07-14 15:43:58.144 .. 2026-07-26 11:30:04.847 UTC
+source csv:ch-hackathon-raw-data.csv
 
-duplicate rows      4,209 (0.4648%)
+landed rows         905,558     events_raw
+clean rows          901,348     events_clean, after merges
+dedup rows          901,348     events_dedup  (semantic-key excess 0)
+collapsed by merges   4,210     = 4,209 exact duplicates + 1 conflicting payload
+
+duplicate rows      4,209 (0.4648%)   measured on events_raw
+conflicting keys    1 key / 2 rows / 2 distinct payloads, in events_raw
 unjoinable content  0 of 3,357 distinct ids
+rejected rows       0
 subtitle values     11 raw -> 5 normalized
 audio values        41 raw -> 17 normalized
 
-events_raw       4.78 MiB on disk / 175.03 MiB uncompressed (36.6x)
-                    16 parts, 7 partitions, max 4 per partition, all Compact
-load                19 batches, 2.76 s, insert p50 538 ms / p99 1.50 s, 0 retries
-replay              same file again: 905,558 -> 905,558, 0 rows added
+signal      liveness 780,754 (86.6%)  resume 31,590  pause 27,202
+            background 14,616  foreground 14,291  session_end 10,870
+            session_start 10,866  play 10,866  error 293
+
+events_raw       5.20 MiB on disk / 197.09 MiB uncompressed (37.9x, 6.02 B/row)
+                    4 parts, 1 partition  (monthly, lifecycle only)
+events_clean     5.81 MiB on disk / 197.44 MiB uncompressed (34.0x, 6.76 B/row)
+                    16 parts, 7 partitions  (daily by session start)
+both tables     11.01 MiB on disk / 394.53 MiB uncompressed (35.8x)
+dirty_sessions  701.78 KiB, 10,943 rows covering 10,866 distinct sessions
+content_dim     221.02 KiB, 33,464 rows
+
+load                19 batches, 0 failed, 0 retries, avg 714 ms / max 1,090 ms
 ```
 
-The identical run on single-node Docker gives the same row counts and the same
-duplicate rate at 25.7x, so the correctness figures are engine-independent and
-only the storage numbers move.
+**The split roughly doubles event storage** — 11.01 MiB against 4.78 MiB for the
+previous single table — because every event is now kept twice, verbatim and
+normalized. That is the price of the landing zone being evidence, and at this
+scale it is 11 MiB. `events_clean` costs slightly more per row than `events_raw`
+despite carrying more columns and 4,210 fewer rows: it holds both the hex ids
+*and* the `UInt64` keys derived from them, which is what makes the touched-session
+read a point lookup on an integer.
+
+`events_raw` sitting in **1 partition** and `events_clean` in **7** is the
+partitioning decision showing up in the data: monthly on event time for
+lifecycle, daily on session start so a session never straddles a partition and
+`ReplacingMergeTree` can collapse completely. `semantic_key_excess = 0` confirms
+it did.
+
+The conflicting-payload row is the split justifying itself. It is **invisible in
+`events_clean`** — RMT deleted the losing copy — and **fully recoverable from
+`events_raw`**, which still holds both rows and both payloads. Had the landing
+table been a `ReplacingMergeTree`, that row would be unrecoverable and the
+duplicate rate unmeasurable.
 
 **Per-column compression is empty on Cloud, and that is not a fault.**
 `system.parts_columns` stores per-column byte counts only for Wide parts; a
