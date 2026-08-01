@@ -117,14 +117,24 @@ COMMENT 'Live concurrency at 10-second grain. Best-effort: rebuilt continuously 
 --    5  platform + content                 named by the problem statement
 --    8  video_type                         exact peak per VOD/live
 --    9  platform + video_type
---   12  content + video_type
---   15  platform + country + content + video_type
 --   16  app_version                        exact peak per build
 --   32  category                           exact peak per catalogue category
 --   63  all six at once (full grain)       arbitrary filter combinations
 --
--- 0/1/2/3/4/5/8/9/12/15 are the ten masks solution/policy.yaml:118-134 specifies;
--- 16, 32 and 63 extend it with app_version, category and the full grain.
+-- 0/1/2/3/4/5/8/9 are policy masks (solution/policy.yaml:118-134); 16, 32 and 63
+-- extend it with app_version, category and the full grain.
+--
+-- The policy's masks 12 and 15 are deliberately NOT materialized. A mask adds nothing
+-- when the dimensions it introduces are functionally determined by the ones it already
+-- has, and content_dim maps each content_id to exactly one video_type — so mask 12
+-- cannot differ from mask 4, nor mask 15 from mask 5. Measured identical across 79,770
+-- and 103,007 rows respectively, together 36.6% of the hot day for zero information.
+-- That is a property of the catalogue, not of this extract, so it holds on any day.
+--
+-- Masks 2 and 3 are redundant today for the same reason (country is 'india'
+-- throughout, verified identical to masks 0 and 1) but are kept: country is a business
+-- dimension the problem statement names, the unseen day may carry more than one, and
+-- they cost 0.58% of the day.
 --
 -- The combinations are the point, not padding. An exact peak has to be computed AT
 -- the grouping it is reported for: measured on the hot hour, ANDROID_PHONE peaks at
@@ -156,8 +166,11 @@ CREATE TABLE IF NOT EXISTS {{db}}.serving_concurrency_minute
     minute_start        DateTime('UTC')
         COMMENT 'Left edge of a 1-minute bucket, half-open [minute_start, +60s). Bucketed on absolute time, so an interval crossing midnight lands in both days without a clipping step',
 
+    grouping            LowCardinality(String)
+        COMMENT 'Readable 1:1 label for dim_mask. dim_mask is a bit field: right for computing, wrong in front of a business user, so nothing user-facing displays it. Carries a set index rather than leading the sort key — see the note below',
+
     dim_mask            UInt16
-        COMMENT 'platform=1, country=2, content_id=4, video_type=8, app_version=16, category=32. Materialized: 0,1,2,3,4,5,8,9,12,15,16,32,63 — the ten policy masks plus app_version, category and full grain',
+        COMMENT 'platform=1, country=2, content_id=4, video_type=8, app_version=16, category=32. Materialized: 0,1,2,3,4,5,8,9,16,32,63. Policy masks 12 and 15 are omitted as provably redundant — video_type is functionally determined by content_id',
 
     content_id          Int64,
     platform            LowCardinality(String) COMMENT 'Empty string when not selected by dim_mask',
@@ -177,12 +190,31 @@ CREATE TABLE IF NOT EXISTS {{db}}.serving_concurrency_minute
 
     sessions_active     UInt32 COMMENT 'Distinct sessions contributing any active time to this minute',
     sessions_started    UInt32 COMMENT 'Active intervals opening inside this minute',
-    sessions_ended      UInt32 COMMENT 'Active intervals closing inside this minute'
+    sessions_ended      UInt32 COMMENT 'Active intervals closing inside this minute',
+
+    -- A dashboard selector filters on the readable label, not on the bit field, and a
+    -- predicate on a non-key column normally reads every granule. This one does not,
+    -- because the rows are physically clustered by dim_mask and grouping is 1:1 with
+    -- it: every granule holds exactly one grouping value, so the set index resolves to
+    -- the same granules a dim_mask predicate would. Leading the sort key with grouping
+    -- would be equivalent, but changing ORDER BY needs DROP TABLE, which the service
+    -- user deliberately does not hold.
+    INDEX idx_grouping grouping TYPE set(16) GRANULARITY 1
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(minute_start)
 ORDER BY (dim_mask, minute_start, platform, video_type, category, app_version, content_id)
 COMMENT 'Corrected concurrency at 1-minute grain, published on a lag so the late-arrival window has closed. Rebuilt a whole UTC day at a time via REPLACE PARTITION. Read via serving_minute_current.';
+
+
+-- CREATE TABLE IF NOT EXISTS is a no-op against a database that already has these
+-- tables, so a new column would never reach one. These make `schema` converge, the
+-- same way 002 corrects its dedup settings. Metadata-only and idempotent.
+ALTER TABLE {{db}}.serving_concurrency_minute
+    ADD COLUMN IF NOT EXISTS grouping LowCardinality(String) AFTER minute_start;
+
+ALTER TABLE {{db}}.serving_concurrency_minute
+    ADD INDEX IF NOT EXISTS idx_grouping grouping TYPE set(16) GRANULARITY 1;
 
 
 -- Staging table for the atomic day swap. Structure and engine must match
@@ -194,6 +226,13 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(minute_start)
 ORDER BY (dim_mask, minute_start, platform, video_type, category, app_version, content_id)
 COMMENT 'Scratch space for one day of serving_concurrency_minute, swapped in with REPLACE PARTITION. Never read directly.';
+
+-- REPLACE PARTITION requires identical structure, so staging needs the column too.
+ALTER TABLE {{db}}.serving_concurrency_minute_staging
+    ADD COLUMN IF NOT EXISTS grouping LowCardinality(String) AFTER minute_start;
+
+ALTER TABLE {{db}}.serving_concurrency_minute_staging
+    ADD INDEX IF NOT EXISTS idx_grouping grouping TYPE set(16) GRANULARITY 1;
 
 
 -- -----------------------------------------------------------------------------
@@ -284,6 +323,13 @@ WHERE dim_mask = 4;
 CREATE OR REPLACE VIEW {{db}}.serving_minute_current AS
 SELECT
     minute_start,
+    grouping,
+    -- The dimension VALUES this row is for, as one readable label: 'IPHONE · live',
+    -- 'ANDROID_PHONE · Some Title'. Only the dimensions the row's grouping selects are
+    -- populated, so dropping the blanks yields exactly the right label without the
+    -- caller needing to know which bits are set. Ungrouped rows have no dimensions at
+    -- all and read 'all'.
+    if(empty(dim_label), 'all', dim_label) AS dim_values,
     dim_mask,
     content_id,
     if(content_id = 0, '', dictGetOrDefault({{db}}.content_dict, 'title', tuple(content_id), '')) AS title,
@@ -301,4 +347,18 @@ SELECT
     sessions_active,
     sessions_started,
     sessions_ended
-FROM {{db}}.serving_concurrency_minute;
+FROM
+(
+    SELECT
+        *,
+        arrayStringConcat(arrayFilter(x -> x != '', [
+            platform,
+            country,
+            video_type,
+            category,
+            app_version,
+            if(content_id = 0, '',
+               dictGetOrDefault({{db}}.content_dict, 'title', tuple(content_id), toString(content_id)))
+        ]), ' · ') AS dim_label
+    FROM {{db}}.serving_concurrency_minute
+);

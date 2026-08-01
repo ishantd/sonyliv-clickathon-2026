@@ -88,7 +88,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, platform AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, platform AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
       }
     },
     {
@@ -104,7 +104,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT platform AS group_key, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY group_key ORDER BY viewer_hours DESC"
+        "sqlTemplate": "SELECT platform AS group_key, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY group_key ORDER BY viewer_hours DESC"
       }
     },
     {
@@ -120,7 +120,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, video_type AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, video_type AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
       }
     },
     {
@@ -136,7 +136,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT video_type AS group_key, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY group_key ORDER BY viewer_hours DESC"
+        "sqlTemplate": "SELECT video_type AS group_key, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY group_key ORDER BY viewer_hours DESC"
       }
     },
     {
@@ -152,7 +152,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, app_version AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, app_version AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
       }
     },
     {
@@ -168,7 +168,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT app_version AS group_key, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY group_key ORDER BY viewer_hours DESC LIMIT 30"
+        "sqlTemplate": "SELECT app_version AS group_key, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY group_key ORDER BY viewer_hours DESC LIMIT 30"
       }
     },
     {
@@ -184,7 +184,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, if(category IN (SELECT category FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY category ORDER BY sum(active_ms) DESC LIMIT 10), category, 'other') AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, if(category IN (SELECT category FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY category ORDER BY sum(active_ms) DESC LIMIT 10), category, 'other') AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
       }
     },
     {
@@ -200,7 +200,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT category AS group_key, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY group_key ORDER BY viewer_hours DESC LIMIT 30"
+        "sqlTemplate": "SELECT category AS group_key, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY group_key ORDER BY viewer_hours DESC LIMIT 30"
       }
     },
     {
@@ -216,7 +216,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, if(content_id IN (SELECT content_id FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY content_id ORDER BY sum(active_ms) DESC LIMIT 10), title, 'other') AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
+        "sqlTemplate": "SELECT $__timeInterval(minute_start) AS ts, if(content_id IN (SELECT content_id FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY content_id ORDER BY sum(active_ms) DESC LIMIT 10), title, 'other') AS group_key, round(sum(active_ms) / ($__interval_s * 1000.0), 2) AS avg_concurrent FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters GROUP BY ts, group_key ORDER BY ts"
       }
     },
     {
@@ -232,7 +232,7 @@
         "configType": "sql",
         "connectionId": "__CONNECTION_ID__",
         "sourceId": "__SOURCE_sonyliv-minute__",
-        "sqlTemplate": "SELECT title AS group_key, video_type, category, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE dim_mask = 63 AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters AND title != '' GROUP BY group_key, video_type, category ORDER BY viewer_hours DESC LIMIT 30"
+        "sqlTemplate": "SELECT title AS group_key, video_type, category, round(sum(active_ms) / 3600000.0, 2) AS viewer_hours, round(100.0 * sum(active_ms) / nullIf((SELECT sum(active_ms) FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters), 0), 2) AS share_pct, sum(sessions_started) AS intervals_started FROM __DATABASE__.serving_minute_current WHERE grouping = 'all dimensions' AND ($__timeFilter(minute_start) AND minute_start < $__toTime) AND $__filters AND title != '' GROUP BY group_key, video_type, category ORDER BY viewer_hours DESC LIMIT 30"
       }
     },
     {

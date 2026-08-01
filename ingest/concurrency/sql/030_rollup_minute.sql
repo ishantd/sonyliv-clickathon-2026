@@ -11,7 +11,7 @@
 -- reasoning is documented there rather than repeated here. Three things differ:
 --
 --   * 60-second buckets instead of 10;
---   * thirteen dimension masks instead of two, so every grouping the benchmark
+--   * eleven dimension masks instead of two, so every grouping the benchmark
 --     asks about has an exact peak precomputed AT that grouping, and mask 63
 --     carries the full grain that arbitrary dashboard filters compose against;
 --   * session counts, which the live layer has no use for.
@@ -46,7 +46,7 @@
 -- =============================================================================
 
 INSERT INTO {{db}}.serving_concurrency_minute_staging
-    (minute_start, dim_mask, content_id, platform, country, app_version, video_type, category,
+    (minute_start, grouping, dim_mask, content_id, platform, country, app_version, video_type, category,
      minute_peak, ending_concurrency, active_ms, sessions_active, sessions_started, sessions_ended)
 WITH
     toDateTime64(concat({service_date:String}, ' 00:00:00.000'), 3, 'UTC') AS win_start,
@@ -107,12 +107,28 @@ WITH
             opened_here,
             closed_here
         FROM bounds
-        -- The ten masks solution/policy.yaml:118-134 specifies, plus three
-        -- extensions. Only the fan-out list changes to add a mask: the blanking
-        -- above is driven by bitAnd, so it already handles any bit combination.
+        -- Only the fan-out list changes to add or drop a mask: the blanking above is
+        -- driven by bitAnd, so it already handles any bit combination.
         --
-        --   policy    0  1  2  3  4  5  8  9  12  15
-        --   extended  16 (app_version)  32 (category)  63 (full grain)
+        --   policy masks kept     0  1  2  3  4  5  8  9
+        --   policy masks dropped  12  15   (see below)
+        --   extensions            16 (app_version)  32 (category)  63 (full grain)
+        --
+        -- A MASK IS REDUNDANT WHEN THE DIMENSIONS IT ADDS ARE FUNCTIONALLY DETERMINED
+        -- BY THE ONES IT ALREADY HAS. content_dim maps each content_id to exactly one
+        -- video_type, so adding the video_type bit to a mask that already carries
+        -- content cannot split a single group. Measured: mask 12 matched mask 4 on all
+        -- 79,770 comparable rows and mask 15 matched mask 5 on all 103,007, to the
+        -- unit. Together they were 36.6% of the hot day's rows carrying no
+        -- information, so they are gone. This holds by construction of the catalogue,
+        -- not by accident of this extract, so it will hold on the unseen day too.
+        --
+        -- Masks 2 and 3 are redundant the same way TODAY, because country has a single
+        -- value ('india') in this extract — verified identical to masks 0 and 1 across
+        -- 3,816 and 6,163 rows. They are kept anyway: country is one of the business
+        -- dimensions the problem statement names, the unseen day may carry more than
+        -- one, and at 2,305 rows they cost 0.58% of the day. Cheap insurance against a
+        -- benchmark question we would otherwise be unable to answer exactly.
         --
         -- The COMBINATIONS are why this list is not just the single bits. The
         -- problem statement calls it out directly: "a dimension like platform and a
@@ -124,8 +140,7 @@ WITH
         -- a maximum of finer-grain peaks is not the peak of the coarser grouping.
         ARRAY JOIN [toUInt16(0),  toUInt16(1),  toUInt16(2),  toUInt16(3),
                     toUInt16(4),  toUInt16(5),  toUInt16(8),  toUInt16(9),
-                    toUInt16(12), toUInt16(15), toUInt16(16), toUInt16(32),
-                    toUInt16(63)] AS m
+                    toUInt16(16), toUInt16(32), toUInt16(63)] AS m
         WHERE e_ms > s_ms
     ),
 
@@ -224,6 +239,23 @@ WITH
 
 SELECT
     toDateTime(intDiv(p.bkt_ms, 1000), 'UTC') AS minute_start,
+    -- Readable label for the mask. Kept in lockstep with the ARRAY JOIN list above;
+    -- a mask added there without a label here lands as 'mask <n>' rather than
+    -- silently blank, so the omission is visible on the dashboard.
+    multiIf(p.dim_mask = 0,  'total',
+            p.dim_mask = 1,  'platform',
+            p.dim_mask = 2,  'country',
+            p.dim_mask = 3,  'platform + country',
+            p.dim_mask = 4,  'content',
+            p.dim_mask = 5,  'platform + content',
+            p.dim_mask = 8,  'video type',
+            p.dim_mask = 9,  'platform + video type',
+            p.dim_mask = 12, 'content + video type',
+            p.dim_mask = 15, 'platform + country + content + video type',
+            p.dim_mask = 16, 'app version',
+            p.dim_mask = 32, 'category',
+            p.dim_mask = 63, 'all dimensions',
+            concat('mask ', toString(p.dim_mask))) AS grouping,
     p.dim_mask,
     p.g_content     AS content_id,
     p.g_platform    AS platform,
