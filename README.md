@@ -14,8 +14,15 @@ ClickHouse native connector that loads the two supplied CSVs, plus an event
 generator that drives a synthetic stream at a target concurrency through the same
 write path. Design record and measurements in
 [`ingest/ARCHITECTURE.md`](ingest/ARCHITECTURE.md). Verified end to end against
-the supplied extract: 905,558 events, 0 rejected, 0 unjoinable content ids,
-26.6x compression, and a byte-identical replay that adds no rows.
+the supplied extract: 905,558 events, 0 rejected, 0 unjoinable content ids, and a
+byte-identical replay that adds no rows.
+
+Events land in two tables: `events_raw` keeps every source row verbatim and is
+never deduplicated in place, so the duplicate rate stays measurable and a
+normalization rule stays correctable; `events_clean` is a
+`ReplacingMergeTree` derivation carrying the normalized values, read through an
+`argMax` view that is correct whether or not a merge has run. Storage figures
+predate that split and are being re-measured.
 
 The independent evidence-backed ClickHouse design, executable SQL,
 semantic policy, and embedded verification are in [`solution/`](solution/README.md).

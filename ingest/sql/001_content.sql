@@ -1,8 +1,10 @@
 -- =============================================================================
 -- 001_content.sql — content dimension + enrichment dictionary
 --
--- Database: default (per project decision; every object is `sl_`-prefixed so it
--- coexists safely with anything else living in `default`).
+-- Object names are unprefixed (`content_dim`, not `sl_content_dim`), so this
+-- schema expects a dedicated database. Set CLICKHOUSE_DATABASE=sonyliv (or
+-- similar) rather than loading into `default`, where `events_raw` would be an
+-- inviting name to collide with.
 -- All timestamps are UTC and millisecond-precise.
 -- =============================================================================
 
@@ -14,6 +16,11 @@
 -- [official: insert-mutation-avoid-update — replacement semantics with a
 --  version column, never ALTER UPDATE]
 --
+-- This is the one place in the schema where RMT is unambiguously right: a
+-- mutable dimension with a natural monotonic version and no audit requirement.
+-- `events_raw` is the opposite on all three counts and stays a plain MergeTree;
+-- see the header of 002_events_raw.sql.
+--
 -- content_id is Int64, not Int32:
 --   * the supplied catalogue contains 18446744072721897294, which is
 --     -987654322 stored as an unsigned 64-bit value, so the domain is signed;
@@ -23,7 +30,7 @@
 -- 33K-row dimension is free, and on the event table it compresses away.
 -- [derived: schema-types-minimize-bitwidth says smallest type that FITS —
 --  the range that must fit is the source domain, not one sample of it]
-CREATE TABLE IF NOT EXISTS {{db}}.sl_content_dim
+CREATE TABLE IF NOT EXISTS {{db}}.content_dim
 (
     content_id      Int64,
     title           String,
@@ -43,15 +50,15 @@ SETTINGS
     --
     -- The replicated_* pair is the same guarantee for a Replicated or
     -- SharedMergeTree, which is what ClickHouse Cloud creates from this DDL.
-    -- Only the engine decides which pair is read; see sl_raw_events for why
+    -- Only the engine decides which pair is read; see events_raw for why
     -- setting just the first one is a trap.
     non_replicated_deduplication_window = 100,
     replicated_deduplication_window = 100,
     replicated_deduplication_window_seconds = 2592000
 COMMENT 'Content catalogue. 33,464 rows in the supplied extract, content_id unique.';
 
--- Converge a database that already has the table; see sl_raw_events.
-ALTER TABLE {{db}}.sl_content_dim
+-- Converge a database that already has the table; see events_raw.
+ALTER TABLE {{db}}.content_dim
     MODIFY SETTING
         non_replicated_deduplication_window = 100,
         replicated_deduplication_window = 100,
@@ -60,13 +67,16 @@ ALTER TABLE {{db}}.sl_content_dim
 -- Deduplicated read view. Replacement by background merge is eventual, so the
 -- dictionary source must not assume physical replacement has happened yet.
 -- [official: insert-optimize-avoid-final — resolve with argMax, not FINAL]
-CREATE OR REPLACE VIEW {{db}}.sl_content_current AS
+--
+-- Same principle as `events_dedup` in 003_events_clean.sql: the engine may
+-- collapse, the read must not depend on whether it has.
+CREATE OR REPLACE VIEW {{db}}.content_current AS
 SELECT
     content_id,
     argMax(title,      source_version) AS title,
     argMax(video_type, source_version) AS video_type,
     argMax(category,   source_version) AS category
-FROM {{db}}.sl_content_dim
+FROM {{db}}.content_dim
 GROUP BY content_id;
 
 -- Enrichment dictionary.
@@ -88,8 +98,8 @@ GROUP BY content_id;
 -- system.dictionaries; if that matters in your environment, replace the USER /
 -- PASSWORD clauses with a named collection:
 --
---   CREATE NAMED COLLECTION sl_ch AS user = '...', password = '...';
---   SOURCE(CLICKHOUSE(NAME sl_ch DB '{{db}}' TABLE 'sl_content_current'))
+--   CREATE NAMED COLLECTION sonyliv_ch AS user = '...', password = '...';
+--   SOURCE(CLICKHOUSE(NAME sonyliv_ch DB '{{db}}' TABLE 'content_current'))
 --
 -- COMPLEX_KEY_HASHED, not HASHED, for one specific reason. A simple-key
 -- dictionary key is always UInt64: ClickHouse silently coerces the declared
@@ -104,7 +114,7 @@ GROUP BY content_id;
 --
 -- OR REPLACE rather than IF NOT EXISTS so this correction reaches a database
 -- that already has the old definition. Rebuilding 33K rows is cheap.
-CREATE OR REPLACE DICTIONARY {{db}}.sl_content_dict
+CREATE OR REPLACE DICTIONARY {{db}}.content_dict
 (
     content_id  Int64,
     title       String            DEFAULT '',
@@ -114,7 +124,7 @@ CREATE OR REPLACE DICTIONARY {{db}}.sl_content_dict
 PRIMARY KEY content_id
 SOURCE(CLICKHOUSE(
     DB       '{{db}}'
-    TABLE    'sl_content_current'
+    TABLE    'content_current'
     USER     '{{ch_user}}'
     PASSWORD '{{ch_password}}'
 ))

@@ -418,26 +418,26 @@ func (g *Generator) runEnd(s *session) {
 // newEvent builds an event with the session's steady-state dimensions.
 func (g *Generator) newEvent(s *session, eventType, event string, at time.Time) model.RawEvent {
 	return model.RawEvent{
-		VideoSessionID:   s.id,
-		UserID:           s.userID,
-		ContentID:        s.contentID,
-		EventType:        eventType,
-		Event:            event,
-		EventTime:        at,
-		SessionStartTime: s.startTime,
-		Platform:         s.platform,
-		AppVersion:       s.appVer,
-		Country:          "india",
-		AudioLanguage:    s.audioLang,
-		SubtitleLanguage: s.subLang,
-		PlayerVersion:    s.playerVer,
+		VideoSessionID:    s.id,
+		UserID:            s.userID,
+		ContentID:         s.contentID,
+		EventType:         eventType,
+		Event:             event,
+		EventTimestamp:    at,
+		SessionStartEpoch: s.startTime,
+		Platform:          s.platform,
+		AppVersion:        s.appVer,
+		Country:           "india",
+		AudioLanguage:     s.audioLang,
+		SubtitleLanguage:  s.subLang,
+		PlayerVersion:     s.playerVer,
 	}
 }
 
 // emit queues an event for delivery, applying lateness and duplication.
 func (g *Generator) emit(ev model.RawEvent) {
 
-	arrival := ev.EventTime
+	arrival := ev.EventTimestamp
 	if g.cfg.LateFraction > 0 && g.rnd.Float64() < g.cfg.LateFraction {
 		// Right-skewed delay: most late events are seconds late, a few are
 		// minutes late, matching the observed within-session lateness profile.

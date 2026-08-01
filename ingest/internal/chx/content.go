@@ -23,7 +23,7 @@ func (c *Client) InsertContent(ctx context.Context, rows []model.Content, source
 	settings := clickhouse.Settings{"insert_deduplication_token": dedupToken}
 	bctx := clickhouse.Context(ctx, clickhouse.WithSettings(settings))
 
-	stmt := insertStatement(c.Database, "sl_content_dim", model.ContentInsertColumns)
+	stmt := insertStatement(c.Database, "content_dim", model.ContentInsertColumns)
 	batch, err := c.Conn.PrepareBatch(bctx, stmt)
 	if err != nil {
 		return fmt.Errorf("prepare content batch: %w", err)
@@ -47,7 +47,7 @@ func (c *Client) InsertContent(ctx context.Context, rows []model.Content, source
 // values: rows denormalized from the dictionary must be re-derived by
 // re-dirtying the affected sessions.
 func (c *Client) ReloadContentDictionary(ctx context.Context) error {
-	q := fmt.Sprintf("SYSTEM RELOAD DICTIONARY %s.sl_content_dict", c.Database)
+	q := fmt.Sprintf("SYSTEM RELOAD DICTIONARY %s.content_dict", c.Database)
 	if err := c.Conn.Exec(ctx, q); err != nil {
 		return fmt.Errorf("reload content dictionary: %w", err)
 	}
@@ -68,7 +68,7 @@ type ContentRef struct {
 // exactly the enrichment bug it should be catching.
 func (c *Client) SampleContent(ctx context.Context, limit int) ([]ContentRef, error) {
 	q := fmt.Sprintf(
-		"SELECT content_id, video_type FROM %s.sl_content_current ORDER BY content_id LIMIT %d",
+		"SELECT content_id, video_type FROM %s.content_current ORDER BY content_id LIMIT %d",
 		c.Database, limit)
 
 	rowsIter, err := c.Conn.Query(ctx, q)

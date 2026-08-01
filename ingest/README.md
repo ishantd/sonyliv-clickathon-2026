@@ -54,8 +54,8 @@ session defaults this pipeline overrides:
 
 deduplication settings in place (blank = table not created yet):
   table              engine               non_repl   repl       repl_seconds
-  sl_raw_events      SharedMergeTree      1000       1000       2592000
-  sl_content_dim     SharedReplacingMerge 100        100        2592000
+  events_raw         SharedMergeTree      1000       1000       2592000
+  content_dim        SharedReplacingMerge 100        100        2592000
 
 no problems found — safe to run `sonyliv-ingest schema`
 ```
@@ -80,7 +80,9 @@ pipeline that already sends 50K-row blocks. The connection forces it off and the
 control-plane writers turn it back on per query.
 
 **The database is not created for you.** `schema` creates tables, not databases.
-`default` always exists; anything else needs `CREATE DATABASE` first.
+`default` always exists; anything else needs `CREATE DATABASE sonyliv` first —
+and a dedicated database is what you want here, since the objects are
+unprefixed.
 
 Re-running `sonyliv-ingest schema` against an existing database *converges* it —
 the settings corrections are `ALTER TABLE ... MODIFY SETTING`, which is
@@ -101,7 +103,7 @@ the file, so CI can inject secrets without editing anything.
 | `CLICKHOUSE_SECURE` | `true` | `false` for local Docker |
 | `CLICKHOUSE_USER` | `default` | |
 | `CLICKHOUSE_PASSWORD` | — | |
-| `CLICKHOUSE_DATABASE` | `default` | The DDL is parameterized; changing this is a config change, not a rewrite |
+| `CLICKHOUSE_DATABASE` | `default` | **Point this at a dedicated database.** Objects are unprefixed, so `default` risks collisions. Must already exist — `schema` creates tables, not databases |
 
 ---
 
@@ -131,13 +133,31 @@ Every subcommand takes `--env <path>` to select a `.env`; without it the nearest
 
 ### What `verify` reports
 
-Row counts against the source, exact-duplicate rate, content-dictionary join
-coverage, the normalized event taxonomy, the language-normalization effect, the
-ingest audit trail, quarantined rows, dirty-session queue depth, parts per
-partition, compression by part format, and — where the format allows it —
-compression by column.
+Row counts against the source, exact-duplicate rate (on `events_raw`, where it is
+stable), the dedup layer's three counts, conflicting-payload keys,
+content-dictionary join coverage, the normalized event taxonomy, the
+raw→clean normalization effect, the ingest audit trail, quarantined rows,
+dirty-session queue depth, parts per partition, compression by part format for
+both event tables, and — where the format allows it — compression by column.
 
-Measured on ClickHouse Cloud 26.2.1 (ap-south-1), supplied extract:
+Three of those panels are worth knowing how to read:
+
+- **`clean_rows_unmerged` drifts downward** between runs as `ReplacingMergeTree`
+  merges fire. That is normal.
+- **`dedup_rows` must not move** unless new data arrived. If it does, the
+  conflict resolution order is wrong.
+- **`conflicting_keys`** is not an error. It counts event keys whose copies
+  disagree on payload and were therefore resolved by the documented
+  last-write-wins rule rather than being unambiguous. The supplied extract has
+  exactly one.
+
+> **Numbers below predate the raw/clean split and have not been re-measured.**
+> They were taken against the previous single-table schema, where normalization
+> lived in `MATERIALIZED` columns on the landing table. Row counts, duplicate
+> rate and join coverage should carry over unchanged; the **storage figures will
+> not** — the pipeline now keeps a second, normalized copy of every event, and
+> the landing table lost its normalized columns. Re-run `verify` against the
+> service and replace this block before quoting any of it.
 
 ```
 events 905,558 · sessions 10,866 · users 9,618
@@ -148,7 +168,7 @@ unjoinable content  0 of 3,357 distinct ids
 subtitle values     11 raw -> 5 normalized
 audio values        41 raw -> 17 normalized
 
-sl_raw_events       4.78 MiB on disk / 175.03 MiB uncompressed (36.6x)
+events_raw       4.78 MiB on disk / 175.03 MiB uncompressed (36.6x)
                     16 parts, 7 partitions, max 4 per partition, all Compact
 load                19 batches, 2.76 s, insert p50 538 ms / p99 1.50 s, 0 retries
 replay              same file again: 905,558 -> 905,558, 0 rows added
@@ -274,14 +294,48 @@ Applied in file-name order; every statement is idempotent.
 
 | Object | |
 |---|---|
-| `sl_content_dim` | Catalogue, `ReplacingMergeTree(source_version)` |
-| `sl_content_current` | `argMax` view resolving replacements without `FINAL` |
-| `sl_content_dict` | `COMPLEX_KEY_HASHED()` enrichment dictionary — complex-key because a simple key is coerced to `UInt64` and the catalogue contains one negative id |
-| `sl_raw_events` | Append-only landing table + normalization |
-| `sl_dirty_sessions` | Touched-session work queue |
-| `sl_raw_to_dirty_mv` | Block-local MV feeding the queue |
-| `sl_ingest_batches` | One row per acknowledged batch — the pipeline evidence |
-| `sl_ingest_rejects` | Quarantine, 30-day TTL |
+| `content_dim` | Catalogue, `ReplacingMergeTree(source_version)` |
+| `content_current` | `argMax` view resolving replacements without `FINAL` |
+| `content_dict` | `COMPLEX_KEY_HASHED()` enrichment dictionary — complex-key because a simple key is coerced to `UInt64` and the catalogue contains one negative id |
+| `events_raw` | Landing zone. Source rows verbatim, `MergeTree`, append-only, never deduplicated in place |
+| `events_clean` | Normalized derivation, `ReplacingMergeTree(row_version)` keyed on the semantic event key |
+| `events_raw_to_clean_mv` | Row-local normalization MV — the only place a normalization rule exists |
+| `events_dedup` | **Read this, not `events_clean`.** `argMax` view: one row per event key, correct before any merge runs |
+| `dirty_sessions` | Touched-session work queue |
+| `events_raw_to_dirty_mv` | Block-local MV feeding the queue |
+| `ingest_batches` | One row per acknowledged batch — the pipeline evidence |
+| `ingest_rejects` | Quarantine, 30-day TTL |
+
+Objects are **unprefixed**, so point `CLICKHOUSE_DATABASE` at a dedicated
+database rather than `default` — `events_raw` is an easy name to collide with.
+
+### The two event tables
+
+Duplicates get handled three times, at three different costs, and the split is
+deliberate:
+
+| Duplicate kind | Handled by | Cost |
+|---|---|---|
+| Retried or replayed INSERT batch | `insert_deduplication_token` + the dedup windows on `events_raw` | Free — the rows are never written |
+| Re-delivered row, storage | `ReplacingMergeTree` on `events_clean` | Background merge |
+| Re-delivered or conflicting row, *answer* | `events_dedup` (`argMax` by `row_version`) | One `GROUP BY`, already needed |
+
+`events_raw` is **not** a `ReplacingMergeTree`, on purpose. Its row count and its
+duplicate rate have to be stable and measurable — "the extract contains 4,209
+excess exact rows and one conflicting-payload row" stops being a checkable claim
+the moment merges start deleting the losing copy. It is also what makes a
+normalization rule correctable: `events_clean` can be rebuilt from it under a new
+rule, which is impossible once the raw casing has been overwritten.
+
+`events_clean` is the opposite — derived, disposable, and free to collapse. Its
+row count *is* merge-dependent, which is why the duplicate-rate check in
+`sonyliv-ingest verify` reads `events_raw` and never `events_clean`.
+
+The engine and the view are both needed. The engine reclaims space that would
+otherwise accumulate forever under an at-least-once producer; the view guarantees
+the answer, because replacement is eventual and both copies stay visible until a
+merge fires. Verified: `events_dedup` returns identical rows and identical
+conflict resolution before and after `OPTIMIZE FINAL`.
 
 The DDL is parameterized with `{{db}}`, `{{ch_user}}`, `{{ch_password}}`,
 substituted from `.env` at apply time. Credentials are needed only for the
@@ -294,8 +348,10 @@ named-collection alternative.
 
 This is the ingestion boundary, not the concurrency model. Session compaction,
 interval extraction, boundary deltas and the minute serving cache read from
-`sl_raw_events` and `sl_dirty_sessions`. No dashboard query should touch
-`sl_raw_events`.
+`events_dedup` and `dirty_sessions`. No dashboard query should touch either
+event table directly, and nothing downstream should read `events_clean` without
+going through `events_dedup` — a raw read of a `ReplacingMergeTree` can see both
+copies of a duplicate.
 
 ---
 

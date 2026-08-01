@@ -137,8 +137,8 @@ func (w *AuditWriter) Flush(ctx context.Context) error {
 		"wait_for_async_insert": 1,
 	}))
 
-	batchErr := sendRows(bctx, w.client, "sl_ingest_batches", model.BatchAuditInsertColumns, batches)
-	rejectErr := sendRows(bctx, w.client, "sl_ingest_rejects", model.RejectInsertColumns, rejects)
+	batchErr := sendRows(bctx, w.client, "ingest_batches", model.BatchAuditInsertColumns, batches)
+	rejectErr := sendRows(bctx, w.client, "ingest_rejects", model.RejectInsertColumns, rejects)
 	if batchErr == nil && rejectErr == nil {
 		return nil
 	}

@@ -127,19 +127,19 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 	}
 
 	ev := &model.RawEvent{
-		VideoSessionID:   sessionID,
-		UserID:           userID,
-		ContentID:        contentID,
-		EventType:        get("event_type"),
-		Event:            get("event"),
-		EventTime:        eventTime,
-		SessionStartTime: sessionStart,
-		Platform:         get("platform"),
-		AppVersion:       get("app_version"),
-		Country:          get("country"),
-		AudioLanguage:    get("audio_language"),
-		SubtitleLanguage: get("subtitle_language"),
-		PlayerVersion:    get("player_version"),
+		VideoSessionID:    sessionID,
+		UserID:            userID,
+		ContentID:         contentID,
+		EventType:         get("event_type"),
+		Event:             get("event"),
+		EventTimestamp:    eventTime,
+		SessionStartEpoch: sessionStart,
+		Platform:          get("platform"),
+		AppVersion:        get("app_version"),
+		Country:           get("country"),
+		AudioLanguage:     get("audio_language"),
+		SubtitleLanguage:  get("subtitle_language"),
+		PlayerVersion:     get("player_version"),
 	}
 	return ev, nil, nil
 }
