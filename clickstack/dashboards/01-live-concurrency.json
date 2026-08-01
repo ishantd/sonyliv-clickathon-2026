@@ -36,7 +36,7 @@
   ],
   "tiles": [
     {
-      "name": "Concurrent viewers now",
+      "name": "Concurrent now",
       "x": 0,
       "y": 0,
       "w": 6,
@@ -50,7 +50,7 @@
       }
     },
     {
-      "name": "Exact peak in window — all titles",
+      "name": "Peak (ungrouped)",
       "x": 6,
       "y": 0,
       "w": 6,
@@ -63,7 +63,7 @@
       }
     },
     {
-      "name": "Viewer-hours in window",
+      "name": "Viewer-hours",
       "x": 12,
       "y": 0,
       "w": 6,
@@ -77,7 +77,7 @@
       }
     },
     {
-      "name": "Live layer lag (seconds)",
+      "name": "Layer lag (s)",
       "x": 18,
       "y": 0,
       "w": 6,
@@ -90,7 +90,7 @@
       }
     },
     {
-      "name": "Average concurrent viewers — responds to the filters above",
+      "name": "Concurrent viewers",
       "x": 0,
       "y": 3,
       "w": 24,
@@ -105,7 +105,7 @@
       }
     },
     {
-      "name": "Exact peak vs average — all titles, NOT filtered",
+      "name": "Peak vs average (ungrouped)",
       "x": 0,
       "y": 10,
       "w": 24,
@@ -119,7 +119,7 @@
       }
     },
     {
-      "name": "Top titles — average concurrent viewers",
+      "name": "Top titles",
       "x": 0,
       "y": 17,
       "w": 13,
@@ -148,14 +148,14 @@
       }
     },
     {
-      "name": "How to read this dashboard",
+      "name": "Notes",
       "x": 0,
       "y": 25,
       "w": 24,
       "h": 6,
       "config": {
         "displayType": "markdown",
-        "markdown": "### Live layer — 10-second grain, best-effort\n\nReads `serving_concurrency_live`, rebuilt every 10 seconds over a trailing window by `sonyliv-ingest concurrency --layer live --loop 10s`. It keeps **three days** at 10-second grain and nothing older, so selecting a window before that is expected to read zero rather than being a fault — the history lives on *SonyLIV — Concurrency analytics*. It publishes **without waiting for late events**, so a late arrival can change an already-published bucket. That is the trade a \"right now\" number makes. The corrected answer is on *SonyLIV — Concurrency analytics*.\n\n**A viewer is concurrent when** the session has started, has not ended, is in the foreground, is playing, and has produced a liveness signal within the last 120s. Foreground and playing are independent — measured on the extract, 13,382 of 14,256 `AppForegrounded` events leave playback stopped, so treating them as one state overcounts. Policy `sonyliv-active-v1`; intervals are half-open `[start, end)` in UTC.\n\n**Which tiles respond to the filters, and why not all of them.** Everything built on `active_ms` or `ending_concurrency` responds and stays exact, because both are additive across dimensions — that is the headline chart, the viewer-hours number and the leaderboard. The two tiles that read the *ungrouped* rows cannot respond at all: those rows carry no title, content type or category column to filter on. They are labelled \"all titles\".\n\n**Why an exact peak has to be one of them.** Peaks are not additive: two titles peak at different instants, so summing per-title peaks invents viewers who were never simultaneously present. An exact peak has to be computed *at* the grouping it is reported for, so it is precomputed per grouping — the headline tile reads the all-titles rows, and exact per-title peaks are in the leaderboard. Every other tile responds to the filters, because `active_ms` and `ending_concurrency` **are** additive and stay exact under any filter combination."
+        "markdown": "**Live layer** · `serving_concurrency_live` · 10-second grain · rebuilt every 10s over a 30-minute trailing window · 3-day retention.\n\nBest-effort: publishes without waiting for late events, so a late arrival can revise a published bucket. Buckets older than the rebuild window are frozen and slightly optimistic — measured 0.066% high. Corrected figures are on *Concurrency analytics*.\n\n**Active** = started, not ended, foreground, playing, and a liveness signal within 120s. Foreground and playing are independent: 13,382 of 14,256 `AppForegrounded` events leave playback stopped. Policy `sonyliv-active-v1`, half-open `[start, end)`, UTC.\n\nTiles built on `active_ms` or `ending_concurrency` follow the filters and stay exact — both are additive. Tiles marked *ungrouped* read rows that carry no content dimension and cannot be filtered."
       }
     }
   ]

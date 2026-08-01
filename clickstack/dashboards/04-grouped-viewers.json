@@ -46,7 +46,7 @@
   "containers": [
     {
       "id": "groupby",
-      "title": "Group by — pick a key; bars stack to the true total either way",
+      "title": "Group by",
       "collapsed": false,
       "collapsible": false,
       "bordered": true,
@@ -76,7 +76,7 @@
   ],
   "tiles": [
     {
-      "name": "Average concurrent viewers by platform",
+      "name": "By platform",
       "containerId": "groupby",
       "tabId": "platform",
       "x": 0,
@@ -108,7 +108,7 @@
       }
     },
     {
-      "name": "Average concurrent viewers by content type",
+      "name": "By content type",
       "containerId": "groupby",
       "tabId": "video_type",
       "x": 0,
@@ -140,7 +140,7 @@
       }
     },
     {
-      "name": "Average concurrent viewers by app version",
+      "name": "By app version",
       "containerId": "groupby",
       "tabId": "app_version",
       "x": 0,
@@ -172,7 +172,7 @@
       }
     },
     {
-      "name": "Average concurrent viewers by category",
+      "name": "By category",
       "containerId": "groupby",
       "tabId": "category",
       "x": 0,
@@ -204,7 +204,7 @@
       }
     },
     {
-      "name": "Average concurrent viewers by title (top 10, rest folded into 'other')",
+      "name": "By title (top 10)",
       "containerId": "groupby",
       "tabId": "title",
       "x": 0,
@@ -236,14 +236,14 @@
       }
     },
     {
-      "name": "Why these bars can be stacked",
+      "name": "Notes",
       "x": 0,
-      "y": 16,
+      "y": 40,
       "w": 24,
-      "h": 7,
+      "h": 6,
       "config": {
         "displayType": "markdown",
-        "markdown": "### Pick the group-by key from the tab bar\n\nEvery tab reads the same rows — `serving_concurrency_minute` at `dim_mask = 63`, the full-grain slice — and only changes what it groups by. That is what lets the filters at the top compose with any grouping: filter to `Content type = live` and switch to the Platform tab, and you get live viewing broken down by platform, still exact.\n\n### Stacking is only honest because of the metric\n\nThe bars plot `sum(active_ms) / bucket_length` — the **time-weighted average concurrent viewers** in each bucket. `active_ms` is session-milliseconds, which is additive across every dimension and across time, so a stack of per-platform bars sums to exactly the true overall average for that bucket. Nothing is double counted and nothing is lost; the `other` bucket on the Title and Category tabs exists so the stack total stays exact rather than silently dropping the long tail.\n\n**A peak could not be stacked.** Two platforms reach their maximum at different instants, so stacked peaks would total more viewers than were ever simultaneously present — on the tuning extract, per-platform peaks sum well above the true 2,305. That is why there is no peak on this dashboard: exact peaks are precomputed per grouping and live on *SonyLIV — Concurrency analytics*, in a group explicitly marked as not filterable. If you want to compare peaks across a dimension, use that dashboard's bar and table tiles, which read the mask that was computed at that grouping.\n\n`share_pct` in each table is a share of viewing **time**, not of viewers, for the same reason — time is what adds up.\n\nPublished on the same lag as the minute layer, so every number here has had the late-arrival window close before it was shown. Policy `sonyliv-active-v1`, 120s liveness lease, half-open `[start, end)` in UTC."
+        "markdown": "Every tab reads the `all dimensions` slice and changes only the `GROUP BY`, so the filters compose with any grouping.\n\nBars plot `sum(active_ms) / bucket` — time-weighted average concurrent viewers. `active_ms` is additive, so a stack sums to the true total: verified at 855.603469 grouped by platform, identical to the ungrouped figure, with shares summing to 100.00. The `other` bucket keeps the Title and Category stacks exact rather than dropping the long tail.\n\nNo peak here. Two platforms reach their maxima at different instants, so stacked peaks would exceed the true 2,305. Exact peaks are on *Concurrency analytics*.\n\n`share_pct` is a share of viewing time, not of viewers."
       }
     }
   ]

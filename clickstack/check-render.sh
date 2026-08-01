@@ -31,11 +31,11 @@ host="${CLICKSTACK_HOST:-https://hyperdx.clickhouse.cloud}"
 
 # name<TAB>probe — the probe is a tile name that appears nowhere else.
 probes=$(cat <<'EOF'
-SonyLIV — Live concurrency	Concurrent viewers now
-SonyLIV — Concurrency analytics (lagged)	Time-weighted average concurrency
-SonyLIV — Pipeline & query observability	Stream ingest lag
-SonyLIV — Grouped viewers	Average concurrent viewers by platform
-SonyLIV — Benchmark answers	Exact peak per dimension value
+SonyLIV — Live concurrency	Concurrent now
+SonyLIV — Concurrency analytics (lagged)	Average concurrency
+SonyLIV — Pipeline & query observability	Ingest lag
+SonyLIV — Grouped viewers	Platform totals
+SonyLIV — Benchmark answers	Peak by dimension value
 EOF
 )
 

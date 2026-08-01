@@ -7,7 +7,7 @@
   ],
   "tiles": [
     {
-      "name": "Stream ingest lag p50 / p95 / p99 (seconds)",
+      "name": "Ingest lag p50/p95/p99 (s)",
       "x": 0,
       "y": 0,
       "w": 12,
@@ -21,7 +21,7 @@
       }
     },
     {
-      "name": "Rows ingested per second, by producer",
+      "name": "Rows/s by producer",
       "x": 12,
       "y": 0,
       "w": 12,
@@ -35,7 +35,7 @@
       }
     },
     {
-      "name": "Read volume per serving query — cluster-wide",
+      "name": "Read volume by query",
       "x": 0,
       "y": 8,
       "w": 24,
@@ -48,7 +48,7 @@
       }
     },
     {
-      "name": "Rollup build duration by layer (ms)",
+      "name": "Rollup duration (ms)",
       "x": 0,
       "y": 17,
       "w": 12,
@@ -62,7 +62,7 @@
       }
     },
     {
-      "name": "Recompute backlog — sessions dirtied per minute",
+      "name": "Sessions dirtied/min",
       "x": 12,
       "y": 17,
       "w": 12,
@@ -89,7 +89,7 @@
       }
     },
     {
-      "name": "Dedup collapse — landed vs resolved",
+      "name": "Dedup collapse",
       "x": 8,
       "y": 25,
       "w": 8,
@@ -102,7 +102,7 @@
       }
     },
     {
-      "name": "Storage and compression",
+      "name": "Storage",
       "x": 16,
       "y": 25,
       "w": 8,
@@ -115,14 +115,14 @@
       }
     },
     {
-      "name": "What this dashboard is evidence for",
+      "name": "Notes",
       "x": 0,
       "y": 31,
       "w": 24,
-      "h": 7,
+      "h": 6,
       "config": {
         "displayType": "markdown",
-        "markdown": "### Observing the pipeline, not the product\n\n`docs/DECISIONS.md` D3 committed ClickStack to observing this pipeline's own behaviour — ingest lag, rollup latency, serving query cost — rather than only visualising the answer. These are those tiles.\n\n**Read volume per serving query** is the one to look at first. Query read volume is a judged criterion, so this tile is the artifact rather than a decoration: it reports `read_rows`, `read_bytes` and duration per normalised query against anything touching a `serving_` table, straight from `system.query_log`. The point the serving design is making is visible here — a dashboard tile reads a few thousand pre-aggregated rows instead of scanning 905,558 events, because the expensive per-session work happened once in `session_intervals` and every rollup below it is a pure function of that table.\n\n**`clusterAllReplicas` is right for one of these tiles and a trap for the other.** Both need `GRANT READ ON REMOTE` on top of `SELECT` on the system table, so if either goes blank that grant is the first thing to check.\n\n`system.query_log` is genuinely per-node: each replica logs only the queries it answered, so reading one node understates the work. Measured on this service, 8,519 rows single-node against 36,895 cluster-wide.\n\n`system.parts` is the opposite. SharedMergeTree keeps parts in shared object storage, so **every replica reports the identical parts** — measured: 12 distinct part names for `events_clean`, returned 24 times, 2 copies each, both replicas claiming the same 1,103,011 rows. Summing that cluster-wide double counts: `events_clean` read 2.20 million rows against an actual 1.06 million. The storage tile therefore deduplicates by part name before aggregating, which stays correct at any replica count instead of quietly scaling storage by the size of the cluster.\n\n**Ingest lag** is `_ingested_at - event_timestamp`, which is why `events_raw` keeps both. The bulk CSV backfill is excluded (`_source_file NOT LIKE 'csv:%'`): loading a week-old extract shows a lag of days, which is arithmetically true and tells you nothing about the stream, while flattening every real value into the axis. A rising p99 with a flat p50 is late arrivals, not a slow writer — and late arrivals are expected here, not an incident: 7.0% of rows in the extract arrive out of order. Do not alert on their existence, only on the watermark falling behind.\n\n**Recompute backlog** counts sessions marked by the insert-time materialized view on `events_raw`. It is what makes the live loop proportional to what changed rather than to the size of history: a pass recomputes only dirtied sessions, so a ten-second cadence stays viable as the history grows."
+        "markdown": "Observes the pipeline rather than the product — `docs/DECISIONS.md` D3.\n\n**Read volume** is the tile to check first; query read volume is a judged criterion. A tile reads a few thousand pre-aggregated rows instead of scanning 905,558 events.\n\n`system.query_log` is per-node and is read through `clusterAllReplicas`: 8,519 rows single-node against 36,895 cluster-wide. `system.parts` is the opposite — SharedMergeTree shares object storage, so every replica reports identical parts and a naive cluster-wide sum double counts (2.20M rows against 1.06M actual). The storage tile deduplicates by part name. Both need `GRANT READ ON REMOTE`.\n\n**Ingest lag** is `_ingested_at - event_timestamp`; the bulk CSV backfill is excluded. A rising p99 with a flat p50 is late arrivals, expected at 7.0% — alert on the watermark falling behind, not on their existence.\n\n**Sessions dirtied** drives the incremental recompute, so a pass is proportional to what changed rather than to the size of history."
       }
     }
   ]
