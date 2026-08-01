@@ -165,6 +165,8 @@ Behaviours baked in, not configurable:
   own `event_type`.
 - **A session does not close mid-background** — its End arrives after the user
   returns.
+- **Playback does not start while backgrounded** — background and pause episodes
+  are drawn from the moment play begins, not from the session start.
 - **Content ids are drawn from the real catalogue**, so generated traffic
   exercises the same dictionary join as replayed traffic. Load the catalogue
   first.
@@ -173,12 +175,22 @@ By default the run stops dead at the cutoff, leaving the steady-state population
 **open** — the "sessions still open when the day ends" case the problem statement
 calls out. `--drain` closes everything instead.
 
+The cutoff bounds *event* time, not arrival time. In-flight rows that happened
+inside the window still arrive after it — that is the boundary case worth
+generating — but a row whose event time lands beyond the cutoff is dropped and
+counted, so the emitted data never exceeds the window the run advertises.
+
 ### Determinism
 
 The same `--seed` and flags produce byte-identical rows in identical batches.
 Because the deduplication token includes the config fingerprint, **re-running the
 exact same generation is a no-op**, while changing any knob produces a genuinely
 new load. The fingerprint is printed at startup.
+
+The fingerprint covers the sampled catalogue as well as the flags. `--content-pool`
+and a catalogue reload both change which content ids appear in the output while
+every flag stays the same; without that, the second run would inherit the first
+run's token and ClickHouse would drop it as a replay.
 
 ---
 
@@ -190,7 +202,7 @@ Applied in file-name order; every statement is idempotent.
 |---|---|
 | `sl_content_dim` | Catalogue, `ReplacingMergeTree(source_version)` |
 | `sl_content_current` | `argMax` view resolving replacements without `FINAL` |
-| `sl_content_dict` | `HASHED()` enrichment dictionary |
+| `sl_content_dict` | `COMPLEX_KEY_HASHED()` enrichment dictionary — complex-key because a simple key is coerced to `UInt64` and the catalogue contains one negative id |
 | `sl_raw_events` | Append-only landing table + normalization |
 | `sl_dirty_sessions` | Touched-session work queue |
 | `sl_raw_to_dirty_mv` | Block-local MV feeding the queue |
@@ -221,6 +233,8 @@ make test
 ```
 
 Tests cover the parts where being wrong is silent: content-id sign handling,
-timestamp unit detection, header-name column mapping, quarantine behaviour,
-comment-aware DDL splitting, password redaction, dedup-token collisions,
-retry classification, and generator determinism.
+timestamp unit detection, header-name column mapping, quarantine behaviour in
+both readers, comment-aware DDL splitting, password redaction, dedup-token and
+fingerprint collisions, retry classification, audit rows surviving a failed
+flush, generator determinism, the event-time cutoff bound, and the invariant
+that playback never starts on a backgrounded session.

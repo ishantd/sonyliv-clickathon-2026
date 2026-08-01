@@ -2,6 +2,7 @@ package chx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -35,6 +36,14 @@ type AuditWriter struct {
 	mu      sync.Mutex
 	batches []model.BatchAudit
 	rejects []model.Reject
+	// retryAfter suppresses the size-triggered flush for one interval after a
+	// failure. Without it, an outage turns every Add past the high-water mark
+	// into its own doomed round trip and the load crawls.
+	retryAfter time.Time
+	// Rows discarded because retention filled up. Reported by Close: an
+	// incomplete audit trail must be stated, not inferred from a short table.
+	droppedBatches int
+	droppedRejects int
 
 	stop chan struct{}
 	done chan struct{}
@@ -42,6 +51,12 @@ type AuditWriter struct {
 	errMu   sync.Mutex
 	lastErr error
 }
+
+// maxRetained bounds what a failing flush may hold. Rows are kept across
+// failures so the audit and quarantine trail survives a transient outage —
+// which is precisely when it is worth having — but a permanent one must not
+// grow the buffer without limit.
+const maxRetained = 10000
 
 // NewAuditWriter starts the background flusher. Call Close to drain it.
 func NewAuditWriter(ctx context.Context, client *Client) *AuditWriter {
@@ -60,10 +75,12 @@ func NewAuditWriter(ctx context.Context, client *Client) *AuditWriter {
 func (w *AuditWriter) Add(b model.BatchAudit) {
 	w.mu.Lock()
 	w.batches = append(w.batches, b)
-	over := len(w.batches) >= w.maxBuffered
+	over := len(w.batches) >= w.maxBuffered && time.Now().After(w.retryAfter)
 	w.mu.Unlock()
 	if over {
-		_ = w.Flush(context.Background())
+		if err := w.Flush(context.Background()); err != nil {
+			w.setErr(err)
+		}
 	}
 }
 
@@ -71,10 +88,12 @@ func (w *AuditWriter) Add(b model.BatchAudit) {
 func (w *AuditWriter) AddReject(r model.Reject) {
 	w.mu.Lock()
 	w.rejects = append(w.rejects, r)
-	over := len(w.rejects) >= w.maxBuffered
+	over := len(w.rejects) >= w.maxBuffered && time.Now().After(w.retryAfter)
 	w.mu.Unlock()
 	if over {
-		_ = w.Flush(context.Background())
+		if err := w.Flush(context.Background()); err != nil {
+			w.setErr(err)
+		}
 	}
 }
 
@@ -97,6 +116,12 @@ func (w *AuditWriter) loop(ctx context.Context) {
 }
 
 // Flush writes everything currently buffered.
+//
+// Rows that fail to send go back into the buffer rather than being dropped.
+// This table is the record of what went wrong during a load, so discarding it
+// on the first ClickHouse hiccup would delete the evidence at exactly the
+// moment it becomes interesting. The two tables are sent independently: a
+// failure on one must not lose the other.
 func (w *AuditWriter) Flush(ctx context.Context) error {
 	w.mu.Lock()
 	batches, rejects := w.batches, w.rejects
@@ -112,52 +137,92 @@ func (w *AuditWriter) Flush(ctx context.Context) error {
 		"wait_for_async_insert": 1,
 	}))
 
-	if len(batches) > 0 {
-		stmt := insertStatement(w.client.Database, "sl_ingest_batches", model.BatchAuditInsertColumns)
-		b, err := w.client.Conn.PrepareBatch(bctx, stmt)
-		if err != nil {
-			return fmt.Errorf("prepare audit batch: %w", err)
-		}
-		for i := range batches {
-			if err := b.Append(batches[i].Values()...); err != nil {
-				_ = b.Abort()
-				return fmt.Errorf("append audit row: %w", err)
-			}
-		}
-		if err := b.Send(); err != nil {
-			return fmt.Errorf("send audit batch: %w", err)
-		}
+	batchErr := sendRows(bctx, w.client, "sl_ingest_batches", model.BatchAuditInsertColumns, batches)
+	rejectErr := sendRows(bctx, w.client, "sl_ingest_rejects", model.RejectInsertColumns, rejects)
+	if batchErr == nil && rejectErr == nil {
+		return nil
 	}
 
-	if len(rejects) > 0 {
-		stmt := insertStatement(w.client.Database, "sl_ingest_rejects", model.RejectInsertColumns)
-		b, err := w.client.Conn.PrepareBatch(bctx, stmt)
-		if err != nil {
-			return fmt.Errorf("prepare reject batch: %w", err)
+	w.mu.Lock()
+	if batchErr != nil {
+		w.batches, w.droppedBatches = requeue(batches, w.batches, w.droppedBatches)
+	}
+	if rejectErr != nil {
+		w.rejects, w.droppedRejects = requeue(rejects, w.rejects, w.droppedRejects)
+	}
+	w.retryAfter = time.Now().Add(w.flushInterval)
+	w.mu.Unlock()
+
+	return errors.Join(batchErr, rejectErr)
+}
+
+// requeue puts unsent rows back ahead of whatever arrived while the flush was
+// in flight, keeping the trail in order, and trims the oldest past the
+// retention bound.
+func requeue[T any](unsent, queued []T, dropped int) ([]T, int) {
+	out := append(unsent, queued...)
+	if over := len(out) - maxRetained; over > 0 {
+		out = out[over:]
+		dropped += over
+	}
+	return out, dropped
+}
+
+// rowValues is satisfied by the control-plane row types, whose Values method
+// has a pointer receiver.
+type rowValues[T any] interface {
+	*T
+	Values() []any
+}
+
+// sendRows writes one control-plane table. An empty slice is not an error.
+func sendRows[T any, P rowValues[T]](ctx context.Context, c *Client, table string, cols []string, rows []T) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	b, err := c.Conn.PrepareBatch(ctx, insertStatement(c.Database, table, cols))
+	if err != nil {
+		return fmt.Errorf("prepare %s batch: %w", table, err)
+	}
+	for i := range rows {
+		if err := b.Append(P(&rows[i]).Values()...); err != nil {
+			_ = b.Abort()
+			return fmt.Errorf("append %s row: %w", table, err)
 		}
-		for i := range rejects {
-			if err := b.Append(rejects[i].Values()...); err != nil {
-				_ = b.Abort()
-				return fmt.Errorf("append reject row: %w", err)
-			}
-		}
-		if err := b.Send(); err != nil {
-			return fmt.Errorf("send reject batch: %w", err)
-		}
+	}
+	if err := b.Send(); err != nil {
+		return fmt.Errorf("send %s batch: %w", table, err)
 	}
 	return nil
 }
 
 // Close stops the flusher and drains the buffer.
+//
+// Anything still unsent, or dropped past the retention bound, is reported: a
+// caller that is told the audit trail is complete when it is not would draw
+// the wrong conclusion from a short table.
 func (w *AuditWriter) Close(ctx context.Context) error {
 	close(w.stop)
 	<-w.done
-	if err := w.Flush(ctx); err != nil {
-		return err
+
+	flushErr := w.Flush(ctx)
+
+	w.mu.Lock()
+	unsent := len(w.batches) + len(w.rejects)
+	dropped := w.droppedBatches + w.droppedRejects
+	w.mu.Unlock()
+
+	var incomplete error
+	if unsent > 0 || dropped > 0 {
+		incomplete = fmt.Errorf("audit trail incomplete: %d row(s) never sent, %d dropped past the %d-row retention bound",
+			unsent, dropped, maxRetained)
 	}
+
 	w.errMu.Lock()
-	defer w.errMu.Unlock()
-	return w.lastErr
+	lastErr := w.lastErr
+	w.errMu.Unlock()
+
+	return errors.Join(flushErr, incomplete, lastErr)
 }
 
 func (w *AuditWriter) setErr(err error) {

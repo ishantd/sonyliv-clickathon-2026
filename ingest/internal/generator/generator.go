@@ -97,6 +97,16 @@ type Config struct {
 	// reproducing the observed 301-session / 95-concurrent outlier. Default 0:
 	// enable it deliberately when testing user-level concurrency policy.
 	BotSessionShare float64
+
+	// ContentDigest identifies the catalogue sample the run draws from. It is
+	// set by New from the content actually passed in, never by the caller.
+	//
+	// --content-pool changes which ids appear in the output, and so does
+	// reloading the catalogue underneath an unchanged pool size. Neither is
+	// visible in any other field, so without this two genuinely different runs
+	// would share a fingerprint, share a deduplication token, and ClickHouse
+	// would silently drop the second as a replay.
+	ContentDigest string
 }
 
 // Defaults fills unset fields with values measured from the supplied extract.
@@ -143,25 +153,37 @@ func (c *Config) Fingerprint() string {
 	h := sha256.New()
 	fmt.Fprintf(h, "seed=%d start=%d dur=%d drain=%t conc=%d ramp=%d max=%d "+
 		"hb=%d med=%d p99=%d bg=%.4f pause=%.4f err=%.4f late=%.4f latemax=%d "+
-		"dup=%.4f users=%d bot=%.4f flush=%d",
+		"dup=%.4f users=%d bot=%.4f flush=%d content=%s",
 		c.Seed, c.StartTime.UnixMilli(), c.Duration, c.Drain, c.TargetConcurrency,
 		c.RampUp, c.MaxEvents, c.HeartbeatInterval, c.SessionMedian, c.SessionP99,
 		c.BackgroundEpisodes, c.PauseEpisodes, c.ErrorProbability,
 		c.LateFraction, c.LateMax, c.DuplicateFraction, c.UserPoolSize,
-		c.BotSessionShare, c.FlushEvery)
+		c.BotSessionShare, c.FlushEvery, c.ContentDigest)
 	return hex.EncodeToString(h.Sum(nil))[:32]
+}
+
+// contentDigest identifies a catalogue sample by its contents.
+func contentDigest(content []chx.ContentRef) string {
+	h := sha256.New()
+	for _, c := range content {
+		fmt.Fprintf(h, "%d:%s\n", c.ContentID, c.VideoType)
+	}
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 // Summary reports what a run produced.
 type Summary struct {
-	Events          int64
-	Sessions        int64
-	SessionsOpen    int64
-	Duplicates      int64
-	LateEvents      int64
-	FirstEventTime  time.Time
-	LastEventTime   time.Time
-	PeakConcurrency int
+	Events       int64
+	Sessions     int64
+	SessionsOpen int64
+	Duplicates   int64
+	LateEvents   int64
+	// DroppedPastCutoff counts in-flight rows whose event time landed beyond
+	// the cutoff and were therefore not emitted. Only non-zero without --drain.
+	DroppedPastCutoff int64
+	FirstEventTime    time.Time
+	LastEventTime     time.Time
+	PeakConcurrency   int
 }
 
 // Generator emits chunks of raw events.
@@ -194,6 +216,7 @@ func New(cfg Config, content []chx.ContentRef) (*Generator, error) {
 	if cfg.Duration <= 0 && cfg.MaxEvents <= 0 {
 		return nil, fmt.Errorf("set --duration, --max-events, or both; otherwise the run never terminates")
 	}
+	cfg.ContentDigest = contentDigest(content)
 
 	g := &Generator{
 		cfg:     cfg,
@@ -221,6 +244,13 @@ func New(cfg Config, content []chx.ContentRef) (*Generator, error) {
 	heap.Init(&g.pending)
 	return g, nil
 }
+
+// Fingerprint is the identity of what this generator will actually produce.
+//
+// Callers must use this rather than Config.Fingerprint on the config they
+// passed in: New normalizes defaults and derives the catalogue digest, so the
+// two can disagree — and the loader's deduplication token is built from it.
+func (g *Generator) Fingerprint() string { return g.cfg.Fingerprint() }
 
 // Run generates the stream and pushes fixed-size chunks to out.
 //
@@ -329,11 +359,21 @@ func (g *Generator) Run(ctx context.Context, out chan<- *chx.Chunk, batchSize in
 
 	// Anything still buffered is in-flight late data: emit it so the run is
 	// self-consistent rather than losing rows at the boundary.
+	//
+	// A late ARRIVAL past the cutoff is the case worth keeping — it is what
+	// makes the boundary interesting. A late EVENT time is not: without --drain
+	// the cutoff is a hard stop on event time, and emitting rows beyond it
+	// would put data outside the window the run advertises. Those are dropped
+	// and counted.
 	for g.pending.Len() > 0 {
 		if g.cfg.MaxEvents > 0 && emitted >= g.cfg.MaxEvents {
 			break
 		}
 		p := heap.Pop(&g.pending).(pendingEvent)
+		if !g.cfg.Drain && p.ev.EventTime.After(g.cutoff) {
+			g.summary.DroppedPastCutoff++
+			continue
+		}
 		buf = append(buf, p.ev)
 		emitted++
 		g.observe(&p.ev)

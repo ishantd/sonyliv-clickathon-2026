@@ -210,29 +210,35 @@ func (g *Generator) runStart(s *session) {
 	g.emit(ev)
 
 	// Play follows the start by a short, right-skewed delay (p50 ~1.7s).
-	g.schedule(g.now.Add(g.expDuration(2*time.Second)+300*time.Millisecond), actPlay, s)
+	playAt := g.now.Add(g.expDuration(2*time.Second) + 300*time.Millisecond)
+	g.schedule(playAt, actPlay, s)
 
 	// Terminal end. Left scheduled even for sessions that will be cut off by
 	// the run boundary; if the cutoff arrives first the session stays open.
 	g.schedule(s.endTime, actEnd, s)
 
-	// Background episodes, spread over the session.
+	// Episodes are spread over the session from the moment playback starts,
+	// not from the session start. The pre-play gap is not a window anything
+	// can happen in: a background episode drawn into it would put the session
+	// away before it ever played and then VideoPlay would fire on a
+	// backgrounded session, and a pause drawn into it is silently discarded by
+	// runPause, quietly thinning the pause rate.
 	for range g.poisson(g.cfg.BackgroundEpisodes) {
-		at := g.uniformWithin(s.startTime, s.endTime)
-		g.schedule(at, actBackground, s)
+		g.schedule(g.uniformWithin(playAt, s.endTime), actBackground, s)
 	}
-	// Pause episodes.
 	for range g.poisson(g.cfg.PauseEpisodes) {
-		at := g.uniformWithin(s.startTime, s.endTime)
-		g.schedule(at, actPause, s)
+		g.schedule(g.uniformWithin(playAt, s.endTime), actPause, s)
 	}
 	// VideoError never terminates a session in the source — it is a quality
 	// signal only, and 100% of the 293 errors are followed by further events.
 	if g.rnd.Float64() < g.cfg.ErrorProbability {
-		g.schedule(g.uniformWithin(s.startTime, s.endTime), actError, s)
+		g.schedule(g.uniformWithin(playAt, s.endTime), actError, s)
 	}
 }
 
+// runPlay starts playback. It cannot be reached on a backgrounded session:
+// runStart is the only source of actBackground and schedules it strictly after
+// playAt.
 func (g *Generator) runPlay(s *session) {
 	if s.ended {
 		return
@@ -483,10 +489,14 @@ func (g *Generator) poisson(mean float64) int {
 
 // uniformWithin picks a time inside a session's span, biased away from the
 // very edges so episodes do not collide with start and end handling.
+//
+// It never returns a time before start. A session whose window has already
+// closed (playback would begin after its planned end) would otherwise schedule
+// into the past, and the scheduler's clock would have to run backwards.
 func (g *Generator) uniformWithin(start, end time.Time) time.Time {
 	span := end.Sub(start)
 	if span <= 2*time.Second {
-		return start.Add(span / 2)
+		return start.Add(max(span, 0) / 2)
 	}
 	offset := time.Duration(g.rnd.Float64() * float64(span-2*time.Second))
 	return start.Add(time.Second + offset)

@@ -91,6 +91,40 @@ func TestSchemaStatementsLoad(t *testing.T) {
 	}
 }
 
+// TestContentDictionaryKeepsASignedKey.
+//
+// A simple-key dictionary key is always UInt64 — ClickHouse coerces the
+// declared Int64 without complaint and then throws on any lookup of a negative
+// id. The catalogue contains one (-987654322), so a plain LAYOUT(HASHED())
+// makes enrichment fail on real data while looking correct in the DDL. This is
+// asserted statically because reproducing it needs both a live server and an
+// event that references that specific id.
+func TestContentDictionaryKeepsASignedKey(t *testing.T) {
+	stmts, err := SchemaStatements()
+	if err != nil {
+		t.Fatalf("SchemaStatements: %v", err)
+	}
+
+	var dict string
+	for _, s := range stmts {
+		if strings.Contains(strings.ToUpper(s.SQL), "CREATE OR REPLACE DICTIONARY") {
+			dict = strings.ToUpper(s.SQL)
+			break
+		}
+	}
+	if dict == "" {
+		t.Fatal("no CREATE DICTIONARY statement found in the embedded schema")
+	}
+
+	if !strings.Contains(dict, "COMPLEX_KEY_HASHED") {
+		t.Error("the content dictionary must use COMPLEX_KEY_HASHED: a simple key is " +
+			"coerced to UInt64 and every lookup of the catalogue's negative content_id throws")
+	}
+	if !strings.Contains(dict, "CONTENT_ID  INT64") {
+		t.Error("the dictionary key must stay Int64 to match sl_content_dim")
+	}
+}
+
 // TestRenderRedactsPassword: dry-run output and error messages are meant to be
 // pasted into a review, so the dictionary's credentials must not ride along.
 func TestRenderRedactsPassword(t *testing.T) {

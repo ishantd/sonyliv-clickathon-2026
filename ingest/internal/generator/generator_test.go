@@ -133,6 +133,7 @@ func TestFingerprintCoversEveryKnob(t *testing.T) {
 		"UserPoolSize":       func(c *Config) { c.UserPoolSize = 12345 },
 		"BotSessionShare":    func(c *Config) { c.BotSessionShare = 0.5 },
 		"FlushEvery":         func(c *Config) { c.FlushEvery = time.Minute },
+		"ContentDigest":      func(c *Config) { c.ContentDigest = "different" },
 	}
 
 	baseline := base.Fingerprint()
@@ -142,6 +143,107 @@ func TestFingerprintCoversEveryKnob(t *testing.T) {
 		if cfg.Fingerprint() == baseline {
 			t.Errorf("changing %s does not change the fingerprint", name)
 		}
+	}
+}
+
+// TestFingerprintTracksTheCatalogue: --content-pool and a reloaded catalogue
+// both change which ids appear in the output while every Config field stays
+// identical. If the fingerprint missed that, the second load would reuse the
+// first one's deduplication token and ClickHouse would drop it as a replay.
+func TestFingerprintTracksTheCatalogue(t *testing.T) {
+	full := testContent()
+
+	all, err := New(baseConfig(), full)
+	if err != nil {
+		t.Fatal(err)
+	}
+	smallerPool, err := New(baseConfig(), full[:2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Same pool size, different catalogue rows — the reload case.
+	reloaded, err := New(baseConfig(), []chx.ContentRef{
+		{ContentID: 99999999, VideoType: "vod"},
+		{ContentID: 2049025011, VideoType: "vod"},
+		{ContentID: 2078177474, VideoType: "live"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if all.Fingerprint() == smallerPool.Fingerprint() {
+		t.Error("a smaller --content-pool does not change the fingerprint")
+	}
+	if all.Fingerprint() == reloaded.Fingerprint() {
+		t.Error("a changed catalogue does not change the fingerprint")
+	}
+
+	// And it must still be stable for an unchanged catalogue, or every re-run
+	// would look like new data.
+	again, err := New(baseConfig(), testContent())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if all.Fingerprint() != again.Fingerprint() {
+		t.Error("the same config and catalogue produced two different fingerprints")
+	}
+}
+
+// TestHardCutoffBoundsEventTime: without --drain the run advertises a closed
+// event-time window, so no row may carry an event time past it — including the
+// in-flight rows drained after the loop stops.
+func TestHardCutoffBoundsEventTime(t *testing.T) {
+	cfg := baseConfig()
+	cfg.LateFraction = 0.2
+	cfg.LateMax = time.Minute
+
+	rows, _, sum := collect(t, cfg, 100000)
+	cutoff := cfg.StartTime.Add(cfg.Duration)
+
+	for _, r := range rows {
+		if r.EventTime.After(cutoff) {
+			t.Fatalf("event at %s is past the %s cutoff", r.EventTime, cutoff)
+		}
+	}
+	if sum.DroppedPastCutoff == 0 {
+		t.Error("no rows were dropped at the boundary; the test is not exercising the drain path")
+	}
+	if !sum.LastEventTime.After(cutoff.Add(-time.Minute)) {
+		t.Error("the run stopped well short of its cutoff; the bound is not being tested")
+	}
+}
+
+// TestPlaybackNeverStartsWhileBackgrounded: VideoPlay on a session the user has
+// already switched away from is not a state the source can produce, and it
+// would make a background-aware liveness rule look wrong when it is right.
+func TestPlaybackNeverStartsWhileBackgrounded(t *testing.T) {
+	cfg := baseConfig()
+	cfg.LateFraction = 0
+	cfg.DuplicateFraction = 0
+	cfg.BackgroundEpisodes = 6 // crowd the pre-play gap
+	cfg.TargetConcurrency = 300
+
+	rows, _, _ := collect(t, cfg, 100000)
+
+	// Rows arrive in event order here, so a simple per-session replay works.
+	backgrounded := map[string]bool{}
+	var checked int
+	for _, r := range rows {
+		switch r.EventType {
+		case "AppBackgrounded":
+			backgrounded[r.VideoSessionID] = true
+		case "AppForegrounded":
+			backgrounded[r.VideoSessionID] = false
+		case "VideoPlay":
+			checked++
+			if backgrounded[r.VideoSessionID] {
+				t.Fatalf("session %s started playback while backgrounded at %s",
+					r.VideoSessionID[:8], r.EventTime)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no VideoPlay events generated")
 	}
 }
 

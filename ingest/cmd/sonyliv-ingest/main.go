@@ -169,7 +169,13 @@ func cmdContent(ctx context.Context, args []string) error {
 
 	runID := uuid.New()
 	audit := chx.NewAuditWriter(ctx, client)
-	defer audit.Close(ctx)
+	defer func() {
+		// Surfaced, not swallowed: a quarantine row that never reached
+		// ClickHouse is a row the operator thinks was loaded.
+		if err := audit.Close(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: audit flush: %v\n", err)
+		}
+	}()
 
 	// The catalogue is 33K rows — one batch, well inside the recommended range.
 	var rows []model.Content
@@ -238,6 +244,9 @@ func cmdEvents(ctx context.Context, args []string) error {
 	}
 	if *batchSize > 100000 && !*async {
 		fmt.Printf("note: --batch-size %d is above the recommended 100,000 ceiling\n", *batchSize)
+	}
+	if err := chx.ValidateWritePath(*workers, *retries); err != nil {
+		return err
 	}
 
 	client, err := connect(ctx, *envPath)
@@ -413,8 +422,8 @@ var verifyChecks = []struct {
 		"content dictionary join coverage (must be 0 misses)",
 		`SELECT
              uniqExact(content_id) AS distinct_content_ids,
-             uniqExactIf(content_id, dictGetOrDefault({db}.sl_content_dict, 'video_type', content_id, '__miss__') = '__miss__') AS unjoinable_ids,
-             countIf(dictGetOrDefault({db}.sl_content_dict, 'video_type', content_id, '__miss__') = '__miss__') AS unjoinable_events
+             uniqExactIf(content_id, dictGetOrDefault({db}.sl_content_dict, 'video_type', tuple(content_id), '__miss__') = '__miss__') AS unjoinable_ids,
+             countIf(dictGetOrDefault({db}.sl_content_dict, 'video_type', tuple(content_id), '__miss__') = '__miss__') AS unjoinable_events
          FROM {db}.sl_raw_events`,
 	},
 	{

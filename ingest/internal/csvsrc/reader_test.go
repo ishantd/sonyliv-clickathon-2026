@@ -242,3 +242,57 @@ func TestContentReaderMapsEmptyToUnknown(t *testing.T) {
 		t.Errorf("video_type=%q category=%q, want both %q", c.VideoType, c.Category, "unknown")
 	}
 }
+
+// TestContentReaderQuarantinesBadRows: the catalogue reader must honour the
+// same contract as the event reader. One malformed row aborting the load would
+// leave the whole catalogue — and the enrichment dictionary built from it —
+// stale, which is a far worse outcome than one quarantined title.
+func TestContentReaderQuarantinesBadRows(t *testing.T) {
+	body := "content_id,title,video_type,category\n" +
+		"2049025011,cirar fac,vod,drama\n" +
+		"1,too,many,fields,here\n" + // structural: wrong field count
+		"notanumber,bad id,vod,drama\n" + // semantic: unparseable id
+		"2078177474,late fac,live,sport\n"
+
+	path := filepath.Join(t.TempDir(), "dirty-content.csv")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenContent(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	var accepted int
+	var reasons []string
+	for {
+		c, reject, err := r.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("a bad catalogue row aborted the load: %v", err)
+		}
+		if reject != nil {
+			reasons = append(reasons, reject.Reason)
+			if reject.Line == 0 {
+				t.Error("reject is missing its source line number")
+			}
+			continue
+		}
+		if c != nil {
+			accepted++
+		}
+	}
+
+	if accepted != 2 {
+		t.Errorf("accepted %d rows, want the 2 good ones", accepted)
+	}
+	if len(reasons) != 2 {
+		t.Fatalf("quarantined %d rows (%v), want 2", len(reasons), reasons)
+	}
+	if reasons[0] != ReasonBadRow || reasons[1] != ReasonBadContentID {
+		t.Errorf("reasons = %v, want [%s %s]", reasons, ReasonBadRow, ReasonBadContentID)
+	}
+}

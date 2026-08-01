@@ -113,6 +113,12 @@ in dribs is coalesced server-side into properly sized parts.
 `wait_for_async_insert` stays at `1` everywhere. Fire-and-forget would hide the
 failures the audit table exists to record.
 
+For the same reason, a failed flush puts its rows back in the buffer instead of
+discarding them, and sends the two tables independently so a failure on one does
+not lose the other. Retention is bounded at 10,000 rows; anything trimmed past
+that is counted and reported by `Close`, because a short audit table that is
+never explained reads as "nothing went wrong".
+
 **How** `internal/chx/client.go` (connection default), `internal/chx/audit.go`
 (per-query override).
 
@@ -236,6 +242,14 @@ The batch size and row count are in the token for a reason found while testing:
 without them, loading the same file at `--batch-size 50000` and then at
 `--batch-size 10000` produces the same token for chunks holding *different*
 rows, and the second load silently loses data.
+
+The generator side has the same hazard in a different shape, and it is the
+reason its fingerprint covers the sampled catalogue rather than just the flags.
+`--content-pool` and a reloaded catalogue both change which content ids appear
+in the output while every other input is identical; a fingerprint blind to that
+would hand two genuinely different runs the same token. The fingerprint is taken
+from the constructed generator, not from the caller's config, so it reflects the
+values actually used after defaults are filled in.
 
 `deduplicate_blocks_in_dependent_materialized_views = 1` extends the same
 protection to the dirty-session queue. That setting is normally risky — it can
@@ -372,8 +386,8 @@ materialized views.
 
 ### 9. Content enrichment by dictionary, not JOIN
 
-**What** `sl_content_dict`, `LAYOUT(HASHED())`, sourced from a deduplicating view
-over a `ReplacingMergeTree`.
+**What** `sl_content_dict`, `LAYOUT(COMPLEX_KEY_HASHED())`, sourced from a
+deduplicating view over a `ReplacingMergeTree`.
 
 **Why**
 33,464 rows, unique key, and **100% join coverage** against the event stream
@@ -385,6 +399,15 @@ The view resolves `ReplacingMergeTree` duplicates with `argMax` rather than
 `FINAL`, because replacement by background merge is eventual and the dictionary
 source must not assume it has happened (`insert-optimize-avoid-final`).
 
+The layout is complex-key for a reason that only shows up on one row. A
+simple-key dictionary key is always `UInt64`: the declared `Int64` is silently
+coerced (visible in `system.dictionaries.key.types`) and every lookup on a
+negative id then throws rather than missing. The catalogue holds exactly one,
+`-987654322`, stored by the source system as `18446744072721897294` — the id
+`csvsrc.ParseContentID` exists to recover. Parsing it correctly at ingest and
+then being unable to look it up would defeat the point. Complex-key preserves
+the declared type at a small memory cost, which 33K rows will not notice.
+
 **Caveat, stated because it is a correctness trap:** a dictionary refresh does
 **not** retract rows already enriched from the old values. Anything denormalized
 downstream from this dictionary must be re-derived by explicitly re-dirtying the
@@ -395,8 +418,8 @@ affected sessions.
 
 **Validation**
 ```sql
-SELECT countIf(dictGetOrDefault(default.sl_content_dict, 'video_type', content_id, '__miss__') = '__miss__')
-FROM default.sl_raw_events;   -- measured: 0
+SELECT countIf(dictGetOrDefault(default.sl_content_dict, 'video_type', tuple(content_id), '__miss__') = '__miss__')
+FROM default.sl_raw_events;   -- measured: 0, including the negative id
 ```
 
 ---

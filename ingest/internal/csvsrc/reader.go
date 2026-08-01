@@ -172,6 +172,18 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 			return nil, nil, io.EOF
 		}
 		cr.line++
+		// Same contract as EventReader: a structurally broken line is
+		// quarantined, not fatal. One malformed catalogue row must not abort
+		// the load and leave the rest of the catalogue — and the enrichment
+		// dictionary built from it — unrefreshed.
+		var pe *csv.ParseError
+		if ok := asParseError(err, &pe); ok {
+			return nil, &RowReject{
+				Line:   uint64(pe.Line),
+				Reason: ReasonBadRow,
+				Detail: pe.Err.Error(),
+			}, nil
+		}
 		return nil, nil, fmt.Errorf("read content csv at line %d: %w", cr.line, err)
 	}
 	cr.line++

@@ -78,7 +78,21 @@ GROUP BY content_id;
 --
 --   CREATE NAMED COLLECTION sl_ch AS user = '...', password = '...';
 --   SOURCE(CLICKHOUSE(NAME sl_ch DB '{{db}}' TABLE 'sl_content_current'))
-CREATE DICTIONARY IF NOT EXISTS {{db}}.sl_content_dict
+--
+-- COMPLEX_KEY_HASHED, not HASHED, for one specific reason. A simple-key
+-- dictionary key is always UInt64: ClickHouse silently coerces the declared
+-- Int64 (check system.dictionaries.key.types) and then every lookup on a
+-- negative id throws NOT_IMPLEMENTED "cannot be safely converted into UInt64".
+-- The catalogue contains exactly one such id, -987654322, written by the source
+-- system as 18446744072721897294 — the id csvsrc.ParseContentID exists to
+-- recover. Enriching every row correctly and then failing to look one of them
+-- up would be an odd place to give up. COMPLEX_KEY_HASHED preserves the
+-- declared key type; lookups pass a tuple. It costs a little more memory per
+-- key than HASHED, which at 33K rows is not a consideration.
+--
+-- OR REPLACE rather than IF NOT EXISTS so this correction reaches a database
+-- that already has the old definition. Rebuilding 33K rows is cheap.
+CREATE OR REPLACE DICTIONARY {{db}}.sl_content_dict
 (
     content_id  Int64,
     title       String            DEFAULT '',
@@ -93,4 +107,4 @@ SOURCE(CLICKHOUSE(
     PASSWORD '{{ch_password}}'
 ))
 LIFETIME(MIN 300 MAX 600)
-LAYOUT(HASHED());
+LAYOUT(COMPLEX_KEY_HASHED());

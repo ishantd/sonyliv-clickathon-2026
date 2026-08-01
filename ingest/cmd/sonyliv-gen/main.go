@@ -89,6 +89,12 @@ func run() error {
 			"If you are deliberately testing a producer that cannot batch, add --async "+
 			"so ClickHouse buffers server-side instead of creating one part per insert", *batchSize)
 	}
+	if err := chx.ValidateWritePath(*workers, *retries); err != nil {
+		return err
+	}
+	if *contentPool < 1 {
+		return fmt.Errorf("--content-pool must be at least 1, got %d", *contentPool)
+	}
 
 	start := time.Now().UTC().Truncate(time.Minute)
 	if *startAt != "" {
@@ -160,7 +166,9 @@ func run() error {
 		return err
 	}
 
-	fingerprint := cfg.Fingerprint()
+	// From the generator, not from cfg: New normalizes defaults and derives the
+	// catalogue digest, so only it knows the identity of what will be written.
+	fingerprint := gen.Fingerprint()
 	runID := uuid.New()
 
 	fmt.Printf("\ngenerating:\n")
@@ -258,6 +266,10 @@ func run() error {
 	fmt.Printf("  peak concurrency   : %d\n", res.s.PeakConcurrency)
 	fmt.Printf("  late arrivals      : %d\n", res.s.LateEvents)
 	fmt.Printf("  duplicates emitted : %d\n", res.s.Duplicates)
+	if res.s.DroppedPastCutoff > 0 {
+		fmt.Printf("  dropped past cutoff: %d  (event time beyond the window; --drain keeps them)\n",
+			res.s.DroppedPastCutoff)
+	}
 	if !res.s.FirstEventTime.IsZero() {
 		fmt.Printf("  event-time range   : %s .. %s\n",
 			res.s.FirstEventTime.Format("2006-01-02 15:04:05.000"),

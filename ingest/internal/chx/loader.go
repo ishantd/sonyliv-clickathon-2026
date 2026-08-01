@@ -103,6 +103,22 @@ type Loader struct {
 	started   time.Time
 }
 
+// ValidateWritePath rejects flag values the write path cannot survive.
+//
+// NewLoader normalizes non-positive worker counts, but it never gets the
+// chance: both commands size the chunk channel from the same flag first, and
+// make(chan T, n) with a negative n is a runtime panic, not an error. Checked
+// at the flag boundary so the user gets a message instead of a stack trace.
+func ValidateWritePath(workers, retries int) error {
+	if workers < 1 {
+		return fmt.Errorf("--workers must be at least 1, got %d", workers)
+	}
+	if retries < 0 {
+		return fmt.Errorf("--retries cannot be negative, got %d", retries)
+	}
+	return nil
+}
+
 // NewLoader builds a loader with sane defaults filled in.
 func NewLoader(client *Client, opts LoaderOptions) *Loader {
 	if opts.Workers <= 0 {
