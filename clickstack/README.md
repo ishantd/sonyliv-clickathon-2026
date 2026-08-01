@@ -37,6 +37,9 @@ open ClickStack from the ClickHouse Cloud console, then **Team Settings →
 Connections**, or the **Connection** dropdown in any tile editor. It looks like
 `68f3a1c9d4e77b0012ab34cd`.
 
+The quickest way to read it: create any throwaway source in the UI, then
+`./clickstack/csapi.sh GET /sources` — every source carries its `connection` field.
+
 Then:
 
 ```bash
@@ -45,6 +48,16 @@ Then:
 ```
 
 or `make clickstack` from `ingest/`.
+
+### One API asymmetry `apply.sh` has to work around
+
+Create assigns ids to filters and tiles; **update requires the filter ids back** —
+omit them and it fails with `filters.0.id: Required`. Tile ids are optional on
+update, but an omitted one makes the server mint a new tile rather than preserve
+the old, which would silently orphan any alert bound to that `tileId`. So on
+update `apply.sh` re-reads the live dashboard and grafts both sets of ids on,
+matched by name. A filter added since the last apply gets a freshly minted
+ObjectId, because update will not mint one for you.
 
 ## Verifying before you publish
 

@@ -175,6 +175,32 @@ for d in json.load(sys.stdin).get("result", []):
 ' "$name")"
 
   if [[ -n "$existing" ]]; then
+    # Create assigns ids to filters and tiles; update REQUIRES the filter ids back
+    # (`filters.0.id: Required`) and treats a tile id as "preserve this tile".
+    # So carry both forward, matched by name.
+    current="$("$csapi" GET "/dashboards/$existing")"
+    payload="$(printf '%s' "$payload" | python3 -c '
+import json, os, sys
+new = json.load(sys.stdin)
+cur = json.loads(open(sys.argv[1]).read()).get("result", {}) or {}
+
+filter_ids = {f.get("name"): f.get("id") for f in (cur.get("filters") or [])}
+for f in (new.get("filters") or []):
+    # A filter added since the last apply has no server id yet, and update will
+    # not mint one. ObjectId shape: 12 random bytes, hex.
+    f["id"] = filter_ids.get(f.get("name")) or os.urandom(12).hex()
+
+# Tile ids are optional on update, but alerts bind to tileId — regenerating them
+# would silently orphan every alert attached to this dashboard.
+tile_ids = {t.get("name"): t.get("id") for t in (cur.get("tiles") or [])}
+for t in (new.get("tiles") or []):
+    tid = tile_ids.get(t.get("name"))
+    if tid:
+        t["id"] = tid
+
+print(json.dumps(new))
+' <(printf '%s' "$current"))"
+
     "$csapi" PUT "/dashboards/$existing" "$payload" >/dev/null
     echo "dash    updated  $name  ($existing)"
   else

@@ -191,19 +191,26 @@ WITH
     ),
 
     -- The two layers duplicate the same core logic in two files, so they are
-    -- cross-checked where their time ranges overlap. Compared on active_ms
-    -- because it is the only metric both layers compute additively, and tolerant
-    -- to one second so a partial trailing bucket in the best-effort live layer
-    -- does not read as a discrepancy.
+    -- cross-checked where their time ranges overlap. This is the check that earned
+    -- its keep: it caught the live rollup clipping its window's LEADING edge
+    -- mid-bucket, which left seven consecutive minutes holding about a third of
+    -- their real active_ms. Ground truth recomputed from session_intervals agreed
+    -- with the minute layer, which is how the live layer was identified as the
+    -- wrong one.
+    --
+    -- Compared on active_ms because it is the only metric both layers compute
+    -- additively, and bounded to minutes older than BOTH watermarks. Without that
+    -- bound the check compares a live layer rebuilt seconds ago against a minute
+    -- layer rebuilt minutes ago, and reports the lag between them — which is the
+    -- design working, not a defect.
     i_cross_layer AS
     (
         SELECT
             'INVARIANT',
-            'live vs minute: sum(active_ms) agree on the overlapping full minutes',
+            'live vs minute: sum(active_ms) agree on minutes settled in both',
             '0 disagreeing minutes',
-            concat(toString(countIf(abs(toInt64(l) - toInt64(m)) > 1000)), ' of ',
-                   toString(count()), ' shared minutes'),
-            countIf(abs(toInt64(l) - toInt64(m)) > 1000) = 0
+            concat(toString(countIf(l != m)), ' of ', toString(count()), ' settled minutes'),
+            countIf(l != m) = 0
         FROM
         (
             SELECT l.minute AS minute, l.active_ms AS l, m.active_ms AS m
@@ -223,6 +230,12 @@ WITH
                 WHERE dim_mask = 0
                 GROUP BY minute
             ) AS m USING (minute)
+            WHERE minute + toIntervalMinute(1) <=
+            (
+                SELECT least(minIf(watermark_ts, layer = 'live'), minIf(watermark_ts, layer = 'minute'))
+                FROM {{db}}.serving_watermark FINAL
+                WHERE layer IN ('live', 'minute')
+            )
         )
     ),
 

@@ -228,19 +228,36 @@ func (r *Runner) Intervals(ctx context.Context, sessionKeys []uint64, evaluation
 // window to close, so a late event can change an already-published bucket. That
 // is the trade a "right now" number makes, and the dashboard says so.
 //
-// windowEnd is aligned DOWN to a bucket boundary, and that is load-bearing. The
-// rollup clips intervals to the window, so a window ending mid-bucket clips every
-// still-open session at that instant — which makes the trailing bucket's
-// ending_concurrency 0 and its active_ms a fraction of the truth. Measured before
-// this alignment: a live layer at ~600 concurrent reported "concurrent now" as 0,
-// every pass, because the newest bucket was always the broken one. Aligning down
-// costs up to one bucket of freshness and removes the artefact entirely.
+// BOTH window edges are aligned to a bucket boundary, and both matter. The rollup
+// clips intervals to the window, so any edge landing mid-bucket truncates that
+// bucket's contribution:
+//
+//   - a mid-bucket END clips every still-open session at that instant, making the
+//     newest bucket's ending_concurrency 0 and its active_ms a fraction of the
+//     truth. Measured: a live layer sitting at ~600 concurrent reported
+//     "concurrent now" as 0 on every single pass, because the newest bucket was
+//     always the broken one.
+//   - a mid-bucket START is the same defect at the other end, and it is worse
+//     because it PERSISTS. The window slides 10s per pass while bucket boundaries
+//     stay fixed, so the last pass that ever touches a given bucket is the one
+//     where it sits at the window's leading edge — partially clipped. Nothing
+//     rewrites it afterwards. Measured against ground truth recomputed from
+//     session_intervals: seven consecutive minutes held roughly a third of their
+//     real active_ms, e.g. 3,245,803 ms recorded against 9,456,921 ms actual.
+//
+// Truncate is relative to the epoch, so it lands on the same 10-second boundaries
+// as the intDiv(ms, 10000) bucketing in the SQL. Both edges aligned costs up to one
+// bucket of freshness and makes every published bucket whole.
+//
+// The cross-layer invariant in 090_validate_serving.sql is what surfaced the second
+// one: the minute layer agreed with ground truth and the live layer did not.
 func (r *Runner) Live(ctx context.Context, windowStart, windowEnd time.Time) (Stats, error) {
 	started := time.Now()
 	sql, err := r.statement("020_rollup_live.sql")
 	if err != nil {
 		return Stats{}, err
 	}
+	windowStart = windowStart.Truncate(LiveBucket)
 	windowEnd = windowEnd.Truncate(LiveBucket)
 
 	before, err := r.scalarUint64(ctx, fmt.Sprintf("SELECT count() FROM %s.serving_concurrency_live", r.Client.Database))
