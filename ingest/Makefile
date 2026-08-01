@@ -13,12 +13,26 @@ CONTENT_CSV ?= $(DATA)/ch-hackathon-content-data.csv
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | column -t -s ':'
 
-## build: compile both binaries into ./bin
+## web: rebuild the Next.js dashboard and stage its static export for embedding
+##      Requires Node >= 20.9 (Next 16). The export is committed, so `make build`
+##      works with no Node toolchain — run this only after changing dashboard/.
+web:
+	cd ../dashboard && npm ci --silent && npm run build
+	rm -rf internal/mock/web && mkdir -p internal/mock/web
+	cp -R ../dashboard/out/. internal/mock/web/
+	@echo "staged $$(du -sh internal/mock/web | cut -f1) into internal/mock/web"
+
+## build: compile all binaries into ./bin
 build:
 	@mkdir -p $(BIN)
 	go build -o $(BIN)/sonyliv-ingest ./cmd/sonyliv-ingest
 	go build -o $(BIN)/sonyliv-gen    ./cmd/sonyliv-gen
-	@echo "built $(BIN)/sonyliv-ingest and $(BIN)/sonyliv-gen"
+	go build -o $(BIN)/sonyliv-mock   ./cmd/sonyliv-mock
+	@echo "built $(BIN)/sonyliv-ingest, $(BIN)/sonyliv-gen and $(BIN)/sonyliv-mock"
+
+## mock: serve the load simulator and the event stepper on localhost:8088
+mock: build
+	$(BIN)/sonyliv-mock
 
 ## test: run unit tests
 test:
