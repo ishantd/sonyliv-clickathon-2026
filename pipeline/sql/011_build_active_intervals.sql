@@ -195,6 +195,28 @@ WITH
     {heartbeat_timeout_ms:UInt64} AS heartbeat_timeout_ms,
 
     -- The last instant we actually observed. Also the clip boundary.
+    --
+    -- THIS FULL SCAN IS DELIBERATE. DO NOT "optimise" IT. events_clean is
+    -- ORDER BY (session_key, event_ts, ...), so event_ts is not the sort-key
+    -- prefix and max() cannot use the primary index: measured on the service
+    -- 2026-08-02, 901,348 rows / 7,210,784 bytes / 11.2 ms. A projection cannot
+    -- help either -- events_clean is a SharedReplacingMergeTree and
+    -- deduplicate_merge_projection_mode is `throw`, so ADD PROJECTION is
+    -- refused on it.
+    --
+    -- The cheap alternative was measured and REJECTED. dirty_sessions carries
+    -- max_event_time per session, and max(max_event_time) returns the identical
+    -- value -- verified, both 2026-07-26 11:30:04.847 -- for 10,943 rows /
+    -- 87,544 bytes / 2.6 ms. That is 82.4x fewer rows and 4.4x faster.
+    --
+    -- It is still the wrong trade. dirty_sessions is an append-only WORK QUEUE
+    -- with no TTL today, but nothing in the schema stops it being pruned once
+    -- processed -- and if it were, max(max_event_time) would silently go
+    -- BACKWARDS. observation_horizon is the clip boundary, so a horizon that is
+    -- too low drops real events from the answer with no error. Trading a
+    -- 9-millisecond saving for a silent-wrong-answer coupling to a prunable
+    -- table inverts this project's stated priority. events_clean is the
+    -- authority for "what did we observe"; keep reading the authority.
     assumeNotNull((SELECT max(event_ts) FROM sonyliv.events_clean)) AS observation_horizon,
 
     -- Explicit empty-string test, NOT ifNull(toDateTime64OrNull(...), ...).
