@@ -1,0 +1,116 @@
+# LiteLLM proxy config — the Langfuse tracing seam.
+#
+# LibreChat has its own Langfuse instrumentation for the agent run; this proxy adds the
+# token counts and cost per model call, which those spans do not carry. Keys come from the
+# environment (see .env.example), never from this file, so it is safe in git.
+
+# ---------------------------------------------------------------------------
+# reasoning_effort: disable is load-bearing, not tuning. Do not "restore" it.
+#
+# Gemini 2.5 emits its chain of thought as `reasoning_content` deltas. LibreChat's custom
+# OpenAI-compatible endpoint does not consume them: the model answers, the proxy streams it
+# correctly, and LibreChat stores an assistant message whose text is the empty string. The
+# UI renders an empty bubble with no error anywhere -- not in the container logs, not in
+# the trace, which records `content: ""` beside a fully populated `reasoning_content`.
+#
+# Measured against the deployed stack, all 8 MCP tool schemas attached:
+#
+#   through the proxy directly, streamed, thinking on   144 chars of content   fine
+#   the same call through LibreChat's agent path        empty message          BROKEN
+#   the same call, reasoning_effort: disable            full answer            fine
+#
+# There is a second, narrower failure underneath it. With Gemini's DYNAMIC budget (the
+# default) and a vague question -- "can you give me a graph of average concurrent viewers
+# in the past day" -- the model returns a candidate with ZERO output parts: HTTP 200,
+# finish_reason `stop`, completion_tokens 0. Six runs, six empty. Specific questions
+# survive because the model commits to a tool quickly. It is exactly the open-ended
+# opening question a person actually types that dies.
+#
+# Bounding the budget (`low`) fixes that one but not the reasoning_content one, so the
+# budget has to go to zero regardless.
+#
+# WHY PRO IS BACK, when this file used to say it could not work.
+#
+# The old note was true of gemini-2.5-pro: `Budget 0 is invalid. This model only works in
+# thinking mode`, and with thinking on LibreChat dropped the answers. That was a 2.5-era
+# response shape, not a permanent property, and it was re-tested rather than assumed.
+#
+# Measured on gemini-3.1-pro-preview with thinkingLevel=high: finishReason STOP, one
+# content part, ZERO thought-parts, visible text intact, 106 thinking tokens spent. The
+# reasoning is internal and does not come back as parts the client has to filter, which is
+# exactly what 2.5-pro got wrong. gemini-3.6-flash behaves the same way (90 thinking
+# tokens), so the choice between them is latency versus depth, not broken versus working.
+# ---------------------------------------------------------------------------
+
+model_list:
+  # Claude Opus 5 via OpenRouter.
+  #
+  # WHY NOT BIFROST, which was wired here first and then removed: the gateway at
+  # bifrost.gobblecube.ai lives in a private prod subnet. It answers from a laptop on
+  # the VPN -- measured, it resolved bedrock/claude-opus-5 in 1.27s -- but the litellm
+  # container on the public demo box cannot route to it, and the failure is a hang
+  # rather than a refusal, so it surfaces as a dead chat rather than an error. Worth
+  # recording because the key and the model name both looked correct throughout.
+  #
+  # INACTIVE UNTIL OPENROUTER_API_KEY IS SET. LiteLLM registers a model whose key is
+  # missing and only fails when it is called, so leaving this entry here is safe: the
+  # specs below still point at Gemini, and flipping them is a one-line change once the
+  # key exists.
+  #
+  # WHY STILL THROUGH LITELLM, when Bifrost is itself a gateway and LibreChat can talk to
+  # an OpenAI-compatible endpoint directly. LiteLLM is the only thing in this stack that
+  # writes to Langfuse -- see success_callback below. Pointing LibreChat straight at
+  # Bifrost would have removed a container and silently emptied the Traces surface the
+  # demo advertises. So the chain gains a hop and keeps its observability:
+  #
+  #   LibreChat -> LiteLLM (Langfuse) -> Bifrost -> Bedrock -> claude-opus-5
+  #
+  # `openai/` prefix, not `bedrock/`: that selects LiteLLM's OpenAI-compatible client,
+  # which is what Bifrost speaks. Naming the provider bedrock here would make LiteLLM try
+  # to sign an AWS request itself and bypass the gateway entirely. The `bedrock/` inside
+  # the model string is Bifrost's own routing syntax and is passed through verbatim --
+  # confirmed against the live gateway, which resolved it to claude-opus-5 on provider
+  # bedrock and answered in 1.27s.
+  - model_name: claude-opus-5
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # What the specs point at, and therefore what actually answers.
+  #
+  # reasoning_effort: high is the whole point of choosing Pro. LiteLLM maps it to Gemini's
+  # thinking budget; `disable` is what the flash entry below uses, and on a model that
+  # REQUIRES thinking that setting is the error the old comment above records.
+  #
+  # The trade being accepted: this is a preview model and Pro is slower than Flash, on a
+  # path that is many small tool-calling turns. That is the cost of depth on a question
+  # like "why did viewers drop", where the model has to chain freshness -> detect -> slice.
+  - model_name: gemini-3.1-pro
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      reasoning_effort: high
+
+  # Kept as the fast fallback. One line in librechat.yaml.tmpl switches back to it if Pro
+  # is too slow in front of an audience.
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      reasoning_effort: disable
+
+litellm_settings:
+  # Token counts and cost per call, which LibreChat's own spans do not carry.
+  success_callback: ['langfuse']
+  # Failures matter more than successes for a demo: a tool loop that dies on a 429 should
+  # be visible in Langfuse rather than only in a container log.
+  failure_callback: ['langfuse']
+  # Must exceed the MCP server's 60s per-request ceiling, or a slow ClickHouse query
+  # surfaces as a proxy timeout and the real cause is hidden.
+  request_timeout: 120
+  # LibreChat sends a few OpenAI-shaped params Gemini does not accept; let them through
+  # rather than failing the call.
+  drop_params: true
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY

@@ -15,6 +15,20 @@ import (
 var schemaFS = ingest.SchemaFS
 
 // SchemaStatements returns every DDL statement, in file-name order.
+//
+// Only the TOP LEVEL of sql/ is applied. Files in sql/manual/ are embedded and
+// shipped but deliberately skipped, because `e.IsDir()` filters the subdirectory
+// out and ReadDir does not recurse. That is the mechanism behind the convention:
+//
+//	sql/*.sql          converges the schema. Idempotent, safe to re-run, applied
+//	                   by `make schema`.
+//	sql/manual/*.sql   needs a human: a privilege this service user does not
+//	                   hold, a placeholder to substitute, or a data mutation.
+//
+// The convention exists because two such files had already been written with
+// headers saying "not applied by make schema" while sitting in the glob that
+// applies everything — 009 would have run CREATE USER with a literal
+// '__MCP_PASSWORD__', and 010 an ALTER ... DELETE, on every schema apply.
 func SchemaStatements() ([]NamedStatement, error) {
 	entries, err := fs.ReadDir(schemaFS, "sql")
 	if err != nil {

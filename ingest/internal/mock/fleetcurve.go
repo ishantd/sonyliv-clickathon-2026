@@ -45,7 +45,11 @@ const (
 // traffic — that is what makes it a serving layer rather than a fleet feature — so
 // an unfiltered read counts every session active in the window, whoever produced
 // it. Where that distinction matters, ExactFleetCurve is the session-scoped answer.
-func ServedCurve(ctx context.Context, c *chx.Client, sealer *Sealer, f fleet.Filter,
+//
+// db is passed rather than read off the client so the dataset picker can point
+// this graph at another database without a second connection. It arrives from
+// resolveDatabase, so it is an allowlisted literal and never request text.
+func ServedCurve(ctx context.Context, c *chx.Client, sealer *Sealer, db string, f fleet.Filter,
 	from, to time.Time) ([]fleet.CurvePoint, time.Time, error) {
 
 	sealed, err := sealer.Watermark(ctx)
@@ -64,7 +68,7 @@ func ServedCurve(ctx context.Context, c *chx.Client, sealer *Sealer, f fleet.Fil
 	if !cut.After(from) {
 		return []fleet.CurvePoint{}, sealed, nil
 	}
-	pts, err := readSealed(ctx, c, f, from, cut)
+	pts, err := readSealed(ctx, c, db, f, from, cut)
 	return pts, sealed, err
 }
 
@@ -100,7 +104,7 @@ func dimParams(f fleet.Filter, extra map[string]string) clickhouse.Parameters {
 // sum(sessions) across dimension buckets is exact, not an approximation: a
 // session's dimensions are fixed for its life, so it lands in exactly one bucket
 // and is counted once.
-func readSealed(ctx context.Context, c *chx.Client, f fleet.Filter,
+func readSealed(ctx context.Context, c *chx.Client, db string, f fleet.Filter,
 	from, to time.Time) ([]fleet.CurvePoint, error) {
 
 	q := fmt.Sprintf(`
@@ -110,7 +114,7 @@ func readSealed(ctx context.Context, c *chx.Client, f fleet.Filter,
 		FROM %s.concurrency_minute
 		WHERE minute >= {from:DateTime} AND minute < {to:DateTime}
 		  AND %s
-		GROUP BY minute ORDER BY minute`, c.Database, dimPredicate)
+		GROUP BY minute ORDER BY minute`, db, dimPredicate)
 
 	qctx := clickhouse.Context(ctx, clickhouse.WithParameters(dimParams(f, map[string]string{
 		"from": from.Format("2006-01-02 15:04:05"),
@@ -126,7 +130,7 @@ func readSealed(ctx context.Context, c *chx.Client, f fleet.Filter,
 // pipeline answers with, and a metric cannot validate itself — this is the
 // independent derivation the comparison graph checks it against, and the only one
 // that can prove the fleet and ClickHouse agree on a specific set of sessions.
-func ExactFleetCurve(ctx context.Context, c *chx.Client, f fleet.Filter,
+func ExactFleetCurve(ctx context.Context, c *chx.Client, db string, f fleet.Filter,
 	from, to time.Time, timeoutMS int64) ([]fleet.CurvePoint, error) {
 
 	scope := `session_key IN (
@@ -154,7 +158,7 @@ FROM exploded
 WHERE toDateTime64(m, 3, 'UTC') <  w_to
   AND toDateTime64(m + 60, 3, 'UTC') > w_from
 GROUP BY minute ORDER BY minute`,
-		c.Database, fmt.Sprintf(scope, c.Database))
+		db, fmt.Sprintf(scope, db))
 
 	qctx := clickhouse.Context(ctx, clickhouse.WithParameters(dimParams(f, map[string]string{
 		"timeout": fmt.Sprint(timeoutMS),

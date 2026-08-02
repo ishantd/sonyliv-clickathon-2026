@@ -37,6 +37,17 @@ CREATE TABLE IF NOT EXISTS {{db}}.content_dim
     video_type      LowCardinality(String) DEFAULT 'unknown',
     category        LowCardinality(String) DEFAULT 'unknown',
 
+    -- Arrives with the unseen dataset (data/surprise_spec.md), "used as a filter
+    -- dimension". Measured on the surprise catalogue: 33,326 rows, 360 distinct
+    -- show names, ZERO empty -- so LowCardinality is right and comfortable.
+    --
+    -- DEFAULT '' and NOT 'unknown', unlike video_type and category above. Those
+    -- two have a documented empty-means-unclassified case in the source; there is
+    -- no such evidence for show_name, and mapping absent to 'unknown' would make
+    -- "this catalogue has no show names at all" -- which is exactly the original
+    -- 4-column extract -- indistinguishable from "this title has none".
+    show_name       LowCardinality(String) DEFAULT '',
+
     source_version  UInt64 COMMENT 'Monotonic load version; highest wins',
     loaded_at       DateTime64(3, 'UTC') DEFAULT now64(3)
 )
@@ -64,6 +75,11 @@ ALTER TABLE {{db}}.content_dim
         replicated_deduplication_window = 100,
         replicated_deduplication_window_seconds = 2592000;
 
+-- Additive; CREATE TABLE IF NOT EXISTS cannot deliver a column to an existing
+-- table. Metadata-only: existing parts are not rewritten.
+ALTER TABLE {{db}}.content_dim
+    ADD COLUMN IF NOT EXISTS show_name LowCardinality(String) DEFAULT '' AFTER category;
+
 -- Deduplicated read view. Replacement by background merge is eventual, so the
 -- dictionary source must not assume physical replacement has happened yet.
 -- [official: insert-optimize-avoid-final — resolve with argMax, not FINAL]
@@ -75,7 +91,8 @@ SELECT
     content_id,
     argMax(title,      source_version) AS title,
     argMax(video_type, source_version) AS video_type,
-    argMax(category,   source_version) AS category
+    argMax(category,   source_version) AS category,
+    argMax(show_name,  source_version) AS show_name
 FROM {{db}}.content_dim
 GROUP BY content_id;
 
@@ -119,7 +136,8 @@ CREATE OR REPLACE DICTIONARY {{db}}.content_dict
     content_id  Int64,
     title       String            DEFAULT '',
     video_type  String            DEFAULT 'unknown',
-    category    String            DEFAULT 'unknown'
+    category    String            DEFAULT 'unknown',
+    show_name   String            DEFAULT ''
 )
 PRIMARY KEY content_id
 SOURCE(CLICKHOUSE(

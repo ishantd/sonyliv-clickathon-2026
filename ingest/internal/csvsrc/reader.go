@@ -101,6 +101,18 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 	er.line++
 
 	get := func(col string) string { return strings.TrimSpace(rec[er.idx[col]]) }
+	// getOpt is for columns that may be absent from the header entirely.
+	// get() would index rec[0] on a missing column -- er.idx returns the zero
+	// value for an absent key -- and silently return content_id's value for
+	// video_resolution. That is a wrong value, not an error, so the optional
+	// lookup has to be explicit.
+	getOpt := func(col string) string {
+		i, ok := er.idx[col]
+		if !ok || i >= len(rec) {
+			return ""
+		}
+		return strings.TrimSpace(rec[i])
+	}
 	reject := func(reason, detail string) *RowReject {
 		return &RowReject{Line: er.line, Reason: reason, Detail: detail, Raw: strings.Join(rec, ",")}
 	}
@@ -140,6 +152,7 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 		AudioLanguage:     get("audio_language"),
 		SubtitleLanguage:  get("subtitle_language"),
 		PlayerVersion:     get("player_version"),
+		VideoResolution:   getOpt("video_resolution"),
 	}
 	return ev, nil, nil
 }
@@ -189,6 +202,15 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 	cr.line++
 
 	get := func(col string) string { return strings.TrimSpace(rec[cr.idx[col]]) }
+	// Optional column; see the note on getOpt in the event reader for why a
+	// missing key cannot go through get().
+	getOpt := func(col string) string {
+		i, ok := cr.idx[col]
+		if !ok || i >= len(rec) {
+			return ""
+		}
+		return strings.TrimSpace(rec[i])
+	}
 
 	contentID, err := ParseContentID(get("content_id"))
 	if err != nil {
@@ -209,10 +231,17 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 	if category == "" {
 		category = "unknown"
 	}
+	// show_name arrives with the unseen dataset and is absent from the original
+	// extract. Left as the empty string rather than mapped to 'unknown': unlike
+	// video_type and category, there is no evidence an empty show_name means
+	// "unclassified" here, and inventing a value would make "this catalogue has
+	// no show names at all" indistinguishable from "this title has none".
+	showName := getOpt("show_name")
 
 	return &model.Content{
 		ContentID: contentID,
 		Title:     get("title"),
+		ShowName:  showName,
 		VideoType: videoType,
 		Category:  category,
 	}, nil, nil
@@ -262,12 +291,13 @@ func openCSV(path string, required []string) (*os.File, *csv.Reader, map[string]
 
 // NormalizeHexID validates a 64-character hex identifier and upper-cases it.
 //
+// Exported because internal/api validates the same two ids on the HTTP path, and
+// a second copy of this function is exactly the cross-producer drift that
+// model.RawEvent's shared contract exists to prevent. (Re-applied after a merge
+// took main's copy of this file, which predates the export.)
+//
 // Case is normalized because the id is the session key: 'a1b2' and 'A1B2' from
 // two different producers must not become two different sessions.
-//
-// Exported for exactly that reason: internal/api validates the same two ids on
-// the HTTP path, and a second copy of this function is the cross-producer drift
-// model.RawEvent's contract exists to prevent.
 func NormalizeHexID(s string) (string, error) {
 	if len(s) != 64 {
 		return "", fmt.Errorf("expected 64 hex chars, got %d", len(s))

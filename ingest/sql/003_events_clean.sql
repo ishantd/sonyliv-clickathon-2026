@@ -85,6 +85,20 @@ CREATE TABLE IF NOT EXISTS {{db}}.events_clean
     subtitle_language   LowCardinality(String) COMMENT 'Normalized; "off" is preserved as distinct from "unknown"',
     player_version      LowCardinality(String) COMMENT 'Normalized: trimmed, empty -> unknown',
 
+    -- Normalized resolution. Arrives with the unseen dataset.
+    --
+    -- ONE rule, whitespace and case: '1920 * 1080' -> '1920*1080'. Measured over
+    -- 800,000 surprise rows that collapses 477 raw spellings to 415 and merges
+    -- 18.32% + 7.90% = 26.22% of rows into the single bucket they belong in.
+    -- Without it a filter on either spelling silently undercounts.
+    --
+    -- What is deliberately NOT done: the quality-ladder prefix is KEPT.
+    -- 'Auto-1280*720' (214,424 rows) is a different playback mode from
+    -- '1280*720', not a dirty spelling of it, and collapsing them would destroy
+    -- a real distinction to make a column look tidier. 'NA' and 'Auto-Auto' map
+    -- to 'unknown' because they name the absence of a resolution.
+    video_resolution    LowCardinality(String) COMMENT 'Normalized: spaces removed, case-folded; ladder prefix (Auto-/NA-/DataSaver-) PRESERVED; empty/na/auto -> unknown',
+
     -- The single most valuable normalization in the whole pipeline: 47
     -- inconsistently-cased event names collapsed into the closed set the
     -- concurrency state machine actually branches on. Pause/resume exist ONLY
@@ -188,7 +202,47 @@ PARTITION BY toYYYYMMDD(session_start_ts)
 -- this table — they are served from the pre-aggregated boundary and minute
 -- tables, which order low-cardinality-first as the rule prescribes.
 ORDER BY (session_key, event_ts, event_type, event)
+SETTINGS
+    -- These were MISSING on the live service (measured 2026-08-02), on the
+    -- busiest table in the schema, against this repo's own rule that every
+    -- MergeTree table must carry all three.
+    --
+    -- Why it is defence in depth rather than a present wrong answer, stated
+    -- precisely so nobody over- or under-reacts: every write to this table
+    -- arrives through events_raw_to_clean_mv, and events_raw DOES carry the
+    -- settings, so an identical replayed batch is refused upstream and the MV
+    -- never fires. On top of that this is a ReplacingMergeTree keyed on the
+    -- semantic event key and every read goes through events_dedup's argMax, so
+    -- a duplicate that did land would be resolved at read time regardless of
+    -- whether a merge had run.
+    --
+    -- What is NOT covered without these: a replay whose block boundaries differ
+    -- from the original passes events_raw's token check (the failure mode that
+    -- doubled concurrency_deltas on 2026-08-01), and then lands here. RMT would
+    -- still collapse it on key, so the exposure is storage and read cost rather
+    -- than correctness — but the whole point of the rule is that the difference
+    -- between "silently doubled" and "correctly deduplicated" should not depend
+    -- on which of two mechanisms happened to catch it.
+    --
+    -- Note the interaction already documented in CLAUDE.md: the docs advise
+    -- against combining deduplicate_blocks_in_dependent_materialized_views with
+    -- async inserts where dependent MVs exist, and the setting that used to make
+    -- that pairing throw is obsolete in 26.2, so it now proceeds silently.
+    -- ingest/internal/chx/loader.go sets the async path and the MV-dedup path
+    -- mutually exclusively for that reason.
+    non_replicated_deduplication_window = 1000,
+    replicated_deduplication_window = 1000,
+    replicated_deduplication_window_seconds = 2592000
 COMMENT 'Normalized derivation of events_raw. One row per landed row; read through events_dedup.';
+
+-- Converge an existing database: CREATE IF NOT EXISTS cannot deliver settings
+-- to a table that already exists, which is why these were absent in production
+-- even though the file now declares them.
+ALTER TABLE {{db}}.events_clean
+    MODIFY SETTING
+        non_replicated_deduplication_window = 1000,
+        replicated_deduplication_window = 1000,
+        replicated_deduplication_window_seconds = 2592000;
 
 
 -- =============================================================================
@@ -238,6 +292,13 @@ SELECT
        lowerUTF8(splitByChar('-', trimBoth(subtitle_language))[1]))    AS subtitle_language,
 
     if(empty(trimBoth(player_version)), 'unknown', trimBoth(player_version)) AS player_version,
+
+    -- Whitespace + case only; see the column comment for why the ladder prefix
+    -- survives. replaceAll on ' ' rather than trimBoth: the spaces are INSIDE
+    -- the value ('1920 * 1080'), not around it, so trimming does nothing.
+    if(lowerUTF8(replaceAll(trimBoth(video_resolution), ' ', '')) IN ('', 'na', 'auto', 'auto-auto', 'null', 'unknown'),
+       'unknown',
+       lowerUTF8(replaceAll(trimBoth(video_resolution), ' ', ''))) AS video_resolution,
 
     multiIf(
         event_type = 'VideoSessionStart', 'session_start',
@@ -341,6 +402,7 @@ SELECT
     argMax(audio_language,     row_version) AS audio_language,
     argMax(subtitle_language,  row_version) AS subtitle_language,
     argMax(player_version,     row_version) AS player_version,
+    argMax(video_resolution,   row_version) AS video_resolution,
     argMax(signal,             row_version) AS signal,
     argMax(is_periodic_ping,   row_version) AS is_periodic_ping,
     argMax(ingest_batch_id,    row_version) AS ingest_batch_id,

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import useSWR from "swr";
+import { useDataset } from "@/lib/dataset";
 import { DualCurveChart } from "@/components/DualCurveChart";
 import { FleetFilters } from "@/components/FleetFilters";
 import { Caveat, ErrorNote, Panel, Stat, StatGrid } from "@/components/ui";
@@ -29,8 +30,17 @@ export default function LivePage() {
   // one that is an independent oracle, so it stays one click away.
   const [exact, setExact] = useState(false);
 
+  // Only the ClickHouse series follows the dataset picker. The generator series is
+  // in-process fleet state and belongs to this box, not to a database — so on a
+  // read-only dataset the two lines answer different questions, and the page says
+  // so rather than letting the gap read as pipeline lag.
+  //
+  // The two controls are independent: `exact` chooses which derivation answers,
+  // `dataset` chooses which database it reads, and every combination is valid.
+  const dataset = useDataset();
+
   const { data, error } = useSWR<FleetCurveResponse>(
-    `/api/fleet/curve?minutes=${minutes}${exact ? "&exact=1" : ""}&${filterQuery(filter)}`,
+    `/api/fleet/curve?minutes=${minutes}${exact ? "&exact=1" : ""}&${filterQuery(filter)}${dataset ? `&db=${dataset}` : ""}`,
     fetcher,
     { refreshInterval: 5000, keepPreviousData: true },
   );

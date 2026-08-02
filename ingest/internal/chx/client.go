@@ -39,12 +39,18 @@ type Client struct {
 //     rows, 10 distinct platforms, one country) so wire compression is close to
 //     free CPU for a large bandwidth win, which matters on a Cloud service.
 //
-//   - async_insert is forced to 0 at the connection level. ClickHouse Cloud
-//     enables async inserts by default, which is the right default for small
-//     writers and the wrong one for this pipeline: pushing an already-correct
-//     50K-row native block through the server-side buffer adds a copy and a
-//     flush delay for no benefit. The paths that DO want async buffering
-//     (ingest_batches, ingest_rejects) turn it back on per-query.
+//   - async_insert is forced to 0 at the connection level, as a conservative
+//     default only. ClickHouse Cloud enables async inserts by default (measured
+//     on 26.2: value=1, default=1, changed=0), which is right for small writers
+//     and wrong for a 50K-row native block, where the server-side buffer adds a
+//     copy and a flush delay for no benefit.
+//
+//     This is a floor, not a policy. Every insert path states its own choice
+//     per write and overrides it: the event loader decides per chunk in
+//     insertSettings (loader.go) — sub-floor chunks go async so the server can
+//     coalesce them into properly sized parts — and the control-plane writer
+//     (ingest_batches, ingest_rejects) is always async because its rows arrive
+//     one at a time and cannot be batched client-side.
 //     [official: insert-batch-size, insert-async-small-batches]
 func Open(ctx context.Context, cfg *config.Config) (*Client, error) {
 	opts := &clickhouse.Options{
@@ -112,4 +118,16 @@ func (c *Client) CountRows(ctx context.Context, table string) (uint64, error) {
 		return 0, fmt.Errorf("count %s: %w", table, err)
 	}
 	return n, nil
+}
+
+// Named binds a value to a {name:Type} query parameter.
+//
+// Positional ? binding is enough for the short queries in this package, but the
+// concurrency rollups are long enough that positional arguments become a counting
+// exercise, and they reference the same parameter more than once — which ? cannot
+// express at all. Re-exported here so callers bind parameters through chx rather
+// than importing the driver directly, which is the boundary the rest of this
+// package maintains.
+func Named(name string, value any) driver.NamedValue {
+	return clickhouse.Named(name, value)
 }

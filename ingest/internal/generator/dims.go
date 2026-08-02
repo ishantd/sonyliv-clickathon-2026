@@ -87,6 +87,26 @@ var playerVersionDist = newWeighted([]string{
 	794717, 76486, 4000, 2000,
 })
 
+// videoResolutionDist reproduces the surprise extract's shape, including its
+// inconsistency -- both '1920*1080' and '1920 * 1080' are emitted, because the
+// source emits both and the normalization in events_raw_to_clean_mv exists to
+// merge them. A generator that only ever produced the tidy spelling would mean
+// the live path never exercised the rule the CSV path depends on.
+//
+// Weights are counts from an 800,000-row sample of
+// data/ch-hackathon-raw-data_surprise.csv.
+var videoResolutionDist = newWeighted([]string{
+	"1920*1080", "Auto-1280*720", "960*540", "1920 * 1080", "1280*720",
+	"1080*1920", "Auto-1920*1080", "NA", "1280 * 720", "Auto-960*540",
+	"Auto-640*360", "640*360", "720*1280", "3840*2160", "Auto-256*144",
+	"NA-1280*720", "DataSaver-640*360", "Auto-Auto",
+}, []float64{
+	73265, 59088, 42229, 31594, 28259,
+	25548, 18479, 16224, 11654, 10794,
+	7444, 6844, 5375, 4159, 4022,
+	3865, 3003, 2793,
+})
+
 // audioLanguageDist is the post-start value; the start event emits placeholders.
 var audioLanguageDist = newWeighted([]string{
 	"hin", "eng", "tam", "tel", "mar", "ben", "kan", "mal", "eng-English",

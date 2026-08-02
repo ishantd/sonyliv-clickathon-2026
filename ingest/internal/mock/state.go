@@ -270,7 +270,8 @@ type CurvePoint struct {
 // The UI must label it as an estimate; the exact answer needs the minute layer,
 // which is not deployed yet. Cheap on purpose: one GROUP BY, no coverage
 // explosion, so it can be polled while a load run is in flight.
-func Curve(ctx context.Context, c *chx.Client, minutes int) ([]CurvePoint, error) {
+// db is explicit for the same reason as FleetCurve: the picker drives it.
+func Curve(ctx context.Context, c *chx.Client, db string, minutes int) ([]CurvePoint, error) {
 	if minutes <= 0 || minutes > 720 {
 		minutes = 30
 	}
@@ -281,7 +282,7 @@ func Curve(ctx context.Context, c *chx.Client, minutes int) ([]CurvePoint, error
 		FROM %s.events_clean
 		WHERE event_ts >= now() - toIntervalMinute({mins:Int32})
 		  AND signal IN ('play','resume','liveness')
-		GROUP BY m ORDER BY m`, c.Database)
+		GROUP BY m ORDER BY m`, db)
 
 	rows, err := c.Conn.Query(ctx, sql, clickhouse.Named("mins", int32(minutes)))
 	if err != nil {

@@ -29,7 +29,8 @@ build:
 	go build -o $(BIN)/sonyliv-gen    ./cmd/sonyliv-gen
 	go build -o $(BIN)/sonyliv-api    ./cmd/sonyliv-api
 	go build -o $(BIN)/sonyliv-mock   ./cmd/sonyliv-mock
-	@echo "built sonyliv-ingest, sonyliv-gen, sonyliv-api and sonyliv-mock in $(BIN)"
+	go build -o $(BIN)/sonyliv-mcp    ./cmd/sonyliv-mcp
+	@echo "built sonyliv-ingest, sonyliv-gen, sonyliv-api, sonyliv-mock and sonyliv-mcp in $(BIN)"
 
 ## api: run the ingest API against the configured service (needs SONYLIV_API_TOKEN)
 api: build
@@ -70,6 +71,35 @@ load: schema
 verify: build
 	$(BIN)/sonyliv-ingest verify
 
+## rollup: full rebuild — session_intervals, then both serving layers
+rollup: build
+	$(BIN)/sonyliv-ingest concurrency --layer all
+
+## rollup-live: keep the live dashboard moving (10s cadence, Ctrl-C to stop)
+rollup-live: build
+	$(BIN)/sonyliv-ingest concurrency --layer live --loop 10s
+
+## rollup-check: assert the serving layers against the canonical measured figures
+#
+# GATING. 090 emits one row per invariant with its own verdict, which prints
+# beautifully and, until now, always exited 0 -- so a FAIL was something a human
+# had to notice. That is the same defect that left the sibling pipeline's gates
+# unexecuted for a whole deployment: a check that cannot fail a build is
+# documentation, not a check. The table is still printed in full, because which
+# invariant broke matters more than that one did.
+rollup-check:
+	@out=$$(./concurrency/ch.sh --file concurrency/sql/090_validate_serving.sql --format PrettyCompactMonoBlock); \
+	 printf '%s\n' "$$out"; \
+	 if printf '%s' "$$out" | grep -q 'FAIL'; then \
+	   echo; echo "rollup-check: FAILED -- $$(printf '%s' "$$out" | grep -c 'FAIL') invariant(s) above"; exit 1; \
+	 else \
+	   echo; echo "rollup-check: all invariants pass"; \
+	 fi
+
+## clickstack: create or update the ClickStack connection, sources and dashboards
+clickstack:
+	../clickstack/apply.sh
+
 ## demo: live replay — 2,000 concurrent sessions, 10 event-minutes at 30x
 demo: build
 	$(BIN)/sonyliv-gen --concurrency 2000 --duration 10m --speed 30 --ramp-up 1m
@@ -99,4 +129,31 @@ ch-down:
 clean:
 	rm -rf $(BIN)
 
-.PHONY: help web build api mock test check doctor schema schema-print load verify demo loadtest ch-up ch-down clean
+.PHONY: help build test check doctor schema schema-print load verify \
+        rollup rollup-live rollup-check clickstack \
+        demo loadtest ch-up ch-down clean
+
+# Serving-layer MCP server. Connects as sonyliv_mcp (ingest/sql/manual/009_mcp_reader.sql) and
+# refuses to start as anything that can read per-user data.
+mcp: build
+	$(BIN)/sonyliv-mcp --transport stdio
+
+# MCP_ADDR matches the deployed unit: the Docker bridge, so the LibreChat container can
+# reach it. Locally 127.0.0.1 is the sane default, hence the override rather than a
+# hardcoded address.
+MCP_ADDR ?= 127.0.0.1:8848
+mcp-http: build
+	$(BIN)/sonyliv-mcp --transport http --addr $(MCP_ADDR)
+
+# Exercises the refusals, which is the half that matters.
+mcp-check:
+	./cmd/sonyliv-mcp/check-mcp.sh
+
+# Proves the grant set directly against ClickHouse, bypassing the server.
+mcp-check-grants:
+	./cmd/sonyliv-mcp/check-grants.sh
+
+.PHONY: help web build api mock test check doctor schema schema-print load verify \
+        rollup rollup-live rollup-check clickstack \
+        demo loadtest ch-up ch-down clean \
+        mcp mcp-http mcp-check mcp-check-grants

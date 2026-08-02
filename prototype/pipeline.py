@@ -1,5 +1,35 @@
 #!/usr/bin/env python3
 """
+!! SEMANTICALLY STALE — DO NOT USE AS A CORRECTNESS REFERENCE !!
+
+This file has NO PLAYBACK AXIS: no pause, resume, or error handling
+anywhere. It therefore counts paused-in-foreground sessions as active,
+which contradicts:
+    solution/policy.yaml                          (the source of truth)
+    pipeline/sql/011_build_active_intervals.sql   (gates playing_state = 1)
+    docs/DECISIONS.md D1                          (revised 2026-08-02)
+
+Its "validated against brute-force ground truth" claim below is true but
+circular: prototype/reference/ground_truth_generator.py had no playback
+axis either, so the two agreed with each other while both diverged from
+the shipped SQL. Agreement proved the encoding faithful; it proved
+nothing about the semantics.
+
+It also cannot run — chdb is not installed in this environment.
+
+The canonical definition now lives in SQL and is verified on the live
+service:
+    prototype/reference/ground_truth_generator.sql   (the oracle)
+    pipeline/sql/011_build_active_intervals.sql      (analytics)
+    pipeline/sql/030_session_live_now.sql            (live)
+All three agree: at 2026-07-26 10:56 UTC the live path and the analytics
+path both return 2285 (pipeline/sql/032_live_verify.sql, V6).
+
+To revive this file, add a playing-state carry mirroring `playing_setter`
+in 011 (stop = pause|error|session_end, start = play|resume) and
+re-validate against the regenerated CSV.
+---------------------------------------------------------------------
+
 Foreground-only concurrency pipeline — ClickHouse prototype (chdb).
 
 Implements the two-tier design from docs/DESIGN.md:

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import useSWR from "swr";
+import { useDataset } from "@/lib/dataset";
 import { CurveChart } from "@/components/CurveChart";
 import { ContentPicker } from "@/components/ContentPicker";
 import {
@@ -46,8 +47,9 @@ export default function LoadSimulator() {
     refreshInterval: 1500,
   });
   // The curve IS a ClickHouse aggregate, so it polls more slowly.
+  const dataset = useDataset();
   const { data: curve } = useSWR<CurveResponse>(
-    "/api/curve?minutes=30",
+    `/api/curve?minutes=30${dataset ? `&db=${dataset}` : ""}`,
     fetcher,
     { refreshInterval: 5000 },
   );

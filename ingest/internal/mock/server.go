@@ -162,6 +162,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/fleet/dimensions", s.handleFleetDimensions)
 	api.HandleFunc("GET /api/fleet/curve", s.handleFleetCurve)
 
+	// Analytics panels: the ClickStack dashboards, served from this box against the
+	// same serving-layer views. Named panels only -- see analytics.go for why a
+	// ?sql= parameter is not offered.
+	api.HandleFunc("GET /api/analytics", s.handleAnalyticsList)
+	api.HandleFunc("GET /api/analytics/{panel}", s.handleAnalytics)
+
 	mux.Handle("/api/", s.cors(s.auth(api)))
 	return mux
 }
@@ -263,7 +269,12 @@ func (s *Server) handleSimStatus(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleCurve(w http.ResponseWriter, r *http.Request) {
 	minutes, _ := strconv.Atoi(r.URL.Query().Get("minutes"))
-	points, err := Curve(r.Context(), s.client, minutes)
+	db, err := resolveDatabase(r.URL.Query().Get("db"), s.client.Database)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	points, err := Curve(r.Context(), s.client, db, minutes)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

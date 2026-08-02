@@ -1,5 +1,34 @@
 #!/usr/bin/env python3
 """
+!! EXPECTED VALUES BELOW ARE STALE !!
+
+The hardcoded targets (2970 @ 10:56, 2965, 2940, and the platform
+breakdowns) come from the OLD definition, which had no playback axis and
+counted paused-in-foreground sessions as active. See docs/DECISIONS.md D1
+(revised 2026-08-02).
+
+Under the corrected definition the global peaks are:
+    10:56 UTC -> 2728   (was 2970, -8.1%)
+    10:57     -> 2699   (was 2939)
+    10:58     -> 2677   (was 2940)
+    10:59     -> 2691   (was 2965)
+The platform slice targets have NOT been recomputed and must be
+regenerated along with the CSV.
+
+Before this harness means anything:
+  1. Regenerate the oracle:
+         prototype/reference/ground_truth_generator.sql
+     (the .csv it compares against is still the old, playback-axis-free one)
+  2. Give prototype/pipeline.py a playback axis — it currently has none,
+     so it would fail against a corrected oracle for the right reason.
+
+Note this harness also cannot run here: chdb is not installed.
+
+Meanwhile the definition IS verified in SQL on the live service: the live
+path and the analytics path both return 2285 at 2026-07-26 10:56 UTC.
+See pipeline/sql/032_live_verify.sql, V6.
+---------------------------------------------------------------------
+
 Validation harness: serving-layer answers vs brute-force ground truth.
 
 1. GLOBAL: per-minute foreground concurrency reconstructed from

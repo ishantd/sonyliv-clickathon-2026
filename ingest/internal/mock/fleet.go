@@ -295,10 +295,19 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 	from := now.Add(-time.Duration(minutes) * time.Minute)
 	f := fleetFilter(r)
 
+	// The ClickHouse half of this graph follows the dataset picker; the generator
+	// half is in-process fleet state and has no database to follow.
+	db, err := resolveDatabase(r.URL.Query().Get("db"), s.client.Database)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
 	resp := map[string]any{
 		"from":       from,
 		"to":         now,
 		"minutes":    minutes,
+		"database":   db,
 		"generator":  s.fleet.Curve(f, from, now, now),
 		"timeout_ms": s.timeoutMS,
 	}
@@ -316,17 +325,23 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 	// machine over every event of the fleet's own sessions — slower, narrower, and
 	// the only one that is an independent oracle, which is why it stays reachable
 	// rather than being replaced.
+	//
+	// Both paths take db, so the dataset picker applies to whichever one is serving
+	// rather than silently reverting to the connection's own database on one of them.
+	//
+	// err is the one resolveDatabase already declared above, not a new binding: it
+	// has been checked and is nil here, and shadowing it in a var block would not
+	// compile.
 	var (
 		points []fleet.CurvePoint
-		err    error
 		source = SourceServed
 		sealed time.Time
 	)
 	if r.URL.Query().Get("exact") == "1" {
 		source = SourceExact
-		points, err = ExactFleetCurve(ctx, s.client, f, from, now, s.timeoutMS)
+		points, err = ExactFleetCurve(ctx, s.client, db, f, from, now, s.timeoutMS)
 	} else {
-		points, sealed, err = ServedCurve(ctx, s.client, s.sealer, f, from, now)
+		points, sealed, err = ServedCurve(ctx, s.client, s.sealer, db, f, from, now)
 	}
 	resp["source"] = source
 	if !sealed.IsZero() {

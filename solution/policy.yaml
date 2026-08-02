@@ -1,5 +1,22 @@
+# =====================================================================
+# THE SINGLE SOURCE OF TRUTH for what "active" means.
+#
+# Every path must implement this file and nothing else:
+#   - pipeline/sql/011_build_active_intervals.sql   (analytics intervals)
+#   - pipeline/sql/030_session_live_now.sql          (live viewership)
+#   - prototype/reference/ground_truth_generator.sql (the oracle)
+#
+# If any two disagree, this file wins and the other is the bug.
+# Changing a value here is a semantic change to the product: re-run the
+# oracle, re-validate the prototype, and record the measured delta in
+# docs/DECISIONS.md D1.
+#
+# Note: pause STOPS playback and the active predicate requires `playing`,
+# so paused-in-foreground is INACTIVE. This file always said so; D1 used
+# to contradict it. D1 was corrected on 2026-08-02 to match.
+# =====================================================================
 version: sonyliv-active-v1
-status: benchmark_contract_pending
+status: authoritative
 
 # Canonical time model.
 source_timestamp_format: unix_epoch_milliseconds
