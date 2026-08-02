@@ -89,10 +89,18 @@ func (s *Sealer) Run(ctx context.Context) {
 // Zero means nothing has been sealed, in which case the reader computes
 // everything live — correct, just slower, which is the right way for this to
 // degrade.
-func (s *Sealer) Watermark(ctx context.Context) (time.Time, error) {
+//
+// db is explicit rather than taken from the client because the two callers need
+// different databases, and the difference is not cosmetic. The sealer writes to
+// its own database, so Seal passes s.client.Database. A read serves whichever
+// dataset the picker selected, so ServedCurve passes that. Reading the watermark
+// from one database and the sealed rows from another does not fail — it cuts a
+// correct curve at a foreign boundary and reports the result as served, which is
+// wrong without looking wrong.
+func (s *Sealer) Watermark(ctx context.Context, db string) (time.Time, error) {
 	q := fmt.Sprintf(
 		`SELECT sealed_through FROM %s.concurrency_watermark FINAL WHERE id = 1`,
-		s.client.Database)
+		db)
 	rows, err := s.client.Conn.Query(ctx, q)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("read watermark: %w", err)
@@ -112,7 +120,7 @@ func (s *Sealer) Seal(ctx context.Context) error {
 	now := time.Now().UTC()
 	target := now.Add(-sealGrace).Truncate(time.Minute)
 
-	from, err := s.Watermark(ctx)
+	from, err := s.Watermark(ctx, s.client.Database)
 	if err != nil {
 		return err
 	}
