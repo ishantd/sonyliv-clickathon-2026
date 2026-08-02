@@ -92,11 +92,24 @@ CREATE TABLE IF NOT EXISTS {{db}}.events_raw
     subtitle_language   LowCardinality(String),
     player_version      LowCardinality(String),
 
-    -- Added by the 2026-07-31 unseen-day export (data/surprise_spec.md), named
-    -- there as a filter dimension. DEFAULT '' because the original extract has
-    -- no such column: empty means "the source did not report one", which is a
-    -- real fact about the row and not a missing value.
-    video_resolution    LowCardinality(String) DEFAULT '',
+    -- Arrives with the unseen dataset (data/surprise_spec.md). Raw spelling
+    -- preserved, like the language columns above and for the same reason: the
+    -- source is inconsistent and that inconsistency is evidence.
+    --
+    -- Measured over an 800,000-row sample of the surprise extract: 477 distinct
+    -- raw values, and the inconsistency is not cosmetic --
+    --   '1920*1080'      18.32%
+    --   '1920 * 1080'     7.90%   <- same resolution, spaces around the star
+    -- so a dashboard filtering one spelling silently misses a quarter of the
+    -- matching rows. Normalisation happens once, in events_clean.
+    --
+    -- Quality-ladder prefixes are real and are NOT stripped: Auto (214,424),
+    -- NA (11,228), DataSaver (6,310), Advanced (3,619). 'Auto-1280*720' is a
+    -- different playback mode from '1280*720', not a dirty spelling of it.
+    --
+    -- DEFAULT '' so the 13-column original extract still loads: the column is
+    -- legitimately absent there rather than missing.
+    video_resolution    LowCardinality(String) DEFAULT '' COMMENT 'Raw spelling; 477 distinct in the surprise extract. Normalized in events_clean',
 
     session_start_epoch DateTime64(3, 'UTC') COMMENT 'From Unix epoch millis; constant per session in the extract' CODEC(DoubleDelta, ZSTD(1)),
 
@@ -178,7 +191,7 @@ ENGINE = MergeTree
 -- The stricter "one session, exactly one partition" property is enforced where
 -- it actually matters, on events_clean, which partitions by session start.
 -- [official: schema-partition-lifecycle, schema-partition-low-cardinality]
-PARTITION BY toYYYYMM(event_timestamp)
+PARTITION BY toYYYYMMDD(event_timestamp)
 -- Deliberate exception to "order low-cardinality first".
 -- [official rule: schema-pk-cardinality-order — overridden here, with cause]
 --
@@ -228,12 +241,20 @@ ALTER TABLE {{db}}.events_raw
         replicated_deduplication_window = 1000,
         replicated_deduplication_window_seconds = 2592000;
 
--- Same convergence problem for the unseen-day column: CREATE TABLE IF NOT EXISTS
--- is a no-op against an existing database, so without this the loader's INSERT
--- would fail on an unknown column the moment the new CSV arrives. Additive,
--- metadata-only, safe to re-run.
+-- Additive column, for the same convergence reason: CREATE TABLE IF NOT EXISTS
+-- cannot deliver a new column to a database that already has the table. Adding
+-- a column with a DEFAULT is metadata-only -- existing parts are not rewritten,
+-- and the default is materialised on read until they are merged.
+--
+-- NOTE: the PARTITION BY above changed from toYYYYMM to toYYYYMMDD on
+-- 2026-08-02. PARTITION BY is IMMUTABLE, so unlike this column that change
+-- reaches a NEW table only. An existing events_raw keeps monthly partitions and
+-- there is no ALTER that fixes it -- it needs a rebuild. That was free here
+-- because the database was being recreated anyway.
 ALTER TABLE {{db}}.events_raw
-    ADD COLUMN IF NOT EXISTS video_resolution LowCardinality(String) DEFAULT '' AFTER player_version;
+    ADD COLUMN IF NOT EXISTS video_resolution LowCardinality(String) DEFAULT ''
+        COMMENT 'Raw spelling; 477 distinct in the surprise extract. Normalized in events_clean'
+        AFTER player_version;
 
 
 -- =============================================================================

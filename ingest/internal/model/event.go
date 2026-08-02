@@ -47,10 +47,14 @@ type RawEvent struct {
 	SubtitleLanguage string
 	PlayerVersion    string
 
-	// Added by the 2026-07-31 unseen-day export (data/surprise_spec.md), named
-	// there as a filter dimension. Empty for the original extract and for the
-	// generator, which is a real value meaning "the source did not report one" —
-	// not a missing field.
+	// Added by the unseen dataset (data/surprise_spec.md): "Video resolution
+	// during video playback — used as a filter dimension".
+	//
+	// OPTIONAL, not required. The reader fills it when the header carries it and
+	// leaves it empty otherwise, so both CSV generations load through the same
+	// code path. Making it required would have made the original 13-column
+	// extract unloadable, which is the wrong trade for a dimension that is
+	// legitimately absent from it rather than missing from it.
 	VideoResolution string
 }
 
@@ -106,9 +110,9 @@ type Content struct {
 	VideoType string
 	Category  string
 
-	// Added by the unseen-day catalogue export, named as a filter dimension.
-	// Functionally determined by content_id like title/video_type/category, so it
-	// reaches dashboards through content_dict rather than through a rollup mask.
+	// Added by the unseen dataset (data/surprise_spec.md): "Name of the show —
+	// used as a filter dimension". Optional for the same reason as
+	// RawEvent.VideoResolution.
 	ShowName string
 }
 

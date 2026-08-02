@@ -43,7 +43,7 @@ CREATE TABLE IF NOT EXISTS {{db}}.ingest_batches
     error             String   DEFAULT ''
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMM(started_at)
+PARTITION BY toYYYYMMDD(started_at)
 ORDER BY (source, run_id, batch_ordinal)
 SETTINGS
     -- Missing on the live service until 2026-08-02. This is the ledger the
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS {{db}}.ingest_rejects
     rejected_at  DateTime64(3, 'UTC') DEFAULT now64(3)
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMM(rejected_at)
+PARTITION BY toYYYYMMDD(rejected_at)
 ORDER BY (source, reason, run_id, source_line)
 TTL toDateTime(rejected_at) + INTERVAL 30 DAY
 SETTINGS

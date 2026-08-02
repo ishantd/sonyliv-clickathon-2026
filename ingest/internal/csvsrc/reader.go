@@ -37,64 +37,15 @@ const (
 	ReasonBadRow       = "bad_column_count"
 )
 
-// rawColumns are the columns REQUIRED by the raw-event schema. A file missing any
-// of these is rejected at open, because every one of them is load-bearing for
-// either identity, time or a serving dimension.
+// rawColumns are the columns required by the raw-event schema.
 var rawColumns = []string{
 	"video_session_id", "user_id", "content_id", "event_type", "event",
 	"event_timestamp", "platform", "app_version", "country",
 	"audio_language", "subtitle_language", "player_version", "session_start_epoch",
 }
 
-// contentColumns are the columns REQUIRED by the content catalogue.
+// contentColumns are the columns required by the content catalogue.
 var contentColumns = []string{"content_id", "title", "video_type", "category"}
-
-// Optional columns: carried when the header has them, defaulted when it does not.
-//
-// The 2026-07-31 unseen-day export adds one column to each input —
-// video_resolution to the events, show_name to the catalogue
-// (data/surprise_spec.md). Both are named as filter dimensions, so they have to
-// reach the tables rather than be tolerated and dropped.
-//
-// They are OPTIONAL rather than required on purpose. Making them required would
-// refuse the original extract, and the two files then need two loaders — which
-// is how the loader and the generator drift apart. One binary reads both, and
-// the column's absence is expressed as a default, not as a second code path.
-//
-// This is why openCSV validates only the required set and tolerates extras:
-// adding a column to the source is not, by itself, a breaking change. What was
-// broken is that an extra column was silently DISCARDED, and a missing optional
-// column would have silently read field 0 — see the `get` helpers below.
-var (
-	optionalRawColumns     = []string{"video_resolution"}
-	optionalContentColumns = []string{"show_name"}
-)
-
-// field reads a column by name, tolerating absence.
-//
-// The obvious form, rec[idx[col]], is a trap: Go returns the zero value for a
-// missing map key, so an absent column reads FIELD 0 — video_session_id — and
-// every row silently gets a session id where its resolution should be. That is
-// exactly the class of silent-wrong-answer this project keeps finding, so the
-// bounds check is not defensive style, it is the whole point of the helper.
-func field(rec []string, idx map[string]int, col string) string {
-	i, ok := idx[col]
-	if !ok || i < 0 || i >= len(rec) {
-		return ""
-	}
-	return strings.TrimSpace(rec[i])
-}
-
-// present returns the subset of want that the header actually has, in order.
-func present(idx map[string]int, want []string) []string {
-	var got []string
-	for _, c := range want {
-		if _, ok := idx[c]; ok {
-			got = append(got, c)
-		}
-	}
-	return got
-}
 
 // RowReject describes a source row that failed validation.
 type RowReject struct {
@@ -120,12 +71,6 @@ func OpenEvents(path string) (*EventReader, error) {
 	}
 	return &EventReader{f: f, r: r, idx: idx, line: 1}, nil
 }
-
-// OptionalColumns reports which optional columns this file actually carries.
-// Surfaced by the loader so a load says out loud whether the unseen-day
-// dimensions arrived, rather than leaving an all-empty column to be discovered
-// later on a dashboard.
-func (er *EventReader) OptionalColumns() []string { return present(er.idx, optionalRawColumns) }
 
 // Close releases the file.
 func (er *EventReader) Close() error { return er.f.Close() }
@@ -155,7 +100,19 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 	}
 	er.line++
 
-	get := func(col string) string { return field(rec, er.idx, col) }
+	get := func(col string) string { return strings.TrimSpace(rec[er.idx[col]]) }
+	// getOpt is for columns that may be absent from the header entirely.
+	// get() would index rec[0] on a missing column -- er.idx returns the zero
+	// value for an absent key -- and silently return content_id's value for
+	// video_resolution. That is a wrong value, not an error, so the optional
+	// lookup has to be explicit.
+	getOpt := func(col string) string {
+		i, ok := er.idx[col]
+		if !ok || i >= len(rec) {
+			return ""
+		}
+		return strings.TrimSpace(rec[i])
+	}
 	reject := func(reason, detail string) *RowReject {
 		return &RowReject{Line: er.line, Reason: reason, Detail: detail, Raw: strings.Join(rec, ",")}
 	}
@@ -195,7 +152,7 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 		AudioLanguage:     get("audio_language"),
 		SubtitleLanguage:  get("subtitle_language"),
 		PlayerVersion:     get("player_version"),
-		VideoResolution:   get("video_resolution"),
+		VideoResolution:   getOpt("video_resolution"),
 	}
 	return ev, nil, nil
 }
@@ -216,9 +173,6 @@ func OpenContent(path string) (*ContentReader, error) {
 	}
 	return &ContentReader{f: f, r: r, idx: idx, line: 1}, nil
 }
-
-// OptionalColumns reports which optional columns this catalogue file carries.
-func (cr *ContentReader) OptionalColumns() []string { return present(cr.idx, optionalContentColumns) }
 
 // Close releases the file.
 func (cr *ContentReader) Close() error { return cr.f.Close() }
@@ -247,7 +201,16 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 	}
 	cr.line++
 
-	get := func(col string) string { return field(rec, cr.idx, col) }
+	get := func(col string) string { return strings.TrimSpace(rec[cr.idx[col]]) }
+	// Optional column; see the note on getOpt in the event reader for why a
+	// missing key cannot go through get().
+	getOpt := func(col string) string {
+		i, ok := cr.idx[col]
+		if !ok || i >= len(rec) {
+			return ""
+		}
+		return strings.TrimSpace(rec[i])
+	}
 
 	contentID, err := ParseContentID(get("content_id"))
 	if err != nil {
@@ -268,11 +231,17 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 	if category == "" {
 		category = "unknown"
 	}
+	// show_name arrives with the unseen dataset and is absent from the original
+	// extract. Left as the empty string rather than mapped to 'unknown': unlike
+	// video_type and category, there is no evidence an empty show_name means
+	// "unclassified" here, and inventing a value would make "this catalogue has
+	// no show names at all" indistinguishable from "this title has none".
+	showName := getOpt("show_name")
 
 	return &model.Content{
 		ContentID: contentID,
 		Title:     get("title"),
-		ShowName:  get("show_name"),
+		ShowName:  showName,
 		VideoType: videoType,
 		Category:  category,
 	}, nil, nil
@@ -322,12 +291,13 @@ func openCSV(path string, required []string) (*os.File, *csv.Reader, map[string]
 
 // NormalizeHexID validates a 64-character hex identifier and upper-cases it.
 //
+// Exported because internal/api validates the same two ids on the HTTP path, and
+// a second copy of this function is exactly the cross-producer drift that
+// model.RawEvent's shared contract exists to prevent. (Re-applied after a merge
+// took main's copy of this file, which predates the export.)
+//
 // Case is normalized because the id is the session key: 'a1b2' and 'A1B2' from
 // two different producers must not become two different sessions.
-//
-// Exported for exactly that reason: internal/api validates the same two ids on
-// the HTTP path, and a second copy of this function is the cross-producer drift
-// model.RawEvent's contract exists to prevent.
 func NormalizeHexID(s string) (string, error) {
 	if len(s) != 64 {
 		return "", fmt.Errorf("expected 64 hex chars, got %d", len(s))

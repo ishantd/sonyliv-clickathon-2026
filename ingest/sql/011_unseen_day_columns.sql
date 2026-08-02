@@ -1,26 +1,30 @@
 -- =====================================================================
--- 011_unseen_day_columns.sql — carry video_resolution through the MV
+-- 011_unseen_day_columns.sql — carry the MV body to a deployed database
 -- =====================================================================
 --
 -- A CONVERGENCE statement, applied by `make schema` in file order after 003 --
--- the same role as the MODIFY SETTING ALTERs in 002 and 003. On a fresh database
--- it is a harmless no-op restatement of the MV 003 just created; on a deployed
--- one it is the only thing that updates the MV.
+-- the same role as the MODIFY SETTING ALTERs in 002 and 003.
 --
--- WHY IT IS SEPARATE. `CREATE MATERIALIZED VIEW IF NOT EXISTS` is a no-op
--- against an existing MV, so 003's updated SELECT does NOT reach a deployed
--- database. Only ALTER ... MODIFY QUERY does. The ADD COLUMN statements in 002
--- and 003 are additive and idempotent and can run any time; this one changes
--- behaviour, so it is deliberate and separate.
+-- WHY IT EXISTS. `CREATE MATERIALIZED VIEW IF NOT EXISTS` is a NO-OP against a
+-- database that already has the MV. So when 003's SELECT changes -- as it did
+-- when video_resolution and its normalization were added -- the new body reaches
+-- a FRESH database and silently does not reach a DEPLOYED one. The MV keeps
+-- running its old definition, the new column stays empty for every arriving row,
+-- and nothing errors. Only ALTER ... MODIFY QUERY closes that.
+--
+-- This matters most for exactly the normalization 003 documents: '1920 * 1080'
+-- collapsing to '1920*1080' merges 26.22% of surprise rows into the bucket they
+-- belong in. An un-migrated MV would keep writing the raw spellings while the
+-- column comment claimed otherwise.
 --
 -- WHY NOT DROP AND RECREATE. An MV holds no data, so dropping it looks free. It
 -- is not: rows inserted into events_raw between the DROP and the CREATE are
 -- never propagated to events_clean, silently, and no count will ever reveal
 -- which ones. MODIFY QUERY swaps the definition without a gap.
 --
--- GENERATED from 003_events_clean.sql's MV body by
--- `make unseen-mv` — do not hand-edit. Two copies of an 80-line SELECT drift;
--- a generated one cannot. Regenerate after any change to that MV.
+-- GENERATED from 003_events_clean.sql's MV body -- do not hand-edit. Two copies
+-- of an 80-line SELECT drift; a generated one cannot. Regenerate after any change
+-- to that MV.
 --
 -- Safe to re-run: MODIFY QUERY is idempotent for an identical body.
 -- =====================================================================
@@ -58,8 +62,12 @@ SELECT
 
     if(empty(trimBoth(player_version)), 'unknown', trimBoth(player_version)) AS player_version,
 
-    -- Trimmed but NOT defaulted to 'unknown' -- see the column comment above.
-    trimBoth(video_resolution)                                       AS video_resolution,
+    -- Whitespace + case only; see the column comment for why the ladder prefix
+    -- survives. replaceAll on ' ' rather than trimBoth: the spaces are INSIDE
+    -- the value ('1920 * 1080'), not around it, so trimming does nothing.
+    if(lowerUTF8(replaceAll(trimBoth(video_resolution), ' ', '')) IN ('', 'na', 'auto', 'auto-auto', 'null', 'unknown'),
+       'unknown',
+       lowerUTF8(replaceAll(trimBoth(video_resolution), ' ', ''))) AS video_resolution,
 
     multiIf(
         event_type = 'VideoSessionStart', 'session_start',
