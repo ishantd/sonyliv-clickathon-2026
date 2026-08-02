@@ -48,9 +48,14 @@ def trace_calls(*args: str) -> dict[str, set[str]]:
         'ch()     { python3 "$APPLY" "$1" --database "$DATABASE" $INSECURE $DRY "${@:2}"; }',
         'ch()     { echo "CH_CALL $(basename "$1") :: ${*:2}"; }',
     )
+    # chq() answers the read-only assertions bootstrap makes. The dictionary
+    # loop asks two questions and BOTH must be answered plausibly, or
+    # ensure_dictionary_loaded aborts the run before the build stage and this
+    # test sees no ch() calls at all -- which looks like a missing-parameter bug
+    # and is not.
     src = src.replace(
         'chq()    { python3 "$APPLY" --query "$1" --database "$DATABASE" $INSECURE --quiet "${@:2}"; }',
-        'chq()    { echo 0; }',
+        'chq()    { case "$1" in *countIf*) echo 0 ;; *clusterAllReplicas*) echo 2 ;; *) echo 0 ;; esac; }',
     )
     # The Go loader would try to reach the service.
     src = re.sub(r'^\s*"\$GEN".*$', '      echo "GEN stub"', src, flags=re.M)

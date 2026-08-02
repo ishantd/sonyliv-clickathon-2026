@@ -153,6 +153,67 @@ ch()     { python3 "$APPLY" "$1" --database "$DATABASE" $INSECURE $DRY "${@:2}";
 chq()    { python3 "$APPLY" --query "$1" --database "$DATABASE" $INSECURE --quiet "${@:2}"; }
 scalar() { chq "$1" | head -1 | tr -d '[:space:]'; }
 
+# ---------------------------------------------------------------- dictionary
+# content_dict is the ONLY object in this schema with independent per-replica
+# state. Everything else is SharedMergeTree over one copy in object storage; a
+# dictionary is an in-memory per-replica cache, loaded lazily on first use.
+#
+# Two properties make this need a loop rather than a single statement:
+#
+#   1. An EMPTY load still reports status = 'LOADED' with no last_exception, so
+#      "did it work" cannot be answered by status. Only element_count can.
+#   2. SYSTEM RELOAD DICTIONARY without ON CLUSTER is NODE-LOCAL -- it reloads
+#      only the replica that happens to serve that HTTP request. With 2 replicas
+#      behind a load balancer, one statement reaches one of them.
+#
+# So: try ON CLUSTER first (deterministic where the user holds the privilege),
+# fall back to the node-local form, and re-check element_count across ALL
+# replicas after each attempt. Repeated node-local reloads land on different
+# replicas as the balancer rotates, which is why this converges.
+#
+# Must run AFTER the content load. A reload against an empty content_current
+# caches zero rows and is worse than no reload at all, because it replaces a
+# not-yet-loaded dictionary with a loaded-and-empty one.
+ensure_dictionary_loaded() {
+  local attempts=8 i=0 empty total
+  while (( i++ < attempts )); do
+    chq "SYSTEM RELOAD DICTIONARY ON CLUSTER default $DATABASE.content_dict" >/dev/null 2>&1 \
+      || chq "SYSTEM RELOAD DICTIONARY $DATABASE.content_dict" >/dev/null 2>&1 \
+      || true
+
+    empty="$(scalar "SELECT countIf(element_count = 0) FROM clusterAllReplicas(default, system.dictionaries) WHERE database='$DATABASE' AND name='content_dict'" || echo '')"
+    total="$(scalar "SELECT count() FROM clusterAllReplicas(default, system.dictionaries) WHERE database='$DATABASE' AND name='content_dict'" || echo '')"
+
+    # Three distinct outcomes, and conflating them produces a misleading error.
+    if [[ -z "$total" || "$total" == "0" ]]; then
+      # Not "empty" -- ABSENT. system.dictionaries has no row for it on any
+      # replica, so 001 never created it or the name is wrong. Retrying a reload
+      # cannot fix that, so fail immediately rather than after 8 sleeps.
+      die "content_dict does not exist on any replica (system.dictionaries returned no rows).
+Re-run stage 1: ingest/sql/001_content.sql creates it."
+    fi
+    if [[ "$empty" == "0" ]]; then
+      pass "content_dict loaded on all $total replica(s) (attempt $i)"
+      return 0
+    fi
+    info "content_dict empty on ${empty:-?} of ${total} replica(s), retrying ($i/$attempts)"
+    sleep 2
+  done
+
+  chq "SELECT hostName(), toString(status), element_count, last_exception
+       FROM clusterAllReplicas(default, system.dictionaries)
+       WHERE database='$DATABASE' AND name='content_dict' ORDER BY 1" || true
+  die "content_dict is still EMPTY on at least one replica after $attempts reload attempts.
+
+Every dictGetOrDefault on that replica silently returns the default, so
+video_type would be '__unknown__' for every row and no error would be raised.
+The report above shows which replica.
+
+LIFETIME(MIN 300 MAX 600) does heal this on its own within ten minutes, so
+waiting and re-running --build-only is a valid response. Do NOT proceed with a
+build while it is empty."
+}
+
 step "Target"
 info "host      $CLICKHOUSE_HOST:$CLICKHOUSE_HTTP_PORT ($([[ -n $INSECURE ]] && echo http || echo https))"
 info "database  $DATABASE"
@@ -213,14 +274,12 @@ if [[ $DO_SCHEMA -eq 1 ]]; then
     ch "$REPO_ROOT/pipeline/sql/$f" --rewrite-db sonyliv
   done
 
-  # The dictionary is the one object with independent PER-REPLICA state. Cloud
-  # lazy-loads it on first use and an EMPTY load still reports status='LOADED',
-  # so every dictGetOrDefault silently returns the default. Force it instead of
-  # waiting for LIFETIME to heal it.
-  if [[ $DRY_RUN -eq 0 ]]; then
-    chq "SYSTEM RELOAD DICTIONARY $DATABASE.content_dict" >/dev/null 2>&1 \
-      || warn "SYSTEM RELOAD DICTIONARY failed (may need ON CLUSTER privileges) — stage 4 will catch an empty load"
-  fi
+  # NO DICTIONARY RELOAD HERE. It used to be, and that was the bug: this stage
+  # runs BEFORE the content is loaded, so the reload cached an empty
+  # content_current and the dictionary then reported LOADED with element_count 0.
+  # Observed exactly that on 2026-08-02 -- replica 2gi3lh9 loaded at 04:22:23
+  # with 0 elements while l6u3rgu had 33,326. The reload now lives in
+  # ensure_dictionary_loaded, called after the seed.
 fi
 
 # ---------------------------------------------------------------- seed
@@ -275,6 +334,14 @@ file through 'sonyliv-ingest events', which carries its own dedup token."
     fi
   fi
 
+fi
+
+# ------------------------------------------------------------- dictionary
+# After the seed, before the build: 011's Guard 0 throws if the dictionary is
+# cold, and 011 is the first thing the build runs.
+if [[ $DO_BUILD -eq 1 && $DRY_RUN -eq 0 ]]; then
+  step "Dictionary — force a load on every replica"
+  ensure_dictionary_loaded
 fi
 
 # ---------------------------------------------------------------- build
