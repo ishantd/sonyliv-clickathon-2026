@@ -22,7 +22,7 @@
 --
 -- So the split is now explicit and enforced by shape, not by comment:
 --
---   GATING  (throwIf, reference-free) -- G1..G5 below. Every one compares
+--   GATING  (throwIf, reference-free) -- G1..G6 below. Every one compares
 --           the minute tier against a source OUTSIDE itself, or against an
 --           internal invariant that holds for any data. None contains a
 --           number derived from this extract.
@@ -191,11 +191,11 @@ SELECT throwIf(
 -- ---------------------------------------------------------------------
 SELECT throwIf(
     (SELECT count() FROM system.projections
-      WHERE database = 'sonyliv' AND table = 'active_intervals'
+      WHERE database = currentDatabase() AND table = 'active_intervals'
         AND name = 'proj_session_revision') = 0
     OR
     (SELECT count() FROM system.projection_parts
-      WHERE database = 'sonyliv' AND table = 'active_intervals'
+      WHERE database = currentDatabase() AND table = 'active_intervals'
         AND name = 'proj_session_revision' AND active) = 0,
     'G5 FAILED: proj_session_revision is missing or unmaterialised on active_intervals. Run the ADD PROJECTION and MATERIALIZE PROJECTION in 010_active_intervals.sql. If ADD PROJECTION threw, check deduplicate_merge_projection_mode -- it is `throw`, which blocks projections on Replacing/Summing/Aggregating engines but must NOT block this one, since active_intervals is a classic MergeTree.'
 ) AS g5_projection_present;

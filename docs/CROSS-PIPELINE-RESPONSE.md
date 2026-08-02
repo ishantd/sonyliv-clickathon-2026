@@ -256,67 +256,111 @@ reload — that is what a dictionary source *is*).
 ## Apply order
 
 Nothing below has been run against the service — these are hand-over commands.
-`040` is destructive by necessity; read the guard's message first.
+
+**Use `scripts/lib/apply_sql.py`, not `clickhouse-client`.** `clickhouse-client` is
+not installed on this machine, and ClickHouse's HTTP interface executes one
+statement per request, so a multi-statement file cannot simply be POSTed.
+`apply_sql.py` is stdlib-only, splits statements quote- and comment-aware, reads
+`CLICKHOUSE_PASSWORD` from the environment and never prints it, and **stops on the
+first error** rather than continuing past a failed statement.
+
+Load the credentials first (they live in `ingest/.env`, which is gitignored):
 
 ```bash
-clickhouse-client --host "$CLICKHOUSE_HOST" --port 9440 --secure \
-  --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-  --database sonyliv --multiquery < pipeline/sql/010_active_intervals.sql
+set -a && . ingest/.env && set +a
 ```
 
-Then confirm the projection landed — if `ADD PROJECTION` was refused, everything
-still works and silently costs 2.95×, so this check is the point:
+### The one-command path
+
+`scripts/bootstrap.sh` now runs all of this in the right order, including `040` and
+`041` with their parameters. Against an **existing** database, skip the seed:
 
 ```bash
-clickhouse-client --host "$CLICKHOUSE_HOST" --port 9440 --secure \
-  --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --query "
-SELECT hostName(), name, parent_name
+./scripts/bootstrap.sh --no-seed --database sonyliv
+```
+
+Dry-run first to see the statement list without executing anything:
+
+```bash
+./scripts/bootstrap.sh --no-seed --database sonyliv --dry-run
+```
+
+### Or step by step
+
+**1. The projection on `active_intervals`.** Safe and re-runnable; `MATERIALIZE` is a
+mutation, so it costs something on a re-run but changes nothing.
+
+```bash
+python3 scripts/lib/apply_sql.py pipeline/sql/010_active_intervals.sql \
+  --database sonyliv --rewrite-db sonyliv
+```
+
+Then confirm it actually landed on both replicas. This check is the point: if
+`ADD PROJECTION` was refused, every read still works and silently costs 2.95×.
+
+```bash
+python3 scripts/lib/apply_sql.py --database sonyliv --query "
+SELECT hostName(), name, rows, formatReadableSize(bytes_on_disk)
 FROM clusterAllReplicas(default, system.projection_parts)
-WHERE database='sonyliv' AND table='active_intervals' AND active"
+WHERE database = currentDatabase() AND table = 'active_intervals' AND active"
 ```
 
-`concurrency_minute_versions` must be rebuilt, because `ORDER BY` gained
-`clip_variant` and that is immutable. The table is derived — only
-`concurrency_minute_mask13` and `concurrency_minute_current` read it — so dropping
-it loses no source of truth:
-
-```bash
-clickhouse-client --host "$CLICKHOUSE_HOST" --port 9440 --secure \
-  --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" \
-  --query "DROP TABLE IF EXISTS sonyliv.concurrency_minute_versions"
-```
-
-Then `040` per variant, then `041`. Run `041` for **each** variant you loaded —
-G1 and G2 are per-`clip_variant` by design:
-
-```bash
-clickhouse-client --host "$CLICKHOUSE_HOST" --port 9440 --secure \
-  --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --database sonyliv \
-  --param_generation=2 \
-  --param_policy_version=sonyliv-active-v1 \
-  --param_pipeline_run_id="$(uuidgen | tr 'A-Z' 'a-z')" \
-  --param_source_delta_snapshot=0 \
-  --param_clip_variant=unclipped \
-  --multiquery < pipeline/sql/040_concurrency_minute.sql
-```
-
-The ingest DDL changes are metadata-only `MODIFY SETTING` re-issues and safe to
-re-run at any time:
+**2. The ingest settings.** Metadata-only `MODIFY SETTING` re-issues, safe any time.
 
 ```bash
 for f in ingest/sql/002_events_raw.sql ingest/sql/003_events_clean.sql ingest/sql/004_ingest_control.sql; do
-  sed "s/{{db}}/sonyliv/g" "$f" | clickhouse-client --host "$CLICKHOUSE_HOST" \
-    --port 9440 --secure --user "$CLICKHOUSE_USER" --password "$CLICKHOUSE_PASSWORD" --multiquery
+  python3 scripts/lib/apply_sql.py "$f" --database sonyliv
 done
 ```
 
-To re-run the offline validation before any of the above:
+**3. Rebuild the minute tier.** This is the destructive step. `ORDER BY` gained
+`clip_variant` and that is immutable, so the table must be dropped. It is derived —
+only `concurrency_minute_mask13` and `concurrency_minute_current` read it — so
+nothing authoritative is lost. `040`'s first statement is a guard that throws with
+instructions if you skip this.
+
+```bash
+python3 scripts/lib/apply_sql.py --database sonyliv \
+  --query "DROP TABLE IF EXISTS sonyliv.concurrency_minute_versions"
+```
+
+```bash
+python3 scripts/lib/apply_sql.py pipeline/sql/040_concurrency_minute.sql \
+  --database sonyliv --rewrite-db sonyliv \
+  --param generation=2 \
+  --param policy_version=sonyliv-active-v1 \
+  --param pipeline_run_id="$(uuidgen | tr 'A-Z' 'a-z')" \
+  --param source_delta_snapshot=0 \
+  --param clip_variant=unclipped
+```
+
+**4. Verify.** Six gating checks, all reference-free. They throw, so a bad build
+stops here instead of being served. Run this per `clip_variant` you loaded — G1 and
+G2 are per-variant by design.
+
+```bash
+python3 scripts/lib/apply_sql.py pipeline/sql/041_minute_verify.sql \
+  --database sonyliv --rewrite-db sonyliv \
+  --param policy_version=sonyliv-active-v1 \
+  --param clip_variant=unclipped \
+  --param generation=2
+```
+
+### Re-running 040
+
+`concurrency_minute_versions` is a plain MergeTree, so **re-running at the same
+`generation` appends a second copy** and G1/G3 will throw. That is intended: a
+doubled tier should stop the script rather than be served. Bump `--param generation`
+(or `MINUTE_GENERATION` for the bootstrap) on every rebuild;
+`concurrency_minute_current` resolves `max(generation)` so readers follow
+automatically.
+
+### Offline, before touching anything
 
 ```bash
 python3 pipeline/tools/validate_040_041.py
+cd ingest && make check
 ```
-
----
 
 ## Blocker not in this review, and it outranks everything here
 
