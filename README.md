@@ -65,6 +65,22 @@ Track: _TBD — confirmed once the problem statement is revealed_
   - [Langfuse](https://github.com/langfuse/langfuse) — open source LLM observability & analytics
   - [LibreChat](https://github.com/danny-avila/LibreChat) — open source AI chat platform
 
+All three are integrated, over the same serving layer. Architecture, setup and the
+verification script are in [`deploy/README.md`](deploy/README.md).
+
+- **ClickStack** — dashboards over the concurrency serving layer, including a
+  benchmark-answers board and a per-dimension drop alert.
+- **LibreChat** — self-hosted on the EC2 box, hosting an analyst that answers
+  viewing-trend questions. It reaches ClickHouse only through
+  [`sonyliv-mcp`](ingest/cmd/sonyliv-mcp/README.md), an MCP server that connects as a
+  restricted user granted `SELECT` on eight aggregate objects and nothing carrying
+  `user_id`. Asked for a person, it refuses — and the refusal is enforced by the grant,
+  not by the prompt.
+- **Langfuse** — prompt management is the versioned source of truth for the analyst's
+  system prompt, rendered into the deployment at deploy time and failing closed if it
+  cannot be read. Model calls route through a LiteLLM sidecar, so every turn, tool call,
+  latency and token count is traced.
+
 ## Submission checklist
 
 Required components, per §2.3 / §5.2 of the Participant Handbook:

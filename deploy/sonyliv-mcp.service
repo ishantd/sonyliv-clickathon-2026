@@ -4,6 +4,13 @@ Documentation=file:///opt/sonyliv/README-mcp.md
 After=network-online.target
 Wants=network-online.target
 
+# MCP_ADDR is the Docker bridge address (see below), which does not exist until dockerd
+# has created docker0. Without this ordering the unit loses a boot race and fails to bind
+# an address that appears a second later. Wants= rather than Requires=: if Docker is
+# removed from the box the server should still start on whatever MCP_ADDR then says.
+After=docker.service
+Wants=docker.service
+
 [Service]
 Type=simple
 User=sonyliv
@@ -14,9 +21,18 @@ Group=sonyliv
 EnvironmentFile=/etc/sonyliv/mcp.env
 
 # --transport http requires SONYLIV_MCP_TOKEN to be non-empty and refuses to start
-# without it. The bind is deliberately 127.0.0.1: terminate TLS in front of this rather
-# than exposing SQL access over plaintext HTTP. See README-mcp.md.
-ExecStart=/opt/sonyliv/bin/sonyliv-mcp --transport http --addr 127.0.0.1:8848
+# without it.
+#
+# MCP_ADDR comes from the environment file and is 172.17.0.1:8848 on this box — the
+# Docker bridge gateway, because LibreChat runs in a container and a container cannot
+# reach the host's 127.0.0.1. It is NOT a relaxation of the loopback-only stance: the
+# bridge is a host-local interface, unreachable from off the box, and 8848 is not in the
+# security group. The bearer token still never crosses a network, which is the property
+# the original 127.0.0.1 bind was protecting.
+#
+# Anything that DOES publish this port off-box must terminate TLS in front of it. That
+# part of README-mcp.md still stands.
+ExecStart=/opt/sonyliv/bin/sonyliv-mcp --transport http --addr ${MCP_ADDR}
 
 Restart=always
 RestartSec=3s

@@ -1,0 +1,38 @@
+# LiteLLM proxy config — the Langfuse tracing seam.
+#
+# LibreChat has no Langfuse integration. Putting LiteLLM between it and Gemini is what
+# makes every turn observable: prompt, completion, tool calls, latency, token counts and
+# cost all land in Langfuse Cloud with no application code.
+#
+# Keys come from the environment (see .env.example), never from this file, so it is safe in
+# git.
+
+model_list:
+  # Default. A tool loop here is many small turns and latency is what the conversation
+  # feels; flash is the right trade for that shape.
+  - model_name: gemini-2.5-flash
+    litellm_params:
+      model: gemini/gemini-2.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+
+  # One click away in the picker, for a question where reasoning depth beats latency.
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: gemini/gemini-2.5-pro
+      api_key: os.environ/GEMINI_API_KEY
+
+litellm_settings:
+  # The whole reason this proxy exists.
+  success_callback: ['langfuse']
+  # Failures matter more than successes for a demo: a tool loop that dies on a 429 should
+  # be visible in Langfuse rather than only in a container log.
+  failure_callback: ['langfuse']
+  # Timeouts here must exceed the MCP server's 60s per-request ceiling, or a slow
+  # ClickHouse query surfaces as a proxy timeout and the real cause is hidden.
+  request_timeout: 120
+  drop_params: true
+  # LibreChat sends a few OpenAI-shaped params Gemini does not accept; drop_params lets
+  # them through rather than failing the call.
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
