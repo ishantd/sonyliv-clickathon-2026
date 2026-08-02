@@ -199,15 +199,32 @@ func (r *Runner) DirtySessions(ctx context.Context, since time.Time, cap int) ([
 	return keys, rows.Err()
 }
 
-// Intervals recomputes session_intervals.
+// Intervals recomputes session_intervals, then projects the sessions it touched
+// into session_live_state.
 //
 // An empty sessionKeys means every session. Recomputation REPLACES each session's
 // row rather than adjusting it, so running this twice on the same input is a
 // no-op beyond a bumped version — which is what makes a retry safe and removes
 // the need for any correction ledger.
+//
+// The live-state projection is part of THIS layer rather than a fourth one, and
+// runs unconditionally rather than behind a flag, because the only thing that can
+// change a session's current state is a recompute of that session's intervals.
+// Anywhere else it would either fire when nothing had changed or lag behind the
+// table it reads.
+//
+// Both statements are stamped with the SAME version, taken from the clock once
+// here. That is load-bearing twice over: session_live_state.state_revision is the
+// argMax ordering key, so two writes at one revision leave the winner arbitrary,
+// and a state_revision that did not match session_intervals.version would make
+// "which generation of this session am I looking at" unanswerable.
 func (r *Runner) Intervals(ctx context.Context, sessionKeys []uint64, evaluationAsOf time.Time) (Stats, error) {
 	started := time.Now()
 	sql, err := r.statement("010_recompute_sessions.sql")
+	if err != nil {
+		return Stats{}, err
+	}
+	liveSQL, err := r.statement("015_session_live_state.sql")
 	if err != nil {
 		return Stats{}, err
 	}
@@ -216,16 +233,30 @@ func (r *Runner) Intervals(ctx context.Context, sessionKeys []uint64, evaluation
 		// rather than a nil the driver might send as NULL.
 		sessionKeys = []uint64{}
 	}
+	version := uint64(time.Now().UnixMilli())
 
 	err = r.Client.Conn.Exec(ctx, sql,
 		chx.Named("session_keys", sessionKeys),
 		chx.Named("heartbeat_timeout_ms", r.HeartbeatTimeoutMS),
 		chx.Named("evaluation_as_of", tsParam(evaluationAsOf)),
 		chx.Named("policy_version", r.PolicyVersion),
-		chx.Named("version", uint64(time.Now().UnixMilli())),
+		chx.Named("version", version),
 	)
 	if err != nil {
 		return Stats{}, fmt.Errorf("recompute session_intervals: %w", err)
+	}
+
+	// Reads session_intervals, so it must follow the recompute rather than run
+	// beside it. No heartbeat_timeout_ms: the lease is already baked into the
+	// interval ends 010 just wrote, and re-deriving it here would be a second
+	// definition of "active" free to drift from the first.
+	if err := r.Client.Conn.Exec(ctx, liveSQL,
+		chx.Named("session_keys", sessionKeys),
+		chx.Named("evaluation_as_of", tsParam(evaluationAsOf)),
+		chx.Named("policy_version", r.PolicyVersion),
+		chx.Named("version", version),
+	); err != nil {
+		return Stats{}, fmt.Errorf("project session_live_state: %w", err)
 	}
 
 	st := Stats{Layer: "intervals", WatermarkTS: evaluationAsOf, Build: time.Since(started), SessionsIn: uint64(len(sessionKeys))}

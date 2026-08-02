@@ -186,7 +186,23 @@ function peakMarker(label: string): Plugin<"line"> {
  * than no key, and a canvas legend cannot draw a 2px dashed rule at this size
  * without it collapsing into a dot.
  */
-export function ChartLegend({ withheldPeak = false }: { withheldPeak?: boolean }) {
+export function ChartLegend({
+  withheldPeak = false,
+  bucket = "minute",
+}: {
+  withheldPeak?: boolean;
+  /**
+   * The singular noun for one bucket on the x-axis — "minute", "hour", "day".
+   *
+   * Passed in rather than assumed, because the series is no longer always at
+   * minute grain. A key reading "peak in minute" over hour buckets is not a
+   * cosmetic slip: peak and average differ by roughly 2.7x over the hot hour, so
+   * a reader who believes the accent line is a per-minute maximum when it is a
+   * per-hour one has been told the wrong thing about the number they are
+   * quoting.
+   */
+  bucket?: string;
+}) {
   return (
     <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[0.6875rem] text-ink-2">
       <li className="flex items-center gap-1.5">
@@ -195,7 +211,7 @@ export function ChartLegend({ withheldPeak = false }: { withheldPeak?: boolean }
           <line x1="0" y1="3" x2="26" y2="3" stroke={ACCENT} strokeWidth="1.5" />
         </svg>
         <span className={withheldPeak ? "text-ink-3 line-through" : undefined}>
-          peak in minute
+          peak in {bucket}
         </span>
         {withheldPeak ? (
           <span className="text-accent">withheld at this rollup</span>
@@ -238,18 +254,26 @@ export function ConcurrencyLine({
   peak,
   average,
   height = 340,
+  bucket = "minute",
 }: {
   labels: string[];
   peak: (number | null)[];
   average: number[];
   height?: number;
+  /**
+   * Same noun as ChartLegend's, and it has to agree with it: this string is the
+   * dataset label, which is what the hover tooltip prints. The legend and the
+   * tooltip disagreeing about what a point means is worse than either being
+   * wrong on its own.
+   */
+  bucket?: string;
 }) {
   const opts = base() as ChartOptions<"line">;
   const hasPeak = peak.some((v) => v != null);
 
   const datasets = [
     {
-      label: "peak in minute",
+      label: `peak in ${bucket}`,
       data: peak,
       borderColor: ACCENT,
       backgroundColor: ACCENT_WASH,

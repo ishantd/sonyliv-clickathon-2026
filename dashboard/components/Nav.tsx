@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useSyncExternalStore } from "react";
 import useSWR from "swr";
 import { fetcher, getToken, setToken } from "@/lib/api";
-import { setDataset, useDataset } from "@/lib/dataset";
+import { setDataset, useDataset, useWriteDataset } from "@/lib/dataset";
 import { ClickHouseMark, ClickHouseSymbol, SonyLivMark } from "./BrandMarks";
 
 /**
@@ -47,7 +47,13 @@ function TokenBadge() {
 type DbOption = { name: string; label: string; note: string; writable: boolean };
 
 /**
- * The dataset picker, in the nav so it applies to every page rather than to one.
+ * The dataset picker, in the nav so it applies to every Analytics panel at once.
+ *
+ * ANALYTICS ONLY. It used to render on every page, which quietly promised
+ * something the service does not do: no write path in the simulator reads a `db`
+ * parameter, so on Pusher the control could change what a page displayed but
+ * never where a click landed. Pusher renders PusherDatabase below instead — the
+ * same fact, stated rather than offered.
  *
  * A <select>, not a row of buttons: the list is server-supplied and will grow, and
  * a growing row of buttons competes with the page tabs for the same horizontal
@@ -116,6 +122,40 @@ function DatasetPicker() {
 }
 
 /**
+ * What Pusher writes into, stated as a fact rather than offered as a choice.
+ *
+ * This occupies the slot the picker would have taken, and looks like the
+ * `read-only` badge for the same reason that badge exists: it is a state of the
+ * page, not a warning and not a control. Nothing here is disabled — a disabled
+ * <select> invites a reader to wonder what would happen if it were enabled, when
+ * the honest answer is that no other value exists to pick.
+ *
+ * Renders nothing until the list resolves. A placeholder that later changes into
+ * a database name is worse than a slot that fills in, because the intermediate
+ * state is indistinguishable from a real answer.
+ */
+function PusherDatabase() {
+  const db = useWriteDataset();
+  if (!db) return null;
+
+  return (
+    <span className="flex shrink-0 items-center gap-1.5">
+      {/* Dropped below `sm` with the rest of the row's prose: the badge alone
+          still names the database, and the header is tight there. */}
+      <span className="hidden text-[0.8125rem] whitespace-nowrap text-ink-3 sm:inline">
+        writes to
+      </span>
+      <span
+        className="rounded border border-line px-1.5 py-0.5 font-mono text-[0.625rem] whitespace-nowrap text-ink-3"
+        title={`The simulator writes only to ${db.name} — every write path uses the server's configured database and takes no dataset parameter. The picker on Analytics selects what is READ and does not apply here.`}
+      >
+        {db.name}
+      </span>
+    </span>
+  );
+}
+
+/**
  * The collaboration lockup: both parties' real marks, joined.
  *
  * Every glyph here is the owner's own asset — SonyLIV's header PNG, ClickHouse's
@@ -163,20 +203,64 @@ function Lockup() {
   );
 }
 
-// Ordered by workflow, not by age: create a fleet, watch it, control it. The two
-// original dashboards come last because they answer different questions — throughput
-// for the load simulator, one-event-at-a-time semantics for the stepper.
-const routes: { href: string; label: string; also?: string[] }[] = [
+type Tab = { href: string; label: string; also?: string[] };
+
+/*
+ * TWO SECTIONS, NOT SIX SIBLINGS.
+ *
+ * The six tabs were flat because they arrived one at a time, and flat made them
+ * all equally important — which put the surface the submission is actually
+ * judged on next to a stepper that fires one event at a time, at the same weight.
+ * They are not the same kind of thing. Analytics answers questions about a
+ * dataset; the other five drive traffic into one. Splitting them says which
+ * matters, and gives every question one place to be asked.
+ *
+ * It also resolves something the flat strip could not: the dataset picker applied
+ * to five pages that cannot honour it. With the pusher named as one section, the
+ * whole section can carry one honest statement about its database instead of five
+ * pages each disclaiming a control in the header above them.
+ *
+ * Ordered by workflow, not by age: create a fleet, watch it, control it. The two
+ * original dashboards come last because they answer different questions —
+ * throughput for the load simulator, one-event-at-a-time semantics for the
+ * stepper.
+ */
+const pusherTabs: Tab[] = [
   { href: "/fleet/new", label: "Create" },
   // Session detail is a query-param page under /fleet/session, so it needs naming
   // here — otherwise opening a session lights up no tab at all.
   { href: "/fleet", label: "Sessions", also: ["/fleet/session"] },
   { href: "/live", label: "Live" },
-  // The ClickStack dashboards, reproduced here rather than linked: managed
-  // ClickStack has no stable deep link, so an external tab would land on a login.
-  { href: "/analytics", label: "Analytics" },
-  { href: "/", label: "Load test" },
+  { href: "/loadtest", label: "Load test" },
   { href: "/manual", label: "Stepper" },
+];
+
+/*
+ * The top row.
+ *
+ * Analytics is first and is the root, because it is what a reader arriving with
+ * no instructions should see.
+ *
+ * PUSHER LINKS STRAIGHT TO /fleet/new RATHER THAN TO A /pusher INDEX. An index
+ * page here would exist only to list the five links that the sub-row already
+ * shows the moment you arrive — a mandatory stop that tells you nothing the next
+ * screen does not. Landing on Create is also the honest first step of the
+ * workflow the sub-row is ordered by: you cannot watch or step a fleet that does
+ * not exist. The cost is that "Pusher" and "Create" are the same href, so the two
+ * rows both light up on arrival; that reads correctly, because you are in fact in
+ * Pusher and on Create.
+ *
+ * `also` carries every route the section owns, so the top tab stays lit on all of
+ * them. Analytics owns two addresses because / re-exports /analytics and the old
+ * link must keep working.
+ */
+const sections: Tab[] = [
+  { href: "/", label: "Analytics", also: ["/analytics"] },
+  {
+    href: "/fleet/new",
+    label: "Pusher",
+    also: pusherTabs.flatMap((t) => [t.href, ...(t.also ?? [])]),
+  },
 ];
 
 /*
@@ -228,35 +312,71 @@ const externals: {
  */
 const norm = (p: string) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
 
+/** Whether `pathname` is the tab's own route or one of the routes it stands in for. */
+function isActive(tab: Tab, pathname: string) {
+  // Exact match, not startsWith: "/" is a prefix of every route, so a prefix test
+  // would light up every tab everywhere.
+  const here = norm(pathname);
+  return here === norm(tab.href) || (tab.also?.map(norm).includes(here) ?? false);
+}
+
+/** Whether the pathname belongs to Pusher, which is what reveals the sub-row. */
+const inPusher = (pathname: string) =>
+  pusherTabs.some((t) => isActive(t, pathname));
+
 /**
- * The route tabs.
+ * A strip of tabs.
  *
- * Extracted so the header can place them in two different slots — inline from
- * `sm` up, on their own row below it — without the markup existing twice.
+ * One component for both levels, because they differ only in weight and sharing
+ * it is what keeps them looking like two levels of one control rather than two
+ * controls. Extracted from the header for the further reason that the top strip
+ * is placed in two different slots — inline from `lg` up, on its own row below it
+ * — and the markup should not exist twice.
  */
-function Tabs({ pathname, className = "" }: { pathname: string; className?: string }) {
+function Tabs({
+  tabs,
+  pathname,
+  label,
+  sub = false,
+  className = "",
+}: {
+  tabs: Tab[];
+  pathname: string;
+  label: string;
+  sub?: boolean;
+  className?: string;
+}) {
   return (
     <nav
       className={`flex min-w-0 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${className}`}
-      aria-label="Dashboards"
+      aria-label={label}
     >
-      {routes.map((r) => {
-        // Exact match, not startsWith: "/" is a prefix of every route, so a
-        // prefix test would light up every tab everywhere.
-        const here = norm(pathname);
-        const active = here === norm(r.href) || (r.also?.includes(here) ?? false);
+      {tabs.map((t) => {
+        const active = isActive(t, pathname);
         return (
           <Link
-            key={r.href}
-            href={r.href}
+            key={t.href}
+            href={t.href}
             aria-current={active ? "page" : undefined}
-            className={`rounded px-2.5 py-1 text-[0.8125rem] whitespace-nowrap transition-colors duration-150 ${
-              active
-                ? "bg-accent-wash text-accent"
-                : "text-ink-2 hover:bg-raised hover:text-ink"
+            // The sub-row is a size down and its active state is a tinted
+            // underline rather than a filled pill. Two filled pills stacked read
+            // as two things selected at the same level; an underline reads as a
+            // position within the thing selected above it.
+            className={`rounded whitespace-nowrap transition-colors duration-150 ${
+              sub
+                ? `border-b-2 px-2.5 pt-1 pb-0.5 text-[0.75rem] ${
+                    active
+                      ? "border-accent text-accent"
+                      : "border-transparent text-ink-3 hover:text-ink"
+                  }`
+                : `px-2.5 py-1 text-[0.8125rem] ${
+                    active
+                      ? "bg-accent-wash text-accent"
+                      : "text-ink-2 hover:bg-raised hover:text-ink"
+                  }`
             }`}
           >
-            {r.label}
+            {t.label}
           </Link>
         );
       })}
@@ -266,6 +386,7 @@ function Tabs({ pathname, className = "" }: { pathname: string; className?: stri
 
 export function Nav() {
   const pathname = usePathname();
+  const pusher = inPusher(pathname);
 
   return (
     <header className="sticky top-0 z-10 border-b border-line bg-ground/90 backdrop-blur">
@@ -292,7 +413,12 @@ export function Nav() {
         <div className="flex items-center gap-3 sm:gap-4 md:gap-6">
           <Lockup />
 
-          <Tabs pathname={pathname} className="hidden lg:flex" />
+          <Tabs
+            tabs={sections}
+            pathname={pathname}
+            label="Sections"
+            className="hidden lg:flex"
+          />
 
         {/* The other surfaces of the demo, which are not this app.
 
@@ -304,8 +430,13 @@ export function Nav() {
 
             Rendered only when configured. A nav tab that leads to a placeholder is
             worse than an absent one, so an unset URL means the tab does not exist. */}
+          {/* One slot, two different things in it, and never both: on Analytics
+              the dataset is a choice and on Pusher it is a fact. Sharing the slot
+              keeps the header's shape stable across a section change — the
+              externals and the token badge do not shift sideways when you move
+              between them. */}
           <div className="ml-auto flex shrink-0 items-center gap-3">
-            <DatasetPicker />
+            {pusher ? <PusherDatabase /> : <DatasetPicker />}
           </div>
 
           <nav
@@ -350,7 +481,34 @@ export function Nav() {
           <TokenBadge />
         </div>
 
-        <Tabs pathname={pathname} className="mt-2 lg:hidden" />
+        <Tabs
+          tabs={sections}
+          pathname={pathname}
+          label="Sections"
+          className="mt-2 lg:hidden"
+        />
+
+        {/* The sub-row exists only inside Pusher, and that is the point of having
+            it: Analytics is one surface and would be showing a row of one tab, or
+            worse, five tabs that navigate away from it.
+
+            Below `lg` this is the third row, after the chrome and the wrapped
+            section row. Three rows is more header than any of this deserves, but
+            the alternative is hiding navigation at exactly the width where it is
+            hardest to find, which is the mistake the comment above already
+            describes at length.
+
+            The divider is what makes two rows read as two levels rather than as
+            ten tabs that happened to wrap. */}
+        {pusher ? (
+          <Tabs
+            tabs={pusherTabs}
+            pathname={pathname}
+            label="Pusher"
+            sub
+            className="mt-2 border-t border-line/60 pt-2"
+          />
+        ) : null}
       </div>
     </header>
   );

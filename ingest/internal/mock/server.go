@@ -273,11 +273,23 @@ func (s *Server) handleSimStatus(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleCurve(w http.ResponseWriter, r *http.Request) {
 	minutes, _ := strconv.Atoi(r.URL.Query().Get("minutes"))
-	db, err := s.resolveDatabase(r.Context(), r.URL.Query().Get("db"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
+
+	// Pinned to the server's own database, ignoring `db`, for the same reason
+	// /api/fleet/curve is — see the long note on handleFleetCurve in fleet.go.
+	//
+	// This is the Load test page's curve, and it is a trailing-minutes read of the
+	// traffic this box is generating right now. `resolveDatabase("")` returns the
+	// picker's preferred READ default, which is the frozen 31 July extract; a
+	// window of the last 30 minutes over a dataset whose events stopped days ago
+	// is a flat zero line drawn next to a visibly-running generator. That reads as
+	// a broken pipeline and is in fact a category error — the page is about this
+	// box, and this box writes to one database.
+	//
+	// Pinned server-side rather than by having the page send the right value: a
+	// property enforced at the only place that can enforce it cannot be undone by
+	// a caller that forgets. The page passes the writable dataset anyway, which is
+	// now belt and braces rather than the mechanism.
+	db := s.client.Database
 	points, err := Curve(r.Context(), s.client, db, minutes)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)

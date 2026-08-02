@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import useSWR from "swr";
 import { API_BASE, fetcher } from "./api";
+import { clock, stamp } from "./format";
 
 /**
  * The analytics surface, typed once.
@@ -48,6 +49,21 @@ export type PanelInfo = {
   breakdown?: string;
 };
 
+/**
+ * One time granularity the server will bucket a curve at.
+ *
+ * `seconds` is carried rather than derived from `key`, because it is the only
+ * part the browser has to do arithmetic with — how many buckets a window will
+ * produce, and which label format the axis needs — and inferring it from a
+ * string would put a second definition of "a day" in the client.
+ */
+export type Grain = {
+  key: string;
+  label: string;
+  seconds: number;
+};
+
+
 export type Meta = {
   panels: PanelInfo[];
   databases: Database[];
@@ -55,6 +71,15 @@ export type Meta = {
   dimensions: Dimension[];
   /** Dimension-set (sorted, "|"-joined) -> the grouping that answers it exactly. */
   rollups: Record<string, string>;
+  /*
+   * OPTIONAL, AND THAT IS NOT DEFENSIVE PADDING. This field and the
+   * `live_sessions` panel ship from the Go service on their own schedule, so a
+   * browser built after them can be pointed at a server built before them — a
+   * running box mid-deploy, or a developer with a stale binary. Typed optional
+   * means every use site is forced to say what it does without them, and what
+   * it does is render the page exactly as it rendered before the field existed.
+   */
+  grains?: Grain[];
 };
 
 export type QueryStats = {
@@ -86,6 +111,14 @@ export type PanelResponse = {
   mask: Mask;
   stats: QueryStats;
   error?: string;
+  /**
+   * The grain the server ACTUALLY bucketed at, which is not necessarily the one
+   * that was asked for. Read this, never the picker, when labelling rows: with
+   * `keepPreviousData` the previous grain's rows stay on screen while the next
+   * request is in flight, and labelling them from the control would date-stamp
+   * minute buckets as days for the length of a round trip.
+   */
+  grain?: string;
 };
 
 export type DimensionValues = {
@@ -128,6 +161,13 @@ export function panelQuery(opts: {
   to: string;
   cap: number;
   filter: Filter;
+  /**
+   * Omitted entirely when unset, rather than sent empty. A server that predates
+   * the grain parameter ignores an unknown key, but an empty one is a value it
+   * would have to have an opinion about — and the URL is the SWR cache key, so
+   * "no grain" and "grain=" must not be two different keys for one request.
+   */
+  grain?: string;
 }): string {
   const qs = new URLSearchParams({
     db: opts.db,
@@ -135,11 +175,104 @@ export function panelQuery(opts: {
     to: opts.to,
     cap: String(opts.cap),
   });
+  if (opts.grain) qs.set("grain", opts.grain);
   for (const k of Object.keys(opts.filter).sort()) {
     const v = opts.filter[k];
     if (v) qs.set(k, v);
   }
   return qs.toString();
+}
+
+/**
+ * The grain the server named, resolved back to the object that describes it.
+ *
+ * Falls back to the picker's selection and then to the first grain offered, so a
+ * response from a server that does not yet echo `grain` is labelled with the one
+ * that was asked for rather than with nothing.
+ */
+export function resolveGrain(
+  grains: Grain[] | undefined,
+  ...keys: (string | null | undefined)[]
+): Grain | null {
+  const list = grains ?? [];
+  for (const k of keys) {
+    if (!k) continue;
+    const g = list.find((x) => x.key === k);
+    if (g) return g;
+  }
+  return list[0] ?? null;
+}
+
+const MONTHS = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+/**
+ * A bucket key, formatted for the axis at the grain that produced it.
+ *
+ * WHY THIS IS NOT JUST `clock`. The curve's labels were time-of-day only, on the
+ * reasoning — still correct at minute grain — that the date is already in the
+ * window selector and repeating it on every tick leaves no room for the ticks.
+ * That reasoning inverts as the buckets get wider: at day grain every bucket
+ * starts at midnight, so a time-only axis reads `00:00` seven times and the
+ * chart loses its x dimension entirely. So the format follows the grain — clock
+ * below an hour, date-and-clock up to a day, date alone at a day and above.
+ *
+ * The date-only case slices the string instead of parsing it into a Date. The
+ * server's stamps are already UTC and the whole page is UTC end to end; routing
+ * them through the browser's Date to re-render them is how a bucket labelled
+ * `26 Jul` becomes `25 Jul` west of Greenwich. `stamp` accepts that round trip
+ * because it needs a month name for an instant; here the month is in the string.
+ */
+export function bucketLabel(s: string, grainSeconds: number): string {
+  if (grainSeconds >= 86_400) {
+    if (!s || s.length < 10) return s;
+    const m = Number(s.slice(5, 7));
+    const d = Number(s.slice(8, 10));
+    if (!m || !d || m > 12) return s.slice(0, 10);
+    return `${d} ${MONTHS[m - 1]}`;
+  }
+  if (grainSeconds >= 3_600) return stamp(s);
+  return clock(s);
+}
+
+/**
+ * The plural noun for a count of buckets: "Minutes", "Hours", "Days".
+ *
+ * Built from the server's own label rather than from a table here, so a grain
+ * added server-side reads correctly without a second edit. Naive pluralisation,
+ * which is right for every unit of time this axis can carry.
+ */
+export function grainPlural(g: Grain | null): string {
+  const label = g?.label ?? "Minute";
+  return label.endsWith("s") ? label : `${label}s`;
+}
+
+/**
+ * How many buckets the resolved window will produce at this grain.
+ *
+ * Counts bucket BOUNDARIES crossed rather than dividing the span, because that
+ * is what the server's `toStartOf*` will do: a 90-minute window that straddles
+ * midnight is two day-buckets, not one. Computed from the window rather than
+ * read off the response so the warning appears with the choice instead of a
+ * round trip after it.
+ *
+ * Null when the window cannot be parsed — a missing answer, never a wrong one.
+ */
+export function bucketsInWindow(
+  bounds: { from: string; to: string } | null,
+  grainSeconds: number | undefined,
+): number | null {
+  if (!bounds || !grainSeconds) return null;
+  const ms = (s: string) => Date.parse(`${s.replace(" ", "T")}Z`);
+  const from = ms(bounds.from);
+  const to = ms(bounds.to);
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return null;
+  const g = grainSeconds * 1000;
+  // Half-open [from, to), matching the pipeline's interval convention: a window
+  // ending exactly on a boundary does not open a bucket there.
+  return Math.floor((to - 1) / g) - Math.floor(from / g) + 1;
 }
 
 /**

@@ -109,3 +109,82 @@ printf '%s' "$agent_id" >"$id_file"
 
 echo "  $agent_id with $(jq -r '(.tools|length)' <<<"$out") tools"
 echo "  wrote $id_file — librechat.yaml.tmpl reads it for the default modelSpec"
+
+# ---------------------------------------------------------------------------
+# Share it. Without this step the agent works for exactly one account.
+# ---------------------------------------------------------------------------
+#
+# THE BUG THIS FIXES, because it is not guessable from the symptom. LibreChat
+# 0.8 moved agents onto per-resource ACLs (the `aclentries` collection, granting
+# an `accessRoleId` to a principal). Creating an agent grants `agent_owner` to
+# its author and nobody else. So the analyst worked perfectly for
+# LIBRECHAT_EMAIL and every other account — including the two humans on this
+# team — got:
+#
+#     {"error":"Forbidden","message":"Insufficient permissions to access this agent"}
+#
+# rendered as a red bubble under their own first message. Nothing in the logs,
+# nothing wrong with the model, the MCP server or the prompt. It reads as a
+# broken deployment and it is a missing grant.
+#
+# The share is therefore part of syncing the agent, not a thing someone
+# remembers to click afterwards. A deploy step that only works for the person
+# who ran it is not a deploy step.
+#
+# WHY NAMED ACCOUNTS AND NOT `public: true`. The permissions API will happily
+# make an agent world-readable, and that is the wrong default here: registration
+# on this host is open, so public means anyone who signs up can drive the agent
+# and spend the Gemini key. Judges are handed the LIBRECHAT_EMAIL credentials
+# and that account OWNS the agent, so they need no grant at all — the only
+# people who do are the team, and they are a short list.
+#
+# LIBRECHAT_SHARE_EMAILS is that list: comma-separated, matched against
+# registered accounts, missing ones skipped with a warning rather than failing
+# the deploy. Set it in /etc/sonyliv/librechat.env. Unset means "owner only",
+# which is the safe reading of an absent variable.
+#
+# agent_editor rather than agent_viewer: a teammate who can open the agent but
+# cannot change its instructions has to come back through this script for every
+# prompt tweak, which defeats the point of them having access at all.
+if [[ -n "${LIBRECHAT_SHARE_EMAILS:-}" ]]; then
+    echo "== sharing $agent_id =="
+
+    # The ACL is keyed on the agent's Mongo _id, NOT on the agent_xxx id the rest
+    # of this script uses. They are different identifiers for the same object and
+    # passing the wrong one 404s.
+    resource_id="$(api GET "/api/agents/$agent_id" | jq -r '._id // empty')"
+    if [[ -z "$resource_id" ]]; then
+        echo "  cannot read the agent's _id — skipping the share" >&2
+    else
+        # Resolve emails to user ids through the principal search the sharing UI
+        # itself uses, so an address that never registered is reported here rather
+        # than silently granted to nothing.
+        updated='[]'
+        IFS=',' read -ra emails <<<"$LIBRECHAT_SHARE_EMAILS"
+        for raw in "${emails[@]}"; do
+            email="$(printf '%s' "$raw" | tr -d '[:space:]')"
+            [[ -n "$email" ]] || continue
+            uid="$(api GET "/api/permissions/search-principals?q=$email&limit=5" \
+                | jq -r --arg e "$email" '[.results[]? | select(.email == $e)][0].id // empty')"
+            if [[ -z "$uid" ]]; then
+                echo "  $email — no such account, skipped (they must sign up first)" >&2
+                continue
+            fi
+            updated="$(jq -c --arg id "$uid" \
+                '. + [{type:"user", id:$id, accessRoleId:"agent_editor"}]' <<<"$updated")"
+            echo "  $email -> agent_editor"
+        done
+
+        if [[ "$(jq 'length' <<<"$updated")" -gt 0 ]]; then
+            # public:false is passed explicitly rather than omitted. This endpoint
+            # sets the whole sharing state, so leaving it out on a PUT is how an
+            # agent quietly becomes public on some future refactor of the payload.
+            share="$(jq -n --argjson u "$updated" '{updated:$u, removed:[], public:false}')"
+            api PUT "/api/permissions/agent/$resource_id" --data-binary "$share" >/dev/null
+            echo "  shared with $(jq 'length' <<<"$updated") account(s), not public"
+        fi
+    fi
+else
+    echo "  LIBRECHAT_SHARE_EMAILS unset — agent is owner-only"
+    echo "  (any other account gets 'Insufficient permissions to access this agent')"
+fi

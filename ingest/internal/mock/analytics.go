@@ -459,6 +459,12 @@ func (s *Server) handleAnalyticsList(w http.ResponseWriter, r *http.Request) {
 		// The materialised combinations, so the UI can tell a reader BEFORE they
 		// pick one that a given pair cannot carry an exact peak.
 		"rollups": rollups,
+		// The time grains the series can be bucketed to. Served rather than
+		// hardcoded in the browser for the same reason as everything else here:
+		// the divisor that turns active_ms into a mean concurrency lives beside
+		// the bucket function in Go, and a second copy of that pairing in
+		// TypeScript is a copy that can disagree by a factor of sixty.
+		"grains": grains,
 	})
 }
 
@@ -634,8 +640,12 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	filter := parseFilter(q)
+	// Never errors: an unrecognised grain falls back to minute. See
+	// analytics_grain.go -- a stale bookmark asking for a grain we removed should
+	// draw the finest series, not a red panel.
+	gr := resolveGrain(q.Get("grain"))
 	mask := resolveMask(questionKeys(p, filter))
-	sql := buildSQL(db, p, mask, filter)
+	sql := buildSQL(db, p, mask, filter, gr)
 
 	cols, rows, stats, err := runPanel(ctx, s.client, sql, mask, filter, from, to, cap32)
 	stats.Grouping = mask.Grouping
@@ -651,12 +661,17 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body := map[string]any{
-		"panel": name, "title": p.title, "unit": p.unit, "note": p.note,
+		"panel": name, "title": p.title, "unit": p.unit, "note": panelNote(p, gr),
 		// database is echoed back deliberately: with a selector in front of these
 		// panels, a chart that does not say which dataset it came from is a chart
 		// that can be screenshotted and attributed to the wrong one.
 		"database": db,
 		"from":     from, "to": to,
+		// Echoed back for the same reason as `database`: the client asked for a
+		// grain, but what it must label the axis with is the grain that actually
+		// ran. Only the series panel buckets, so the others report the default
+		// and the client ignores it.
+		"grain": gr.Key,
 		// The statement is served with its result. Judges are asked to look at how
 		// concurrency is modelled, not just at the chart, and a query pasted into a
 		// README is a query that can drift from the one that ran. This one cannot:
