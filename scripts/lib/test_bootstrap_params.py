@@ -72,7 +72,9 @@ def trace_calls(*args: str) -> dict[str, set[str]]:
         if not line.startswith("CH_CALL"):
             continue
         name, _, rest = line[len("CH_CALL"):].partition("::")
-        params = {m.split("=", 1)[0] for m in re.findall(r"--param\s+(\S+)", rest)}
+        # --literal counts too: a placeholder inside a SETTINGS clause cannot be
+        # bound as a query parameter and MUST be substituted textually instead.
+        params = {m.split("=", 1)[0] for m in re.findall(r"--(?:param|literal)\s+(\S+)", rest)}
         out.setdefault(name.strip(), set()).update(params)
     return out
 
@@ -137,6 +139,52 @@ class TestBootstrapPassesEveryParam(unittest.TestCase):
         self.assertIn("allow_boundary_sessions", calls[k])
         self.assertIn("full_scan", calls[k])
         self.assertGreaterEqual(len(calls[k]), 7, f"only {len(calls[k])} params reached 011")
+
+
+class TestSettingsPlaceholdersUseLiteral(unittest.TestCase):
+    """A {name:Type} inside a SETTINGS clause must be passed with --literal.
+
+    ClickHouse cannot bind a query parameter there. Measured, identically in
+    chdb 26.5 and on the 26.2 service:
+
+        SELECT 1 SETTINGS max_execution_time = {t:UInt64}
+        Code: 62. Syntax error: failed at position 49 (}).
+                  Expected substitution type (identifier).
+
+    Four placeholders in this repo sit in a SETTINGS clause -- 011's INSERT and
+    three in 022. Passing any of them with --param is a syntax error that only
+    appears on the live service, AFTER the load has run.
+    """
+
+    def test_settings_params_are_passed_as_literal(self):
+        sys.path.insert(0, str(REPO / "scripts" / "lib"))
+        from apply_sql import split_statements
+
+        in_settings = {}
+        for sql in sorted((REPO / "pipeline" / "sql").glob("*.sql")) + \
+                   sorted((REPO / "ingest" / "sql").glob("*.sql")):
+            for st in split_statements(sql.read_text()):
+                body = "\n".join(l for l in st.split("\n") if not l.strip().startswith("--"))
+                m = re.search(r"\bSETTINGS\b(.*)$", body, re.S | re.I)
+                if not m:
+                    continue
+                for name in re.findall(r"\{(\w+):[A-Za-z0-9_()\s,']+\}", m.group(1)):
+                    in_settings.setdefault(sql.name, set()).add(name)
+
+        raw = BOOTSTRAP.read_text()
+        for fname, names in sorted(in_settings.items()):
+            for name in sorted(names):
+                with self.subTest(file=fname, placeholder=name):
+                    self.assertNotRegex(
+                        raw, rf'--param\s+"{name}=',
+                        f"{fname} has {{{name}:...}} inside a SETTINGS clause, which "
+                        f"ClickHouse cannot bind. bootstrap.sh must pass it with "
+                        f"--literal, not --param.",
+                    )
+                    self.assertRegex(
+                        raw, rf'--literal\s+"{name}=',
+                        f"{fname} needs {{{name}:...}} substituted with --literal.",
+                    )
 
 
 class TestNoCommentInsideLineContinuation(unittest.TestCase):

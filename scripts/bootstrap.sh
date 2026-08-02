@@ -306,7 +306,7 @@ if [[ $DO_BUILD -eq 1 ]]; then
        --param "allow_truncation=0" \
        --param "allow_boundary_sessions=1" \
        --param "state_revision=$STATE_REVISION" \
-       --param "insert_token=stage01:$POLICY_VERSION:full:rev$STATE_REVISION"
+       --literal "insert_token=stage01:$POLICY_VERSION:full:rev$STATE_REVISION"
 
     ch "$REPO_ROOT/pipeline/sql/022_populate_serving.sql" \
        --rewrite-db sonyliv \
@@ -314,7 +314,7 @@ if [[ $DO_BUILD -eq 1 ]]; then
        --param "clip_variant=unclipped" \
        --param "state_revision=$STATE_REVISION" \
        --param "allow_append=$FORCE" \
-       --param "insert_token=stage02:$POLICY_VERSION:full:rev$STATE_REVISION"
+       --literal "insert_token=stage02:$POLICY_VERSION:full:rev$STATE_REVISION"
 
     # 040 runs HERE, not in stage 2, because it reads active_intervals and
     # concurrency_deltas and both are only populated by the two steps above.
