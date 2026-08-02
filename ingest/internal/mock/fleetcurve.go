@@ -52,7 +52,7 @@ const (
 func ServedCurve(ctx context.Context, c *chx.Client, sealer *Sealer, db string, f fleet.Filter,
 	from, to time.Time) ([]fleet.CurvePoint, time.Time, error) {
 
-	sealed, err := sealer.Watermark(ctx)
+	sealed, err := sealer.Watermark(ctx, db)
 	if err != nil {
 		return nil, time.Time{}, err
 	}
