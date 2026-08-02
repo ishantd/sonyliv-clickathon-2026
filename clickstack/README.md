@@ -174,6 +174,40 @@ extract's own sessions so synthetic traffic cannot move a fixed number:
 
 ## Known limits
 
+- **These dashboards and `sonyliv` answer content-dimension queries differently, on purpose.**
+  Ask "concurrency by category, sliced per title" here and you get 84 categories; ask the same
+  of `sonyliv.concurrency_minute_versions` and you get one. Neither is wrong — they resolve
+  differently.
+
+  `video_type` and `category` are functionally determined by `content_id` (the catalogue maps
+  each id to exactly one of each), so any row carrying a `content_id` *can* have them resolved
+  from `content_dict` even at a mask that did not select them. These views do that; the
+  `sonyliv` pipeline deliberately does not, on the argument that widening the `dictGet` surface
+  is a risk not worth taking under time pressure. That argument is recorded in
+  `docs/CROSS-PIPELINE-RESPONSE.md` §4 and it is a reasonable one.
+
+  We resolve because the alternative is worse for a dashboard: without it, masks 4 and 5 render
+  both columns blank and a filter on either silently returns **zero rows** against 31,537
+  content rows that could have answered it. The risk it trades against — a cold replica
+  returning the dictionary's fallback for every row, which self-heals before anyone can look —
+  is made assertable rather than accepted: every miss resolves to `__unknown__`, a string that
+  cannot occur in the catalogue, and `090`'s `d_dict_resolves` invariant fails if the count is
+  ever non-zero. It currently reads 0 of 111,483 content-carrying rows.
+
+  **What this does NOT make correct is a filtered peak.** `minute_peak` is exact only at the
+  row's own mask. Filter `grouping = 'content'` by category and `max(minute_peak)` gives the
+  busiest single *title* in that category — measured **14** — not the category's peak, measured
+  **46** at `grouping = 'category'`. Averages are safe either way, since `active_ms` is
+  additive: both paths give 11.012060. Tiles that report a peak pin a mask that carries the
+  dimension; tiles that filter freely report averages.
+
+- **An unresolvable title is graphed, not dropped.** The title leaderboards carry
+  `title != ''`, which excludes rows whose mask carries no content dimension. `''` therefore
+  means only that; an id that does not resolve reads `__unknown__` and stays in the chart. Zero
+  rows on the tuning extract — all 3,352 titles resolve — but the unseen day ships a fresh
+  catalogue and no such guarantee, and a leaderboard that silently omits real viewing is worse
+  than one with an ugly label in it.
+
 - **Two observability tiles need `READ ON REMOTE`.** They read
   `system.query_log` and `system.parts` through `clusterAllReplicas(default, ...)`,
   because both are per-node on Cloud and a plain read shows only the replica that
