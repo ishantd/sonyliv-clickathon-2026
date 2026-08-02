@@ -36,7 +36,19 @@
 # ---------------------------------------------------------------------------
 
 model_list:
-  # Claude Opus 5, reached through the Bifrost gateway at bifrost.gobblecube.ai.
+  # Claude Opus 5 via OpenRouter.
+  #
+  # WHY NOT BIFROST, which was wired here first and then removed: the gateway at
+  # bifrost.gobblecube.ai lives in a private prod subnet. It answers from a laptop on
+  # the VPN -- measured, it resolved bedrock/claude-opus-5 in 1.27s -- but the litellm
+  # container on the public demo box cannot route to it, and the failure is a hang
+  # rather than a refusal, so it surfaces as a dead chat rather than an error. Worth
+  # recording because the key and the model name both looked correct throughout.
+  #
+  # INACTIVE UNTIL OPENROUTER_API_KEY IS SET. LiteLLM registers a model whose key is
+  # missing and only fails when it is called, so leaving this entry here is safe: the
+  # specs below still point at Gemini, and flipping them is a one-line change once the
+  # key exists.
   #
   # WHY STILL THROUGH LITELLM, when Bifrost is itself a gateway and LibreChat can talk to
   # an OpenAI-compatible endpoint directly. LiteLLM is the only thing in this stack that
@@ -54,13 +66,10 @@ model_list:
   # bedrock and answered in 1.27s.
   - model_name: claude-opus-5
     litellm_params:
-      model: openai/bedrock/claude-opus-5
-      api_base: https://bifrost.gobblecube.ai/v1
-      api_key: os.environ/BIFROST_API_KEY
+      model: openrouter/anthropic/claude-opus-5
+      api_key: os.environ/OPENROUTER_API_KEY
 
-  # Gemini kept as a fallback entry, not wired into any spec. Costs nothing while
-  # GEMINI_API_KEY is set, and is one line to switch back to if the gateway is down
-  # mid-demo -- which is the only reason it is still here.
+  # Gemini is what the specs currently point at, and therefore what actually answers.
   - model_name: gemini-2.5-flash
     litellm_params:
       model: gemini/gemini-2.5-flash
