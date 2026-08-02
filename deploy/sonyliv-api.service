@@ -41,16 +41,22 @@ EnvironmentFile=/etc/sonyliv/sonyliv.env
 # binary's own default is 127.0.0.1:8080; set 0.0.0.0:8080 in the env file to
 # serve the VPC.
 #
-# 0.0.0.0 is the right default on this box, not a compromise: the instance has no
-# public IPv4 (IMDS returns 404 for public-ipv4) and a single ENI, so the bind
-# address cannot expose anything the security group does not already allow --
-# while pinning a specific private IP would break the unit the moment the
-# instance is replaced, and can silently miss a path if traffic arrives on
-# another interface. The network boundary belongs in the security group.
+# 0.0.0.0 is the right default on this box, not a compromise: the bind address
+# cannot expose anything the security group does not already allow, and that
+# group admits only 22 and 443 -- while pinning a specific private IP would
+# break the unit the moment the instance is replaced, and can silently miss a
+# path if traffic arrives on another interface. The network boundary belongs in
+# the security group.
+#
+# That boundary is now the ONLY thing keeping 8080 off the internet. This box
+# used to have no public IPv4 at all (IMDS returned 404 for public-ipv4), which
+# backstopped the bind; since the move to a public subnet behind an Elastic IP
+# it does not. Opening 8080 in the security group would now expose it directly.
 #
 # TLS: SONYLIV_API_TLS_CERT/KEY point at a self-signed pair. That is adequate
 # here -- the bearer token is the authentication, TLS is transport encryption
-# only, and the host is reachable solely over a private path. Clients need -k.
+# only, and the security group withholds 8080, so the API stays off the internet
+# even though the host itself is now publicly addressable. Clients need -k.
 # SONYLIV_API_TLS_ARGS carries the whole flag pair, or is empty for plaintext.
 # Unquoted $VAR (not ${VAR}) so systemd word-splits it and an empty value
 # disappears entirely -- with ${VAR} an empty value becomes an empty argument and
