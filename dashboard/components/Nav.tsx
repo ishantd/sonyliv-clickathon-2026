@@ -94,6 +94,47 @@ const routes: { href: string; label: string; also?: string[] }[] = [
   { href: "/manual", label: "Stepper" },
 ];
 
+/*
+ * The three surfaces that are not this app, resolved at build time.
+ *
+ * LibreChat shares this host: nginx gives it the root of :443 and mounts this app
+ * at /build, because LibreChat cannot be served from a prefix (see next.config).
+ * So its href is a bare "/" — the one link here that must NOT be rebased, which is
+ * why the nav renders these as plain anchors.
+ *
+ * ClickStack and Langfuse are off-box SaaS. They are not proxied through nginx on
+ * purpose: both are cookie-authenticated on their own origins, and reverse-proxying
+ * a session-bearing third-party app breaks its auth in ways that look like the app
+ * being broken. Links are the honest integration.
+ *
+ * Empty means absent, not broken — an unconfigured tab is not rendered at all.
+ */
+const externals: {
+  href: string;
+  label: string;
+  title: string;
+  newTab: boolean;
+}[] = [
+  {
+    href: "/",
+    label: "Analyst",
+    title: "LibreChat over the serving-layer MCP server",
+    newTab: false,
+  },
+  {
+    href: process.env.NEXT_PUBLIC_CLICKSTACK_URL ?? "",
+    label: "Dashboards",
+    title: "The six ClickStack dashboards over the concurrency serving layer",
+    newTab: true,
+  },
+  {
+    href: process.env.NEXT_PUBLIC_LANGFUSE_URL ?? "",
+    label: "Traces",
+    title: "Langfuse traces for the analyst's queries",
+    newTab: true,
+  },
+].filter((x) => x.href !== "");
+
 /**
  * Trailing slashes are stripped before comparing.
  *
@@ -138,12 +179,50 @@ export function Nav() {
           })}
         </nav>
 
+        {/* The other three surfaces of the demo, which are not this app.
+
+            Plain <a>, never <Link>, and that is the whole reason this block is
+            separate. Under NEXT_PUBLIC_BASE_PATH=/build a <Link href="/"> resolves
+            to /build/ — this app's own root — so linking to LibreChat with it would
+            silently point back here. `external` opts out of Next's routing entirely
+            so the href reaches the browser verbatim.
+
+            Rendered only when configured. A nav tab that leads to a placeholder is
+            worse than an absent one, so an unset URL means the tab does not exist. */}
+        <nav
+          className="ml-auto flex shrink-0 items-center gap-1"
+          aria-label="Other surfaces"
+        >
+          {externals.map((x) => (
+            <a
+              key={x.label}
+              href={x.href}
+              // Only the off-box links open a tab. LibreChat is on this same host,
+              // so replacing the page is the right behaviour; ClickStack and
+              // Langfuse are elsewhere and losing the demo to a navigation would
+              // be a poor trade.
+              {...(x.newTab
+                ? { target: "_blank", rel: "noopener noreferrer" }
+                : {})}
+              title={x.title}
+              className="rounded px-2.5 py-1 text-[0.8125rem] whitespace-nowrap text-ink-2 transition-colors hover:text-ink"
+            >
+              {x.label}
+              {x.newTab ? (
+                <span aria-hidden className="ml-1 text-ink-3">
+                  ↗
+                </span>
+              ) : null}
+            </a>
+          ))}
+        </nav>
+
         {/* Just the timezone. "writes to events_raw" was stating the obvious —
             every page here writes to events_raw, so a permanent banner saying so
             carried no information and spent header width doing it. UTC stays
             because the tables are full of bare clock times and nothing else on
             the page says which zone they are in. */}
-        <span className="ml-auto font-mono text-[0.6875rem] text-ink-3">UTC</span>
+        <span className="font-mono text-[0.6875rem] text-ink-3">UTC</span>
 
         <TokenBadge />
       </div>

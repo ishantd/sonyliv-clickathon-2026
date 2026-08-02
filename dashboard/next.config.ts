@@ -24,9 +24,42 @@ import type { NextConfig } from "next";
   /manual.html, so Go's static file handler resolves a bare /manual with no
   special casing.
 */
+/*
+  basePath — what lets this app share one host and one port with LibreChat.
+
+  The demo box terminates TLS once, on :443, and LibreChat has to own `/` there:
+  its assets, its /api routes and its SSE stream are all absolute from the root,
+  and there is no supported way to rebase them. Two upstream requests for exactly
+  that are open and unanswered — danny-avila/LibreChat#5702 and discussion #2406 —
+  and DOMAIN_CLIENT/DOMAIN_SERVER only affect absolute URLs it generates
+  (OAuth callbacks, email), not where the client fetches its bundle from.
+
+  This app has no such problem, because basePath is a first-class Next feature. So
+  the app that CAN move is the one that moves: LibreChat keeps the root untouched
+  and this one goes to a prefix, which needs no sub_filter rewriting of hashed
+  asset names and no extra security-group rule.
+
+  Set at build time, not hardcoded, for two reasons. `next dev` must stay at `/` or
+  local development gains a prefix nobody wants. And the prefix belongs to the
+  deployment, not to the app — a second box could mount it elsewhere.
+
+    NEXT_PUBLIC_BASE_PATH=/build npm run build     # behind nginx
+    npm run build                                  # standalone at root
+
+  NEXT_PUBLIC_API_BASE must be set to the SAME value, and that is not redundant:
+  basePath rewrites links and asset URLs, but fetch() calls in lib/api.ts are
+  strings this app builds itself, so Next does not touch them. Leave it empty here
+  and the app requests /api/... at the root — which on the demo box is LibreChat's
+  API, not ours. It would not 404; it would reach the wrong service.
+*/
+const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
 const nextConfig: NextConfig = {
   output: "export",
   trailingSlash: true,
+
+  // Empty string is the "no prefix" value; Next rejects "/" as a basePath.
+  ...(basePath ? { basePath, assetPrefix: basePath } : {}),
 
   // Served from a Go binary, not a CDN with an image pipeline.
   images: { unoptimized: true },
