@@ -82,17 +82,17 @@ func TestNormalizeHexID(t *testing.T) {
 
 	// Case must normalize: the id is the session key, so 'a1b2' and 'A1B2' from
 	// two producers must not become two different sessions.
-	got, err := normalizeHexID(lower)
+	got, err := NormalizeHexID(lower)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if got != upper {
-		t.Errorf("normalizeHexID(lower) = %s, want %s", got, upper)
+		t.Errorf("NormalizeHexID(lower) = %s, want %s", got, upper)
 	}
 
 	for _, bad := range []string{"", "ABC", upper + "0", upper[:63] + "Z"} {
-		if _, err := normalizeHexID(bad); err == nil {
-			t.Errorf("normalizeHexID(%q) should have failed", bad)
+		if _, err := NormalizeHexID(bad); err == nil {
+			t.Errorf("NormalizeHexID(%q) should have failed", bad)
 		}
 	}
 }

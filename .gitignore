@@ -1,6 +1,12 @@
 # Env / secrets
 .env
 .env.*
+# ...but not the templates. `.env.*` swallows .env.example, which is the one file in the
+# pattern that MUST be committed -- it is how anyone learns which variables exist.
+# ingest/.env.example only survives because it was tracked before the rule existed; a new
+# one added later would be silently dropped, which is exactly what happened here.
+!.env.example
+!**/.env.example
 *.pem
 *.key
 
@@ -38,4 +44,21 @@ ruvector.db
 
 agentdb.rvf
 agentdb.rvf.lock
+.gstack/
+
+# Claude Code worktrees (they are git worktrees, not source)
+.claude/worktrees/
+
+# LibreChat: generated from Langfuse, plus container runtime state.
+# librechat.yaml is rendered by deploy/langfuse-prompt-sync.sh -- committing it would make
+# the repo a second, stale source of a prompt that Langfuse already versions.
+deploy/librechat/librechat.yaml
+deploy/librechat/agent-instructions.txt
+deploy/librechat/data-node/
+deploy/librechat/images/
+deploy/librechat/uploads/
+deploy/librechat/logs/
+deploy/librechat/agent-id
+
+# Source extracts. Large, and supplied rather than authored.
 data/*.csv
