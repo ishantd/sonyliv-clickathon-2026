@@ -85,6 +85,20 @@ CREATE TABLE IF NOT EXISTS {{db}}.events_clean
     subtitle_language   LowCardinality(String) COMMENT 'Normalized; "off" is preserved as distinct from "unknown"',
     player_version      LowCardinality(String) COMMENT 'Normalized: trimmed, empty -> unknown',
 
+    -- Normalized resolution. Arrives with the unseen dataset.
+    --
+    -- ONE rule, whitespace and case: '1920 * 1080' -> '1920*1080'. Measured over
+    -- 800,000 surprise rows that collapses 477 raw spellings to 415 and merges
+    -- 18.32% + 7.90% = 26.22% of rows into the single bucket they belong in.
+    -- Without it a filter on either spelling silently undercounts.
+    --
+    -- What is deliberately NOT done: the quality-ladder prefix is KEPT.
+    -- 'Auto-1280*720' (214,424 rows) is a different playback mode from
+    -- '1280*720', not a dirty spelling of it, and collapsing them would destroy
+    -- a real distinction to make a column look tidier. 'NA' and 'Auto-Auto' map
+    -- to 'unknown' because they name the absence of a resolution.
+    video_resolution    LowCardinality(String) COMMENT 'Normalized: spaces removed, case-folded; ladder prefix (Auto-/NA-/DataSaver-) PRESERVED; empty/na/auto -> unknown',
+
     -- The single most valuable normalization in the whole pipeline: 47
     -- inconsistently-cased event names collapsed into the closed set the
     -- concurrency state machine actually branches on. Pause/resume exist ONLY
@@ -279,6 +293,13 @@ SELECT
 
     if(empty(trimBoth(player_version)), 'unknown', trimBoth(player_version)) AS player_version,
 
+    -- Whitespace + case only; see the column comment for why the ladder prefix
+    -- survives. replaceAll on ' ' rather than trimBoth: the spaces are INSIDE
+    -- the value ('1920 * 1080'), not around it, so trimming does nothing.
+    if(lowerUTF8(replaceAll(trimBoth(video_resolution), ' ', '')) IN ('', 'na', 'auto', 'auto-auto', 'null', 'unknown'),
+       'unknown',
+       lowerUTF8(replaceAll(trimBoth(video_resolution), ' ', ''))) AS video_resolution,
+
     multiIf(
         event_type = 'VideoSessionStart', 'session_start',
         event_type = 'VideoSessionEnd',   'session_end',
@@ -381,6 +402,7 @@ SELECT
     argMax(audio_language,     row_version) AS audio_language,
     argMax(subtitle_language,  row_version) AS subtitle_language,
     argMax(player_version,     row_version) AS player_version,
+    argMax(video_resolution,   row_version) AS video_resolution,
     argMax(signal,             row_version) AS signal,
     argMax(is_periodic_ping,   row_version) AS is_periodic_ping,
     argMax(ingest_batch_id,    row_version) AS ingest_batch_id,

@@ -145,7 +145,7 @@ CREATE TABLE IF NOT EXISTS sonyliv.concurrency_minute_versions
     source_boundary_points UInt64
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMM(service_date)
+PARTITION BY toYYYYMMDD(service_date)
 ORDER BY (generation, policy_version, clip_variant, pipeline_run_id,
           source_delta_snapshot, entity, rollup_mask, service_date,
           platform, country, video_type, content_id, minute_start)

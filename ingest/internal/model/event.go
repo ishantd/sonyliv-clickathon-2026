@@ -46,6 +46,16 @@ type RawEvent struct {
 	AudioLanguage    string
 	SubtitleLanguage string
 	PlayerVersion    string
+
+	// Added by the unseen dataset (data/surprise_spec.md): "Video resolution
+	// during video playback — used as a filter dimension".
+	//
+	// OPTIONAL, not required. The reader fills it when the header carries it and
+	// leaves it empty otherwise, so both CSV generations load through the same
+	// code path. Making it required would have made the original 13-column
+	// extract unloadable, which is the wrong trade for a dimension that is
+	// legitimately absent from it rather than missing from it.
+	VideoResolution string
 }
 
 // InsertColumns is the column list of the raw-event INSERT, matching the field
@@ -67,6 +77,7 @@ var InsertColumns = []string{
 	"audio_language",
 	"subtitle_language",
 	"player_version",
+	"video_resolution",
 }
 
 // Values returns the row as positional arguments for a driver batch Append.
@@ -88,6 +99,7 @@ func (e *RawEvent) Values() []any {
 		e.AudioLanguage,
 		e.SubtitleLanguage,
 		e.PlayerVersion,
+		e.VideoResolution,
 	}
 }
 
@@ -97,6 +109,11 @@ type Content struct {
 	Title     string
 	VideoType string
 	Category  string
+
+	// Added by the unseen dataset (data/surprise_spec.md): "Name of the show —
+	// used as a filter dimension". Optional for the same reason as
+	// RawEvent.VideoResolution.
+	ShowName string
 }
 
 // ContentInsertColumns matches Content.Values plus the load version.
@@ -105,12 +122,13 @@ var ContentInsertColumns = []string{
 	"title",
 	"video_type",
 	"category",
+	"show_name",
 	"source_version",
 }
 
 // Values returns the catalogue row plus its load version.
 func (c *Content) Values(sourceVersion uint64) []any {
-	return []any{c.ContentID, c.Title, c.VideoType, c.Category, sourceVersion}
+	return []any{c.ContentID, c.Title, c.VideoType, c.Category, c.ShowName, sourceVersion}
 }
 
 // Reject is a row the producer refused to land, held for quarantine.

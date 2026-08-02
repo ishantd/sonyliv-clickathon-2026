@@ -71,6 +71,12 @@ def split_statements(sql: str):
 
 sess = chdb.session.Session()
 sess.query("CREATE DATABASE IF NOT EXISTS sonyliv")
+# USE, so currentDatabase() resolves to sonyliv the way it does in production.
+# apply_sql.py sends ?database=<target> on every request, so 041's G5 -- which
+# checks system.projections WHERE database = currentDatabase() -- sees the right
+# database there. Without this the harness session defaults to `default`, G5 finds
+# no projection and throws, which looks like a real failure and is not.
+sess.query("USE sonyliv")
 
 # --- Minimal upstream: active_intervals (+ its view and projection) and
 # --- concurrency_deltas, populated so 040 has two real sources.
