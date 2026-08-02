@@ -75,7 +75,7 @@ endpoints:
         # One model, deliberately. gemini-2.5-pro cannot run with thinking disabled, and
         # with thinking on LibreChat drops its answers -- see litellm-config.yaml. An
         # entry in the picker that returns empty bubbles is worse than a short picker.
-        default: ['gemini-2.5-flash']
+        default: ['gemini-2.5-flash', 'claude-opus-5']
         # Off deliberately: fetch would list whatever LiteLLM knows about, and the picker
         # should offer only what was configured here on purpose.
         fetch: false

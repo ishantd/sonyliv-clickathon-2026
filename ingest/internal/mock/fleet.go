@@ -295,10 +295,19 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 	from := now.Add(-time.Duration(minutes) * time.Minute)
 	f := fleetFilter(r)
 
+	// The ClickHouse half of this graph follows the dataset picker; the generator
+	// half is in-process fleet state and has no database to follow.
+	db, err := resolveDatabase(r.URL.Query().Get("db"), s.client.Database)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+
 	resp := map[string]any{
 		"from":       from,
 		"to":         now,
 		"minutes":    minutes,
+		"database":   db,
 		"generator":  s.fleet.Curve(f, from, now, now),
 		"timeout_ms": s.timeoutMS,
 	}
@@ -310,7 +319,7 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	points, err := FleetCurve(ctx, s.client, f, from, now, s.timeoutMS)
+	points, err := FleetCurve(ctx, s.client, db, f, from, now, s.timeoutMS)
 	if err != nil {
 		resp["clickhouse"] = []fleet.CurvePoint{}
 		resp["clickhouse_error"] = err.Error()

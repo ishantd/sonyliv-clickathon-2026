@@ -36,8 +36,40 @@
 # ---------------------------------------------------------------------------
 
 model_list:
-  # A tool loop here is many small turns and latency is what the conversation feels;
-  # flash is the right trade for that shape, and the only one that works (see above).
+  # Claude Opus 5 via OpenRouter.
+  #
+  # WHY NOT BIFROST, which was wired here first and then removed: the gateway at
+  # bifrost.gobblecube.ai lives in a private prod subnet. It answers from a laptop on
+  # the VPN -- measured, it resolved bedrock/claude-opus-5 in 1.27s -- but the litellm
+  # container on the public demo box cannot route to it, and the failure is a hang
+  # rather than a refusal, so it surfaces as a dead chat rather than an error. Worth
+  # recording because the key and the model name both looked correct throughout.
+  #
+  # INACTIVE UNTIL OPENROUTER_API_KEY IS SET. LiteLLM registers a model whose key is
+  # missing and only fails when it is called, so leaving this entry here is safe: the
+  # specs below still point at Gemini, and flipping them is a one-line change once the
+  # key exists.
+  #
+  # WHY STILL THROUGH LITELLM, when Bifrost is itself a gateway and LibreChat can talk to
+  # an OpenAI-compatible endpoint directly. LiteLLM is the only thing in this stack that
+  # writes to Langfuse -- see success_callback below. Pointing LibreChat straight at
+  # Bifrost would have removed a container and silently emptied the Traces surface the
+  # demo advertises. So the chain gains a hop and keeps its observability:
+  #
+  #   LibreChat -> LiteLLM (Langfuse) -> Bifrost -> Bedrock -> claude-opus-5
+  #
+  # `openai/` prefix, not `bedrock/`: that selects LiteLLM's OpenAI-compatible client,
+  # which is what Bifrost speaks. Naming the provider bedrock here would make LiteLLM try
+  # to sign an AWS request itself and bypass the gateway entirely. The `bedrock/` inside
+  # the model string is Bifrost's own routing syntax and is passed through verbatim --
+  # confirmed against the live gateway, which resolved it to claude-opus-5 on provider
+  # bedrock and answered in 1.27s.
+  - model_name: claude-opus-5
+    litellm_params:
+      model: openrouter/anthropic/claude-opus-5
+      api_key: os.environ/OPENROUTER_API_KEY
+
+  # Gemini is what the specs currently point at, and therefore what actually answers.
   - model_name: gemini-2.5-flash
     litellm_params:
       model: gemini/gemini-2.5-flash

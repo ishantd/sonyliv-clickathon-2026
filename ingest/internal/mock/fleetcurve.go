@@ -33,7 +33,10 @@ import (
 // filters on. Two expressions of one Filter is a drift risk worth naming, so they
 // are kept literally parallel: same fields, same equality semantics, and every
 // value bound as a parameter rather than interpolated.
-func FleetCurve(ctx context.Context, c *chx.Client, f fleet.Filter,
+// db is passed rather than read off the client so the dataset picker can point
+// this graph at another database without a second connection. It arrives from
+// resolveDatabase, so it is an allowlisted literal and never request text.
+func FleetCurve(ctx context.Context, c *chx.Client, db string, f fleet.Filter,
 	from, to time.Time, timeoutMS int64) ([]fleet.CurvePoint, error) {
 
 	sql := fmt.Sprintf(`
@@ -161,7 +164,7 @@ SELECT toDateTime(m, 'UTC')   AS minute,
 FROM exploded
 WHERE toDateTime64(m, 3, 'UTC') < w_to
   AND toDateTime64(m + 60, 3, 'UTC') > w_from
-GROUP BY m ORDER BY m`, c.Database)
+GROUP BY m ORDER BY m`, db)
 
 	rows, err := c.Conn.Query(ctx, sql,
 		clickhouse.Named("content_id", f.ContentID),

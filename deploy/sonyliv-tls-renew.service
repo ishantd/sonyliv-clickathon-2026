@@ -1,0 +1,34 @@
+# Renews the Let's Encrypt cert for fastandfurious.live. Driven by the paired
+# .timer; see deploy/tls-renew.sh for the install steps and for why the renewal
+# needs to stop nginx at all.
+
+[Unit]
+Description=Renew the fastandfurious.live TLS certificate
+Documentation=https://github.com/ishantd/sonyliv-clickathon-2026
+
+# The ACME server has to be reachable, and the solver has to be able to bind 443.
+Wants=network-online.target
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+
+# Root, deliberately and unlike every other unit in this repo: the script stops and
+# starts nginx, and writes into /etc/lego/certificates, which is mode 0700 root
+# because it holds a private key.
+User=root
+
+ExecStart=/usr/local/sbin/sonyliv-tls-renew
+
+# The script's own trap restores nginx on any exit, but a trap cannot run if the
+# process is killed uncatchably or the unit is timed out and SIGKILLed. This is the
+# backstop for exactly that: whatever happened, nginx ends up running.
+ExecStopPost=/bin/systemctl start nginx
+
+# Generous but bounded. A normal run is milliseconds (the expiry check short-circuits);
+# a real renewal is under a minute. Five minutes means a hung ACME connection cannot
+# leave nginx down indefinitely -- it gets killed and ExecStopPost puts nginx back.
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

@@ -25,10 +25,23 @@ export function ClickHouseMark() {
  * unoptimized is set globally in next.config (there is no image pipeline behind a
  * Go binary), so this renders the file as-is at ~4x the displayed height.
  */
+/*
+ * basePath is NOT applied to this src automatically, which is worth stating because
+ * it contradicts the reasonable expectation. Next rewrites the URLs it generates —
+ * links, chunks, the /_next tree — but with images: { unoptimized: true } the src
+ * passes through verbatim, so under NEXT_PUBLIC_BASE_PATH=/build the emitted
+ * preload came out as /sonyliv-mark.png and 404'd against nginx, which routes only
+ * /build/ here. Verified in dashboard/out/index.html before this line existed.
+ *
+ * Prefixed explicitly rather than by dropping `unoptimized`: there is no image
+ * pipeline behind a Go binary to optimize with.
+ */
+const assetBase = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+
 export function SonyLivMark() {
   return (
     <Image
-      src="/sonyliv-mark.png"
+      src={`${assetBase}/sonyliv-mark.png`}
       alt=""
       width={96}
       height={96}
