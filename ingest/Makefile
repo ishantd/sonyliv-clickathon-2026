@@ -13,13 +13,32 @@ CONTENT_CSV ?= $(DATA)/ch-hackathon-content-data.csv
 help:
 	@grep -E '^## ' $(MAKEFILE_LIST) | sed 's/^## /  /' | column -t -s ':'
 
-## build: compile both binaries into ./bin
+## web: rebuild the Next.js dashboard and stage its static export for embedding
+##      Requires Node >= 20.9 (Next 16). The export is committed, so `make build`
+##      works with no Node toolchain — run this only after changing dashboard/.
+web:
+	cd ../dashboard && npm ci --silent && npm run build
+	rm -rf internal/mock/web && mkdir -p internal/mock/web
+	cp -R ../dashboard/out/. internal/mock/web/
+	@echo "staged $$(du -sh internal/mock/web | cut -f1) into internal/mock/web"
+
+## build: compile all binaries into ./bin
 build:
 	@mkdir -p $(BIN)
 	go build -o $(BIN)/sonyliv-ingest ./cmd/sonyliv-ingest
 	go build -o $(BIN)/sonyliv-gen    ./cmd/sonyliv-gen
+	go build -o $(BIN)/sonyliv-api    ./cmd/sonyliv-api
+	go build -o $(BIN)/sonyliv-mock   ./cmd/sonyliv-mock
 	go build -o $(BIN)/sonyliv-mcp    ./cmd/sonyliv-mcp
-	@echo "built $(BIN)/sonyliv-ingest and $(BIN)/sonyliv-gen"
+	@echo "built sonyliv-ingest, sonyliv-gen, sonyliv-api, sonyliv-mock and sonyliv-mcp in $(BIN)"
+
+## api: run the ingest API against the configured service (needs SONYLIV_API_TOKEN)
+api: build
+	$(BIN)/sonyliv-api --listen 127.0.0.1:8080
+
+## mock: serve the load simulator and the event stepper on localhost:8088
+mock: build
+	$(BIN)/sonyliv-mock
 
 ## test: run unit tests
 test:
@@ -119,8 +138,12 @@ clean:
 mcp: build
 	$(BIN)/sonyliv-mcp --transport stdio
 
+# MCP_ADDR matches the deployed unit: the Docker bridge, so the LibreChat container can
+# reach it. Locally 127.0.0.1 is the sane default, hence the override rather than a
+# hardcoded address.
+MCP_ADDR ?= 127.0.0.1:8848
 mcp-http: build
-	$(BIN)/sonyliv-mcp --transport http --addr 127.0.0.1:8848
+	$(BIN)/sonyliv-mcp --transport http --addr $(MCP_ADDR)
 
 # Exercises the refusals, which is the half that matters.
 mcp-check:
@@ -130,4 +153,7 @@ mcp-check:
 mcp-check-grants:
 	./cmd/sonyliv-mcp/check-grants.sh
 
-.PHONY: mcp mcp-http mcp-check mcp-check-grants
+.PHONY: help web build api mock test check doctor schema schema-print load verify \
+        rollup rollup-live rollup-check clickstack \
+        demo loadtest ch-up ch-down clean \
+        mcp mcp-http mcp-check mcp-check-grants

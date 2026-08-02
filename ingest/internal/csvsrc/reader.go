@@ -160,11 +160,11 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 		return &RowReject{Line: er.line, Reason: reason, Detail: detail, Raw: strings.Join(rec, ",")}
 	}
 
-	sessionID, err := normalizeHexID(get("video_session_id"))
+	sessionID, err := NormalizeHexID(get("video_session_id"))
 	if err != nil {
 		return nil, reject(ReasonBadSessionID, err.Error()), nil
 	}
-	userID, err := normalizeHexID(get("user_id"))
+	userID, err := NormalizeHexID(get("user_id"))
 	if err != nil {
 		return nil, reject(ReasonBadUserID, err.Error()), nil
 	}
@@ -320,11 +320,15 @@ func openCSV(path string, required []string) (*os.File, *csv.Reader, map[string]
 	return f, r, idx, nil
 }
 
-// normalizeHexID validates a 64-character hex identifier and upper-cases it.
+// NormalizeHexID validates a 64-character hex identifier and upper-cases it.
 //
 // Case is normalized because the id is the session key: 'a1b2' and 'A1B2' from
 // two different producers must not become two different sessions.
-func normalizeHexID(s string) (string, error) {
+//
+// Exported for exactly that reason: internal/api validates the same two ids on
+// the HTTP path, and a second copy of this function is the cross-producer drift
+// model.RawEvent's contract exists to prevent.
+func NormalizeHexID(s string) (string, error) {
 	if len(s) != 64 {
 		return "", fmt.Errorf("expected 64 hex chars, got %d", len(s))
 	}

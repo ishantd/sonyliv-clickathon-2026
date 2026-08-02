@@ -73,9 +73,37 @@ done
 
 echo
 echo "== system tables must NOT be readable =="
-for t in query_log parts tables columns users grants; do
+# query_log carries other users' SQL text, parts carries on-disk layout, users and grants
+# carry the access model. All four must refuse outright.
+for t in query_log parts users grants; do
   deny "system.$t" "SELECT count() FROM system.${t}"
 done
+
+# system.tables and system.columns are NOT in that list, and asserting they refuse was
+# wrong -- measured: they return 8 rows and 69 columns for this user.
+#
+# ClickHouse always exposes those two, filtered to the objects the caller is granted. There
+# is no grant to revoke, because there is no grant: the filtering IS the mechanism. So the
+# property worth testing is not "can it read system.tables" but "does system.tables reveal
+# anything outside the serving layer" -- which is what an information_schema leak would
+# actually look like, and which the count-based check could not have detected either way.
+echo
+echo "== catalogue metadata must reveal nothing outside the serving layer =="
+leaked="$(q "SELECT DISTINCT database || '.' || name FROM system.tables
+             WHERE name NOT LIKE 'serving\\_%' FORMAT TSV")"
+if [[ -z "${leaked//[$' \t\r\n']/}" ]]; then
+  printf 'PASS  reveals only      : the 8 granted serving objects\n'; pass_n=$((pass_n+1))
+else
+  printf 'FAIL  metadata leak     : %.110s\n' "$(printf '%s' "$leaked" | tr '\n' ' ')"; fail_n=$((fail_n+1))
+fi
+
+leaked_db="$(q "SELECT DISTINCT database FROM system.columns
+                WHERE database != '${db}' FORMAT TSV")"
+if [[ -z "${leaked_db//[$' \t\r\n']/}" ]]; then
+  printf 'PASS  reveals only      : columns of %s\n' "$db"; pass_n=$((pass_n+1))
+else
+  printf 'FAIL  metadata leak     : databases %.90s\n' "$(printf '%s' "$leaked_db" | tr '\n' ' ')"; fail_n=$((fail_n+1))
+fi
 
 echo
 echo "== writes must be refused =="

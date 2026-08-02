@@ -195,7 +195,47 @@ PARTITION BY toYYYYMMDD(session_start_ts)
 -- this table — they are served from the pre-aggregated boundary and minute
 -- tables, which order low-cardinality-first as the rule prescribes.
 ORDER BY (session_key, event_ts, event_type, event)
+SETTINGS
+    -- These were MISSING on the live service (measured 2026-08-02), on the
+    -- busiest table in the schema, against this repo's own rule that every
+    -- MergeTree table must carry all three.
+    --
+    -- Why it is defence in depth rather than a present wrong answer, stated
+    -- precisely so nobody over- or under-reacts: every write to this table
+    -- arrives through events_raw_to_clean_mv, and events_raw DOES carry the
+    -- settings, so an identical replayed batch is refused upstream and the MV
+    -- never fires. On top of that this is a ReplacingMergeTree keyed on the
+    -- semantic event key and every read goes through events_dedup's argMax, so
+    -- a duplicate that did land would be resolved at read time regardless of
+    -- whether a merge had run.
+    --
+    -- What is NOT covered without these: a replay whose block boundaries differ
+    -- from the original passes events_raw's token check (the failure mode that
+    -- doubled concurrency_deltas on 2026-08-01), and then lands here. RMT would
+    -- still collapse it on key, so the exposure is storage and read cost rather
+    -- than correctness — but the whole point of the rule is that the difference
+    -- between "silently doubled" and "correctly deduplicated" should not depend
+    -- on which of two mechanisms happened to catch it.
+    --
+    -- Note the interaction already documented in CLAUDE.md: the docs advise
+    -- against combining deduplicate_blocks_in_dependent_materialized_views with
+    -- async inserts where dependent MVs exist, and the setting that used to make
+    -- that pairing throw is obsolete in 26.2, so it now proceeds silently.
+    -- ingest/internal/chx/loader.go sets the async path and the MV-dedup path
+    -- mutually exclusively for that reason.
+    non_replicated_deduplication_window = 1000,
+    replicated_deduplication_window = 1000,
+    replicated_deduplication_window_seconds = 2592000
 COMMENT 'Normalized derivation of events_raw. One row per landed row; read through events_dedup.';
+
+-- Converge an existing database: CREATE IF NOT EXISTS cannot deliver settings
+-- to a table that already exists, which is why these were absent in production
+-- even though the file now declares them.
+ALTER TABLE {{db}}.events_clean
+    MODIFY SETTING
+        non_replicated_deduplication_window = 1000,
+        replicated_deduplication_window = 1000,
+        replicated_deduplication_window_seconds = 2592000;
 
 
 -- Converge a database that already has events_clean: CREATE TABLE IF NOT EXISTS

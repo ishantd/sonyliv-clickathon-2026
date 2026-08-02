@@ -278,7 +278,40 @@ CREATE TABLE IF NOT EXISTS {{db}}.dirty_sessions
 )
 ENGINE = MergeTree
 ORDER BY (session_start_date, session_key, last_ingested_at, ingest_batch_id)
+SETTINGS
+    -- These were MISSING. Measured on the live service 2026-08-02: of the 13
+    -- MergeTree tables in `sonyliv`, four carried none of the three dedup
+    -- settings — dirty_sessions, events_clean, ingest_batches, ingest_rejects —
+    -- against this repo's own stated rule that "every new MergeTree table in
+    -- this project must carry all three settings".
+    --
+    -- Scoped honestly, because the blast radius differs per table. This one is
+    -- fed by events_raw_to_dirty_mv, and events_raw DOES carry the settings, so
+    -- a byte-identical replayed batch is rejected upstream and the MV never
+    -- fires. The exposure is a replay whose BLOCK BOUNDARIES differ from the
+    -- original — which is precisely the case
+    -- insert_deduplication_token does not cover on a large INSERT SELECT, and
+    -- the case that doubled concurrency_deltas on 2026-08-01. Then the queue
+    -- gains duplicate work items.
+    --
+    -- Duplicated queue items are tolerated BY DESIGN downstream —
+    -- dirty_operation_id makes "has this been applied?" a set-membership test,
+    -- and 011 resolves by state_revision — so this is defence in depth, not a
+    -- present wrong answer. It is still the rule, and the rule exists because
+    -- the failure is silent.
+    non_replicated_deduplication_window = 1000,
+    replicated_deduplication_window = 1000,
+    replicated_deduplication_window_seconds = 2592000
 COMMENT 'Append-only work queue: sessions whose history changed and must be recompacted.';
+
+-- Converge a database that already has the table; CREATE IF NOT EXISTS above
+-- cannot deliver the settings to one, which is exactly why they were absent on
+-- the live service despite being in this file's sibling tables.
+ALTER TABLE {{db}}.dirty_sessions
+    MODIFY SETTING
+        non_replicated_deduplication_window = 1000,
+        replicated_deduplication_window = 1000,
+        replicated_deduplication_window_seconds = 2592000;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS {{db}}.events_raw_to_dirty_mv
 TO {{db}}.dirty_sessions

@@ -103,12 +103,18 @@ func TestSchemaStatementsLoad(t *testing.T) {
 	// Re-running it with an identical body converges to the same definition.
 	// Unlike DROP + CREATE it leaves no window in which inserts are silently
 	// not propagated.
+	//
+	// ALTER ... MODIFY COLUMN qualifies too, and for the same purpose: it assigns
+	// a fixed target type, so re-running converges. Widening an Enum8 by appending
+	// a value is metadata-only — existing rows keep their encoding — and it is the
+	// only way the new state reaches a database that already has the table.
 	for _, s := range stmts {
 		u := strings.ToUpper(s.SQL)
 		idempotent := strings.Contains(u, "IF NOT EXISTS") ||
 			strings.Contains(u, "OR REPLACE") ||
 			strings.Contains(u, "MODIFY SETTING") ||
-			strings.Contains(u, "MODIFY QUERY")
+			strings.Contains(u, "MODIFY QUERY") ||
+			strings.Contains(u, "MODIFY COLUMN")
 		if !idempotent {
 			t.Errorf("%s[%d] is not idempotent: %s", s.File, s.Index, s.Summary())
 		}

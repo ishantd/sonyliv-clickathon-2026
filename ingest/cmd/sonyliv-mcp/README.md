@@ -78,9 +78,17 @@ MCP_HOST=ec2-user@<ip> ./deploy/deploy-mcp.sh
 MCP_HOST=ec2-user@<ip> ./deploy/deploy-mcp.sh --check
 ```
 
-The unit binds `127.0.0.1:8848`. **Terminate TLS in front of it** — the bearer token is
-SQL access and must not cross the network in plaintext. The HTTP transport refuses to
-start without `SONYLIV_MCP_TOKEN`, and `--allow-no-auth` refuses a non-loopback bind.
+The unit binds `${MCP_ADDR}` from `/etc/sonyliv/mcp.env`. On the demo box that is
+`172.17.0.1:8848`, the Docker bridge gateway, because LibreChat runs in a container and a
+container cannot reach the host's loopback. The bridge is still a host-local interface —
+nothing plaintext leaves the box, and 8848 is not in the security group.
+
+**Anything that publishes this port off-box must terminate TLS in front of it** — the
+bearer token is SQL access and must not cross a network in plaintext.
+
+The HTTP transport refuses to start without `SONYLIV_MCP_TOKEN`. `--allow-no-auth` drops
+that requirement but then refuses any non-loopback bind, so the unauthenticated and
+off-loopback cases can never combine.
 
 ## Client configuration
 
