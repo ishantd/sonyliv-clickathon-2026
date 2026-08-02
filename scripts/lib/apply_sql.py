@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import ssl
 import sys
 import time
@@ -152,6 +153,51 @@ def strip_to_sql(stmt: str) -> str:
     return stmt.strip() if "".join(body_chars).strip() else ""
 
 
+def substitute_literals(sql: str, literals: dict[str, str]) -> str:
+    """Replace {name:Type} with a SQL literal, before the server ever parses it.
+
+    WHY THIS EXISTS. ClickHouse cannot bind a query parameter inside a SETTINGS
+    clause. Measured -- identical error in chdb 26.5 and on the 26.2 service:
+
+        SELECT 1 SETTINGS max_execution_time = {t:UInt64}
+        Code: 62. Syntax error: failed at position 49 (}).
+                  Expected substitution type (identifier).
+
+    while the same placeholder in a SELECT list or a WHERE binds fine. Settings
+    take literals only, which CLAUDE.md already records for a different reason.
+
+    Four placeholders in this repo sit in a SETTINGS clause -- the
+    insert_deduplication_token of the INSERT in 011 and the three in 022 -- so
+    they are unreachable by --param and MUST be substituted client-side.
+    clickhouse-client did this silently, which is why the pipeline worked before
+    it was ever applied over HTTP.
+
+    The type in the placeholder decides the literal form: String-ish types are
+    quoted and escaped, numeric types are emitted bare and validated as numbers
+    so this cannot become a SQL-injection seam.
+    """
+    for name, value in literals.items():
+        pattern = re.compile(r"\{" + re.escape(name) + r":([A-Za-z0-9_()\s,']+)\}")
+
+        def repl(m: "re.Match[str]") -> str:
+            declared = m.group(1).strip()
+            if declared.lower().startswith(("string", "fixedstring", "uuid", "date", "datetime")):
+                return "'" + escape_sql_string(value) + "'"
+            # Numeric or anything else: refuse a non-numeric value rather than
+            # paste it in unquoted.
+            if not re.fullmatch(r"-?\d+(\.\d+)?", value):
+                raise SystemExit(
+                    f"error: --literal {name}={value!r} is declared {declared} in the SQL "
+                    f"but is not numeric; refusing to substitute it unquoted"
+                )
+            return value
+
+        sql, n = pattern.subn(repl, sql)
+        if n == 0:
+            print(f"  warning: --literal {name} matched nothing", file=sys.stderr)
+    return sql
+
+
 def escape_sql_string(s: str) -> str:
     """Escape for a single-quoted ClickHouse string literal.
 
@@ -235,6 +281,10 @@ def main() -> int:
     ap.add_argument("--insecure", action="store_true", help="plain HTTP (local dev)")
     ap.add_argument("--param", action="append", default=[], metavar="K=V",
                     help="bound query parameter, repeatable")
+    ap.add_argument("--literal", action="append", default=[], metavar="K=V",
+                    help="textually substitute {K:Type} with V before parsing, repeatable. "
+                         "Needed ONLY for placeholders inside a SETTINGS clause, which "
+                         "ClickHouse cannot bind as query parameters -- see substitute_literals.")
     ap.add_argument("--rewrite-db", metavar="FROM", default=None,
                     help="rewrite a hardcoded 'FROM.' database prefix to --database. "
                          "pipeline/sql/* hardcode 'sonyliv.' rather than using {{db}}, so "
@@ -250,6 +300,14 @@ def main() -> int:
     args.password = os.environ.get("CLICKHOUSE_PASSWORD", "")
     scheme = "http" if args.insecure else "https"
     args.base_url = f"{scheme}://{args.host}:{args.port}"
+
+    literals = {}
+    for p in args.literal:
+        if "=" not in p:
+            print(f"error: --literal must be K=V, got {p!r}", file=sys.stderr)
+            return 2
+        k, v = p.split("=", 1)
+        literals[k] = v
 
     params = {}
     for p in args.param:
@@ -285,6 +343,8 @@ def main() -> int:
         # ingest/internal/chx/schema.go already did this correctly, so the
         # dictionary worked when created by `sonyliv-ingest schema` and would
         # have been broken by bootstrap.sh -- two paths, one of them wrong.
+        if literals:
+            raw = substitute_literals(raw, literals)
         raw = raw.replace("{{ch_user}}", escape_sql_string(args.user))
         raw = raw.replace("{{ch_password}}", escape_sql_string(args.password))
         if args.rewrite_db and args.rewrite_db != args.database:
