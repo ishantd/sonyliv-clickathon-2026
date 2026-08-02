@@ -32,13 +32,26 @@ CREATE TABLE IF NOT EXISTS {{db}}.ingest_batches
     completed_at      DateTime64(3, 'UTC'),
     duration_ms       UInt32,
     attempt           UInt8    DEFAULT 1,
-    status            Enum8('ok' = 1, 'failed' = 2) DEFAULT 'ok',
+    -- Three states, not two. 'unknown' exists because a cancelled Send is not a
+    -- failed write: clickhouse-go closes the socket on context cancel and
+    -- returns ctx.Err(), discarding the server's reply, so the block may have
+    -- committed. On 2026-08-01 all three batches recorded 'failed' had every
+    -- one of their rows present in events_raw (3/3, 24/24, 51/51). Recording
+    -- those as 'failed' made the ledger under-report by 78 rows — a silent
+    -- disagreement between the audit layer and the table it describes.
+    status            Enum8('ok' = 1, 'failed' = 2, 'unknown' = 3) DEFAULT 'ok',
     error             String   DEFAULT ''
 )
 ENGINE = MergeTree
 PARTITION BY toYYYYMM(started_at)
 ORDER BY (source, run_id, batch_ordinal)
 COMMENT 'Ingest audit log: one row per acknowledged INSERT batch.';
+
+-- CREATE TABLE IF NOT EXISTS above is a no-op against a database that already
+-- has this table, so the 'unknown' state would never reach one. Widening an
+-- Enum8 by adding a value is metadata-only — existing rows keep their encoding.
+ALTER TABLE {{db}}.ingest_batches
+    MODIFY COLUMN status Enum8('ok' = 1, 'failed' = 2, 'unknown' = 3) DEFAULT 'ok';
 
 
 -- Rows the producer refused to land in events_raw.

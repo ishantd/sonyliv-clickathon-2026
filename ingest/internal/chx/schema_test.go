@@ -96,11 +96,18 @@ func TestSchemaStatementsLoad(t *testing.T) {
 	// the same state however many times it runs. It is also the only way a
 	// settings correction reaches a database that already has the tables, since
 	// CREATE TABLE IF NOT EXISTS is a no-op there.
+	//
+	// ALTER ... MODIFY COLUMN qualifies for the same reason and is allowed for
+	// the same purpose: it assigns a fixed target type, so re-running converges.
+	// Widening an Enum8 by appending a value is metadata-only — existing rows
+	// keep their encoding — and it is the only way the new state reaches a
+	// database that already has the table.
 	for _, s := range stmts {
 		u := strings.ToUpper(s.SQL)
 		idempotent := strings.Contains(u, "IF NOT EXISTS") ||
 			strings.Contains(u, "OR REPLACE") ||
-			strings.Contains(u, "MODIFY SETTING")
+			strings.Contains(u, "MODIFY SETTING") ||
+			strings.Contains(u, "MODIFY COLUMN")
 		if !idempotent {
 			t.Errorf("%s[%d] is not idempotent: %s", s.File, s.Index, s.Summary())
 		}
