@@ -32,9 +32,9 @@
 
   /* type */
   --fg:             #ECECF4;
-  --fg-2:           #A6A6BA;
-  --fg-3:           #6C6C82;
-  --fg-4:           #45455A;
+  --fg-2:           #B6B6C8;
+  --fg-3:           #8A8AA0;
+  --fg-4:           #5E5E76;
 
   /* ClickHouse */
   --ch-yellow:      #FAFF69;
@@ -162,29 +162,138 @@ table.dt.qa td.q b{color:var(--fg-2);font-weight:600;font-style:normal}
 table.dt.qa td.n{font-size:12px;color:var(--ch-yellow)}
 table.dt.qa td.n small{font-style:normal;color:var(--fg-4);letter-spacing:0}
 
-/* ---- architecture table cards: what it is / why it's fast / what we did ---- */
-.tcard{background:var(--panel);border:1px solid var(--hair);border-radius:3px;
-  padding:15px 17px 16px;display:flex;flex-direction:column}
-.tcard.hot{border-color:rgba(250,255,105,.36)}
-.tcard.liv{border-color:rgba(226,86,253,.36)}
-.tcard .th{display:flex;flex-direction:column;gap:3px;padding-bottom:8px;
+/* ---- the brief's five questions, compact ---- */
+.qgrid{margin-top:22px;border-top:1px solid var(--hair)}
+.qrow{display:grid;grid-template-columns:26px 1.05fr 1.55fr 0.72fr;gap:18px;align-items:baseline;
+  padding:23px 0;border-bottom:1px solid rgba(255,255,255,.055)}
+.qrow .qi{font-family:'Chivo Mono',monospace;font-size:14px;font-weight:600;color:var(--ch-yellow)}
+.qrow .qq{font-size:13px;line-height:1.4;color:var(--fg-3);font-style:italic}
+.qrow .qq b{color:var(--fg-2);font-weight:600;font-style:normal}
+.qrow .qa2{font-size:13px;line-height:1.42;color:var(--fg-2)}
+.qrow .qa2 b{color:var(--fg);font-weight:600}
+.qrow .qm{text-align:right;font-family:'Chivo Mono',monospace;font-size:16px;font-weight:600;
+  color:var(--ch-yellow);letter-spacing:-.02em}
+.qrow .qm span{display:block;font-size:10px;font-weight:400;letter-spacing:.03em;color:var(--fg-4);
+  margin-top:5px}
+
+/* ---- challenges + requirements tables ---- */
+table.dt.ch,table.dt.req{margin-top:22px}
+table.dt.ch td,table.dt.req td{padding:9px 12px 9px 0;font-size:12.2px;line-height:1.44}
+table.dt.ch td.ev{font-family:'Chivo Mono',monospace;font-size:10.8px;color:var(--liv-magenta);
+  line-height:1.5}
+table.dt.ch td.n,table.dt.req td.n{font-size:13px;color:var(--ch-yellow)}
+table.dt.ch td.n span,table.dt.req td.n span{display:block;font-family:'Archivo';font-size:10.5px;
+  color:var(--fg-4);margin-top:4px;line-height:1.35;font-weight:400}
+table.dt.perf td{padding:10px 12px 10px 0;font-size:13px}
+
+/* ---- metric row on the core-idea slide ---- */
+.metricrow{margin-top:28px;display:flex;gap:0;border-top:1px solid var(--hair-2);
+  border-bottom:1px solid var(--hair-2)}
+.metricrow .mcell{flex:1;padding:20px 22px 19px;border-right:1px solid var(--hair)}
+.metricrow .mcell:last-child{border-right:none}
+.metricrow .mlab{font-family:'Chivo Mono',monospace;font-size:9.5px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--fg-4);margin-bottom:13px}
+.metricrow .mval{font-family:'Chivo Mono',monospace;font-variant-numeric:tabular-nums;
+  font-size:38px;font-weight:600;letter-spacing:-.035em;line-height:.9;color:var(--fg)}
+.metricrow .mval.y{color:var(--ch-yellow)}
+.metricrow .mnote{margin-top:12px;font-size:11.5px;line-height:1.4;color:var(--fg-3)}
+.metricrow .mnote b.y{color:var(--ch-yellow);font-weight:600}
+.ideawrap{margin:auto 0;padding-bottom:2px}
+
+/* ---- service architecture ---- */
+.svcwrap{margin-top:26px;display:flex;align-items:stretch;gap:0}
+.svccol{flex:1;display:flex;flex-direction:column;gap:11px}
+.svccol.core{flex:1.15}
+.svcarrow{flex:none;width:52px;display:flex;align-items:center;justify-content:center;
+  font-family:'Chivo Mono',monospace;font-size:19px;color:var(--fg-4)}
+.svclabel{font-family:'Chivo Mono',monospace;font-size:9.5px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--fg-4);margin-bottom:2px}
+.svc{background:var(--panel);border:1px solid var(--hair);border-radius:3px;padding:12px 15px}
+.svc b{display:block;font-size:13.5px;font-weight:700;color:var(--fg);
+  font-variation-settings:'wdth' 104,'wght' 700}
+.svc i{display:block;font-style:normal;font-size:11px;line-height:1.4;color:var(--fg-3);margin-top:4px}
+.svc.liv{border-color:rgba(226,86,253,.34)}
+.svc.liv b{color:var(--liv-magenta)}
+.svc.big{flex:1;border-color:rgba(250,255,105,.4);background:linear-gradient(180deg,
+  rgba(250,255,105,.055),rgba(250,255,105,.012));display:flex;flex-direction:column}
+.svc.big b{font-size:17px;color:var(--ch-yellow)}
+.svc.big{justify-content:flex-start}
+.svc.big i{margin-bottom:2px}
+.svcinner{margin:auto 0 0;padding-top:15px;display:flex;flex-direction:column;gap:6px}
+.svcinner span{font-family:'Chivo Mono',monospace;font-size:10.5px;color:var(--fg-2);
+  letter-spacing:-.01em}
+.svcfoot{margin-top:auto;padding-top:16px;border-top:1px solid var(--hair);display:grid;
+  grid-template-columns:repeat(3,1fr);gap:24px}
+.svcfoot div{font-size:11.5px;line-height:1.45;color:var(--fg-3)}
+.svcfoot div>span:first-child{display:block;font-family:'Chivo Mono',monospace;font-size:9px;
+  letter-spacing:.2em;text-transform:uppercase;color:var(--ch-yellow);margin-bottom:6px}
+.svcfoot div .mono{font-size:10.5px;letter-spacing:-.02em;color:var(--fg-2)}
+
+/* ---- screenshot slides ---- */
+.shotgrid{margin-top:22px;display:grid;grid-template-columns:1.12fr 1fr;gap:24px;flex:1;min-height:0}
+.shotframe{border:1px solid var(--hair-2);border-radius:4px;overflow:hidden;display:flex;
+  flex-direction:column;background:var(--ink-2)}
+.shotbar{display:flex;align-items:center;gap:6px;padding:9px 13px;background:var(--panel-2);
   border-bottom:1px solid var(--hair)}
-.tcard .tn{font-size:12.5px;font-weight:600;color:var(--fg);letter-spacing:-.01em;word-break:break-all}
+.shotbar .dot{width:8px;height:8px;border-radius:50%;background:var(--fg-4)}
+.shotbar .dot.r{background:#FF5F57} .shotbar .dot.y{background:#FEBC2E} .shotbar .dot.g{background:#28C840}
+.shotbar .shoturl{margin-left:12px;font-size:10.5px;color:var(--fg-3);letter-spacing:-.01em}
+.shotslot{flex:1;display:flex;align-items:center;justify-content:center;padding:26px;
+  background:repeating-linear-gradient(45deg,rgba(255,255,255,.016) 0 10px,transparent 10px 20px)}
+.shotslot img{width:100%;height:100%;object-fit:cover;object-position:top left;display:block}
+.slotinner{text-align:center;max-width:44ch}
+.slotk{font-family:'Chivo Mono',monospace;font-size:9.5px;letter-spacing:.22em;text-transform:uppercase;
+  color:var(--fg-4);margin-bottom:10px}
+.slott{font-size:17px;font-weight:700;color:var(--fg-3);font-variation-settings:'wdth' 104,'wght' 700}
+.slotd{margin-top:11px;font-size:11.5px;line-height:1.5;color:var(--fg-4)}
+.shotside{display:flex;flex-direction:column;min-width:0}
+
+/* ---- thank you ---- */
+.thanks{padding:0;align-items:center;justify-content:center}
+.thanks .wash3{position:absolute;inset:0;z-index:0;
+  background:radial-gradient(1000px 560px at 50% 40%,rgba(148,64,240,.26),transparent 66%),
+             radial-gradient(680px 380px at 8% 92%,rgba(44,174,236,.13),transparent 62%)}
+.thanks .curve{position:absolute;left:0;right:0;bottom:0;height:196px;z-index:0;opacity:.34}
+.tywrap{position:relative;z-index:3;text-align:center;padding:0 60px 96px}
+.tylock{display:flex;align-items:center;justify-content:center;gap:28px;margin-bottom:38px}
+.tylock .x{font-family:'Chivo Mono',monospace;font-size:19px;color:var(--fg-4);font-weight:300}
+h1.tyh{font-size:98px;line-height:.94;letter-spacing:-.038em;
+  font-variation-settings:'wdth' 112,'wght' 800}
+.tysub{margin:18px 0 0;font-size:22px;line-height:1.4;color:var(--fg-2);
+  font-variation-settings:'wdth' 104,'wght' 400}
+.tymeta{margin-top:30px;font-family:'Chivo Mono',monospace;font-size:10.5px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--fg-4);display:flex;gap:14px;justify-content:center;
+  flex-wrap:wrap;align-items:center}
+.tymeta .sep{color:var(--fg-4);opacity:.5}
+
+/* ---- architecture table cards: what it is / why it's fast / what we did ---- */
+.tcard{background:linear-gradient(180deg,rgba(255,255,255,.028),rgba(255,255,255,.008));
+  border:1px solid var(--hair);border-radius:4px;
+  padding:16px 18px 17px;display:flex;flex-direction:column}
+.tcard.hot{border-color:rgba(250,255,105,.4);
+  background:linear-gradient(180deg,rgba(250,255,105,.05),rgba(250,255,105,.008))}
+.tcard.liv{border-color:rgba(226,86,253,.4);
+  background:linear-gradient(180deg,rgba(226,86,253,.05),rgba(226,86,253,.008))}
+.tcard .th{display:flex;flex-direction:column;gap:5px;padding-bottom:10px;
+  border-bottom:1px solid var(--hair-2)}
+.tcard .tk{font-family:'Chivo Mono',monospace;font-size:8.5px;letter-spacing:.2em;
+  text-transform:uppercase;color:var(--fg-4)}
+.tcard .tn{font-size:13px;font-weight:600;color:var(--fg);letter-spacing:-.015em;word-break:break-word}
 .tcard.hot .tn{color:var(--ch-yellow)} .tcard.liv .tn{color:var(--liv-magenta)}
 .tcard .te{font-family:'Chivo Mono',monospace;font-size:8.5px;letter-spacing:.16em;
   text-transform:uppercase;color:var(--fg-4)}
-.tcard .tm{font-family:'Chivo Mono',monospace;font-size:10.5px;color:var(--fg-3);
+.tcard .tm{font-family:'Chivo Mono',monospace;font-size:10.5px;color:var(--fg-2);
   padding:9px 0 11px;line-height:1.45}
 .tcard .tm b{color:var(--fg);font-weight:600}
 .tcard .tw,.tcard .td2{font-size:11.4px;line-height:1.46;color:var(--fg-2);padding-top:10px}
-.tcard .tw{border-top:1px solid rgba(255,255,255,.05)}
-.tcard .td2{border-top:1px solid rgba(255,255,255,.05);margin-top:8px;color:var(--fg-3)}
+.tcard .tw{border-top:1px solid rgba(255,255,255,.05);padding-bottom:11px}
+.tcard .td2{border-top:1px solid rgba(255,255,255,.05);margin-top:auto;color:var(--fg-2)}
 .tcard .tw>span:first-child,.tcard .td2>span:first-child{display:block;
   font-family:'Chivo Mono',monospace;font-size:8.5px;letter-spacing:.17em;
   text-transform:uppercase;margin-bottom:5px}
 .tcard .tw>span:first-child{color:var(--ch-yellow)}
-.tcard .td2>span:first-child{color:var(--fg-4)}
-.tcard .mono{font-size:10.6px;letter-spacing:-.02em;color:var(--fg-3)}
+.tcard .td2>span:first-child{color:var(--liv-magenta)}
+.tcard .mono{font-size:10.8px;letter-spacing:-.02em;color:var(--liv-magenta)}
 .tcard .tw b{color:var(--fg);font-weight:600}
 
 /* ---- the big-idea slide ---- */
@@ -504,7 +613,7 @@ pre.code .cm{color:var(--fg-4)}
 <section class="slide">
   <div class="chrome">
     <div class="eyebrow">01 &nbsp;/&nbsp; The problem</div>
-    <div class="folio"><i>02</i> / 15</div>
+    <div class="folio"><i>02</i> / 14</div>
   </div>
 
   <div class="body">
@@ -561,289 +670,108 @@ pre.code .cm{color:var(--fg-4)}
   </div>
 </section>
 
-<!-- ============================ 03 METHOD ============================ -->
+<!-- ============================ 03 FIVE QUESTIONS ============================ -->
 <section class="slide">
   <div class="chrome">
-    <div class="eyebrow">02 &nbsp;/&nbsp; Method</div>
-    <div class="folio"><i>03</i> / 15</div>
+    <div class="eyebrow">02 &nbsp;/&nbsp; What the brief asks</div>
+    <div class="folio"><i>03</i> / 14</div>
   </div>
 
   <div class="body">
-    <h1>We profiled first.<br><span class="dim">Then the unseen day moved the ground.</span></h1>
-    <p class="lede" style="max-width:100ch">Every load-bearing claim, measured on both datasets. The
-      tuning day taught us some lessons that were <b>true only of the tuning day</b> — which is exactly
-      why nothing in the pipeline is allowed to assume them.</p>
+    <h1>Five questions.<br><span class="dim">Five answers.</span></h1>
 
-    <div class="rule" style="margin:16px 0 2px"></div>
-
-    <table class="dt">
-      <thead><tr>
-        <th style="width:22%">The dictionary says</th>
-        <th style="width:38%">What is actually true</th>
-        <th style="width:19%">Tuning day</th>
-        <th style="width:21%">Unseen day</th>
-      </tr></thead>
-      <tbody>
-        <tr>
-          <td class="k">Heartbeat every 60 s</td>
-          <td>The periodic ping is a <b style="color:var(--fg)">trio</b> at identical millisecond
-            timestamps, and it fires every 40 s on both days.</td>
-          <td class="n">p50 40.0 s</td>
-          <td class="n y">p50 40.0 s<small>unchanged — the one stable fact</small></td>
-        </tr>
-        <tr>
-          <td class="k">A heartbeat proves playback</td>
-          <td>iOS does not emit the trio. Trio-based liveness silently drops most Apple traffic.</td>
-          <td class="n">74.4%<small>IPHONE, no trio</small></td>
-          <td class="n r">58.6% / 62.5% / 63.6%<small>IPHONE · IPAD · APPLE_TV</small></td>
-        </tr>
-        <tr>
-          <td class="k">Pause is an event type</td>
-          <td><span class="mono">event_type='VideoHeartbeat'</span> is a grab-bag. Pause exists only
-            as lowercase <span class="mono">'pause'</span> inside it.</td>
-          <td class="n">41 names</td>
-          <td class="n r">42 names<small>a new one, <span class="mono">golive</span>, appeared</small></td>
-        </tr>
-        <tr style="background:rgba(255,77,94,.05)">
-          <td class="k">Every session closes</td>
-          <td><b style="color:var(--wrong)">The tuning day lied.</b> There, all 10,866 sessions had a
-            Start and an End. On the unseen day a third never close, and a quarter were already
-            running when the window opened.</td>
-          <td class="n">0%<small>open sessions</small></td>
-          <td class="n r">34.7% open<small>37,649 never end · 25,403 never start</small></td>
-        </tr>
-        <tr style="background:rgba(255,77,94,.05)">
-          <td class="k">bg/fg are &ldquo;not guaranteed&rdquo;</td>
-          <td><b style="color:var(--wrong)">The dictionary was right and the tuning day was not.</b>
-            There, 100% of sessions carried both. Here, most carry neither — so backgrounding cannot
-            be the only exclusion rule.</td>
-          <td class="n">100%<small>carry both</small></td>
-          <td class="n r">6.51%<small>carry both · 86.4% no bg at all</small></td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="foot">
-    <span class="src">Tuning figures <b>docs/EVIDENCE.md</b> · unseen-day figures re-measured on <b>sonyliv</b> &nbsp;·&nbsp; this is why no gate hardcodes a number</span>
-    <span>SonyLIV × ClickHouse</span>
-  </div>
-</section>
-
-<!-- ============================ 04 FIVE QUESTIONS ============================ -->
-<section class="slide">
-  <div class="chrome">
-    <div class="eyebrow">03 &nbsp;/&nbsp; What the brief asks</div>
-    <div class="folio"><i>04</i> / 15</div>
-  </div>
-
-  <div class="body">
-    <h1>The brief poses five questions.<br><span class="dim">Here they are, answered.</span></h1>
-
-    <div class="rule" style="margin:16px 0 4px"></div>
-
-    <table class="dt qa">
-      <thead><tr>
-        <th style="width:2.5%"></th>
-        <th style="width:29%">&ldquo;the questions this problem turns on&rdquo;</th>
-        <th style="width:48%">Our answer</th>
-        <th style="width:20.5%">Measured, unseen day</th>
-      </tr></thead>
-      <tbody>
-        <tr>
-          <td class="qn">1</td>
-          <td class="q">How do you define an <b>active interval</b> when the heartbeat is missing, the
-            player is paused, or the app is backgrounded?</td>
-          <td>A five-clause predicate in a versioned <span class="mono">policy.yaml</span>:
-            <b style="color:var(--fg)">started ∧ ¬terminated ∧ foreground ∧ playing ∧ live within 120 s</b>.
-            Background is a hard edge, pause stops playback, error stops it without ending the session.</td>
-          <td class="n">0.2%<small>of legitimate gaps falsely split at T = 120 s</small></td>
-        </tr>
-        <tr>
-          <td class="qn">2</td>
-          <td class="q">How should active ranges be <b>represented</b> — interval arrays, normalized
-            intervals, pre-aggregated minute deltas, or a hybrid?</td>
-          <td>Hybrid, and <b style="color:var(--fg)">both views the brief asks for</b>. Normalized
-            half-open intervals are the session-aware source of truth; signed &#177;1 deltas at their
-            edges are the serving form; a dense minute tier sits on top. A session-independent
-            <span class="mono">uniqCombined64</span> estimate runs alongside as the comparison path.</td>
-          <td class="n">7,000,000 &#8594; 163,740<small>events to intervals — 43&#215; fewer rows</small></td>
-        </tr>
-        <tr>
-          <td class="qn">3</td>
-          <td class="q">How do you compute accurate minute-wise <b>peak and average</b> without
-            scanning raw session history on every query?</td>
-          <td>Prefix-sum the deltas from a day anchor, never from <span class="mono">t = 0</span>.
-            Average is <b style="color:var(--fg)">time-weighted</b> over exact constant-concurrency
-            segments, not sampled at minute boundaries. Hour and day peak is
-            <span class="mono">max(minute_peak)</span>; average is
-            <span class="mono">sum(active_ms) / duration</span>.</td>
-          <td class="n">5 ms / 8,192 rows<small>vs 476 ms and 13.9 M rows recomputing it raw</small></td>
-        </tr>
-        <tr>
-          <td class="qn">4</td>
-          <td class="q">How does the model stay <b>filter-friendly</b> across platform, country,
-            content, video type and time grain?</td>
-          <td>A <span class="mono">rollup_mask</span> bitmask materialises nine dimension
-            combinations inside the sort key. Peak is always computed
-            <b style="color:var(--fg)">after</b> aggregating the requested combination — never by
-            summing per-dimension peaks, which land on different minutes.</td>
-          <td class="n">1,100 @ 11:23<small>SAMSUNG_HTML_TV's own peak; only 1,054 at the global one</small></td>
-        </tr>
-        <tr>
-          <td class="qn">5</td>
-          <td class="q">How do you handle sessions that are <b>still open</b>, whose active ranges keep
-            growing as new heartbeats arrive?</td>
-          <td>Two mechanisms. &ldquo;Right now&rdquo; is a separate O(open sessions) table where a
-            quiet session simply falls out of the <span class="mono">WHERE</span> clause — nothing is
-            written when a viewer stops. For history, a changed session publishes
-            <b style="color:var(--fg)">new &minus; old</b> boundary maps as signed corrections.</td>
-          <td class="n">37,649<small>sessions that never close — 34.7% of the day</small></td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-
-  <div class="foot">
-    <span class="src">Questions quoted from <b>PROBLEM_STATEMENT.md</b> &nbsp;·&nbsp; each is expanded on a slide that follows</span>
-    <span>SonyLIV × ClickHouse</span>
-  </div>
-</section>
-<!-- ============================ 05 SEMANTICS ============================ -->
-<section class="slide">
-  <div class="chrome">
-    <div class="eyebrow">04 &nbsp;/&nbsp; Semantics</div>
-    <div class="folio"><i>05</i> / 15</div>
-  </div>
-
-  <div class="body">
-    <h1>Where the statement is ambiguous,<br>we answer in a <span class="hl">file</span>, not a comment.</h1>
-    <p class="lede">Every semantic switch lives in a versioned <span class="mono">policy.yaml</span>,
-      is stamped onto every published answer, and has a measured cost for flipping it.</p>
-
-    <div class="grid g2" style="margin-top:16px;gap:24px;align-items:start">
-      <div>
-        <pre class="code"><span class="cm">-- policy: sonyliv-active-v1</span>
-active = <span class="kw">started</span>
-     AND NOT <span class="kw">terminated</span>
-     AND <span class="kw">foreground</span>
-     AND <span class="kw">playing</span>
-     AND event_time &lt; last_signal + <span class="ok">120s</span></pre>
-
-        <div class="panel" style="margin-top:16px">
-          <div class="kicker">Why 120 seconds</div>
-          <p style="margin:0;font-size:12.5px;line-height:1.48;color:var(--fg-2)">
-            Three missed 40&#8209;second ticks, and the cadence held at
-            <span class="mono y">p50 40.0 s</span> on the unseen day too. A 120&nbsp;s lease falsely
-            splits about <b class="mono y">0.2%</b> of continuous playback; 180&nbsp;s recovers a few
-            hundredths of a point more while adding a full minute of phantom viewing after every
-            genuine stop. The knob is configurable and both alternatives are measured.</p>
-        </div>
+    <div class="qgrid">
+      <div class="qrow">
+        <div class="qi">1</div>
+        <div class="qq">Defining an <b>active interval</b> when the heartbeat is missing, the player is
+          paused, or the app is backgrounded</div>
+        <div class="qa2">A five-clause predicate in a versioned <span class="mono">policy.yaml</span> —
+          <b>started ∧ ¬terminated ∧ foreground ∧ playing ∧ live within 120 s</b></div>
+        <div class="qm">0.2%<span>gaps falsely split</span></div>
       </div>
-
-      <div>
-        <div class="kicker">Every clause is defended by a measurement</div>
-        <table class="dt">
-          <tbody>
-            <tr><td class="k">Liveness = <i>any</i> event</td>
-              <td>not the periodic trio — that drops 58.6% of iPhone and 63.6% of Apple TV sessions</td></tr>
-            <tr><td class="k">Background is a hard edge</td>
-              <td>heartbeats stop within ~5 s of the bg edge; waiting out the lease adds up to
-                120 s of nothing</td></tr>
-            <tr><td class="k">Paused counts as <b style="color:var(--wrong)">inactive</b></td>
-              <td>&ldquo;count only truly active <i>playback</i> intervals&rdquo;. A paused stream
-                serves no ads. 98,703 pause events on the unseen day — it is not a rounding error</td></tr>
-            <tr><td class="k">The lease carries the day</td>
-              <td>with only <b>6.51%</b> of sessions emitting bg/fg at all, silence is the primary
-                exclusion signal, not the backup one</td></tr>
-            <tr><td class="k">UTC end to end</td>
-              <td>an IST rendering moves events across a calendar boundary and would change daily
-                partitions. Display-time conversion only</td></tr>
-          </tbody>
-        </table>
-
-        <div class="panel" style="margin-top:14px;border-color:rgba(148,64,240,.4);padding:15px 18px">
-          <div class="kicker" style="color:var(--liv-magenta);margin-bottom:7px">Why this survived the unseen day</div>
-          <p style="margin:0;font-size:12px;line-height:1.46;color:var(--fg-3)">
-            The predicate never assumed a session ends, never assumed a background event arrives, and
-            never assumed the trio exists. Each of those three assumptions would have been safe on the
-            tuning data and <b style="color:var(--fg-2)">wrong here</b>.</p>
-        </div>
+      <div class="qrow">
+        <div class="qi">2</div>
+        <div class="qq">Representing active ranges — arrays, intervals, minute deltas, or a hybrid</div>
+        <div class="qa2"><b>Hybrid.</b> Normalized intervals are the truth, signed &#177;1 deltas are the
+          serving form, a dense minute tier sits on top</div>
+        <div class="qm">43&#215;<span>fewer rows than events</span></div>
+      </div>
+      <div class="qrow">
+        <div class="qi">3</div>
+        <div class="qq">Minute-wise <b>peak and average</b> without scanning raw session history</div>
+        <div class="qa2">Prefix-sum from a day anchor, never <span class="mono">t = 0</span>. Average is
+          <b>time-weighted</b>, not sampled at boundaries</div>
+        <div class="qm">5 ms<span>8,192 rows read</span></div>
+      </div>
+      <div class="qrow">
+        <div class="qi">4</div>
+        <div class="qq">Staying <b>filter-friendly</b> across platform, country, content, video type, grain</div>
+        <div class="qa2">Nine dimension combinations in the sort key. Peak computed <b>after</b>
+          aggregating — never by summing per-dimension peaks</div>
+        <div class="qm">1,100 @ 11:23<span>a slice's own peak minute</span></div>
+      </div>
+      <div class="qrow">
+        <div class="qi">5</div>
+        <div class="qq">Handling sessions that are <b>still open</b> and keep growing</div>
+        <div class="qa2">A quiet session falls out of a <span class="mono">WHERE</span> clause — nothing
+          is written when a viewer stops. History takes signed corrections</div>
+        <div class="qm">37,649<span>never closed. absorbed</span></div>
       </div>
     </div>
   </div>
 
   <div class="foot">
-    <span class="src">Source <b>solution/policy.yaml</b> · <b>docs/DECISIONS.md</b> D1 &nbsp;·&nbsp; every knob carries its measured impact</span>
+    <span class="src">Questions from <b>PROBLEM_STATEMENT.md</b> &nbsp;·&nbsp; figures measured on the unseen day</span>
     <span>SonyLIV × ClickHouse</span>
   </div>
 </section>
 
-<!-- ============================ 06 ARCHITECTURE I ============================ -->
+<!-- ============================ 04 ARCHITECTURE I ============================ -->
 <section class="slide">
   <div class="chrome">
-    <div class="eyebrow">05 &nbsp;/&nbsp; Architecture &nbsp;<span style="color:var(--fg-4)">I — the write path</span></div>
-    <div class="folio"><i>06</i> / 15</div>
+    <div class="eyebrow">03 &nbsp;/&nbsp; Architecture &nbsp;<span style="color:var(--fg-4)">I — the write path</span></div>
+    <div class="folio"><i>04</i> / 14</div>
   </div>
 
   <div class="body">
     <h1>Seven million events in.<br><span class="hl">163,740</span> <span class="dim">intervals out.</span></h1>
 
-    <div class="flow" style="margin-top:18px">
-      <div class="node"><div class="nk">landing</div><div class="nn">events_raw</div></div>
-      <div class="arrow">&#8594;</div>
-      <div class="node"><div class="nk">normalise</div><div class="nn">events_clean</div></div>
-      <div class="arrow">&#8594;</div>
-      <div class="node"><div class="nk">enrich</div><div class="nn">content_dict</div></div>
-      <div class="arrow">&#8594;</div>
-      <div class="node hot"><div class="nk">stage 01</div><div class="nn">active_intervals</div></div>
-    </div>
-
-    <div class="grid g4" style="margin-top:16px;gap:14px;align-items:stretch">
+    <div class="grid g4" style="margin-top:24px;gap:16px;align-items:stretch;flex:1;min-height:0">
       <div class="tcard">
-        <div class="th"><span class="tn mono">events_raw</span><span class="te">SharedMergeTree</span></div>
-        <div class="tm"><b>7,000,000</b> rows · 41.4 MiB · 0 rejected</div>
-        <div class="tw"><span>Why it is fast</span>Sorted by
-          <span class="mono">(video_session_id, event_timestamp)</span>, which is the only hot read it
-          has — a touched-session history lookup. No dashboard ever reaches this table.</div>
-        <div class="td2"><span>What we did</span>Append-only, never deduplicated in place, so the
-          duplicate rate stays measurable. All three dedup windows pinned, because Cloud silently
-          moves them onto a <span class="mono">3,600 s</span> timer.</div>
+        <div class="th"><span class="tk">landing</span><span class="tn mono">events_raw</span></div>
+        <div class="tm"><b>7,000,000</b> rows &nbsp;·&nbsp; 41.4 MiB &nbsp;·&nbsp; 0 rejected</div>
+        <div class="tw"><span>Fast because</span>Sorted by session, then time — the only hot read it
+          has. No dashboard ever reaches this table.</div>
+        <div class="td2"><span>We did</span>Append-only, so the duplicate rate stays measurable. All
+          three dedup windows pinned — Cloud silently moves them onto a timer.</div>
       </div>
 
       <div class="tcard">
-        <div class="th"><span class="tn mono">events_clean</span><span class="te">SharedReplacing</span></div>
-        <div class="tm"><b>6,974,862</b> rows · 46.1 MiB · 25,138 collapsed</div>
-        <div class="tw"><span>Why it is fast</span>Read through an <span class="mono">argMax</span>
-          view, so it is correct whether or not a merge has run. No <span class="mono">FINAL</span>
-          on the hot path — and <span class="mono">FINAL</span> would forfeit projections anyway.</div>
-        <div class="td2"><span>What we did</span>Normalisation once, at the boundary: lowercase and
-          suffix-strip the languages, map placeholders to <span class="mono">unknown</span>, so no
-          <span class="mono">GROUP BY</span> double-counts <span class="mono">OFF</span> and
-          <span class="mono">off</span>.</div>
+        <div class="th"><span class="tk">normalise</span><span class="tn mono">events_clean</span></div>
+        <div class="tm"><b>6,974,862</b> rows &nbsp;·&nbsp; 46.1 MiB &nbsp;·&nbsp; 25,138 collapsed</div>
+        <div class="tw"><span>Fast because</span>Read through an <span class="mono">argMax</span> view —
+          correct whether or not a merge has run, and no <span class="mono">FINAL</span> on the hot path.</div>
+        <div class="td2"><span>We did</span>Normalise once, at the boundary, so no
+          <span class="mono">GROUP BY</span> downstream double-counts a casing variant.</div>
       </div>
 
       <div class="tcard">
-        <div class="th"><span class="tn mono">content_dict</span><span class="te">Dictionary</span></div>
-        <div class="tm"><b>33,326</b> titles · hashed, in memory</div>
-        <div class="tw"><span>Why it is fast</span>The metadata join happens once during compaction,
-          not per query. <span class="mono">video_type</span> is denormalized straight into the
-          interval rows, so the serving layer never joins at all.</div>
-        <div class="td2"><span>What we did</span>Assert enrichment resolved before writing, and force
-          the load rather than relying on lazy load — a dictionary loads
-          <b style="color:var(--ch-yellow)">per replica</b> and an empty one still reports
+        <div class="th"><span class="tk">enrich</span><span class="tn mono">content_dict</span></div>
+        <div class="tm"><b>33,326</b> titles &nbsp;·&nbsp; hashed, in memory</div>
+        <div class="tw"><span>Fast because</span>The metadata join happens once during compaction, not
+          per query. Video type is denormalized into the interval rows.</div>
+        <div class="td2"><span>We did</span>Assert enrichment resolved before writing, and force the
+          load — a dictionary loads <b>per replica</b>, and an empty one still reports
           <span class="mono">LOADED</span>.</div>
       </div>
 
       <div class="tcard hot">
-        <div class="th"><span class="tn mono">active_intervals</span><span class="te">SharedMergeTree</span></div>
-        <div class="tm"><b>163,740</b> intervals · 96,844 sessions · 7.2 MiB</div>
-        <div class="tw"><span>Why it is fast</span><b style="color:var(--ch-yellow)">43&#215; fewer
-          rows than events</b>, and an aggregate projection answers the revision-resolution subquery,
-          so the current-state view prunes granules instead of scanning.</div>
-        <div class="td2"><span>What we did</span>One 13-CTE event-time state machine, in one file, used
-          for both the full rebuild and the incremental run — so the oracle cannot drift away from the
-          path it validates.</div>
+        <div class="th"><span class="tk">stage 01</span><span class="tn mono">active_intervals</span></div>
+        <div class="tm"><b>163,740</b> intervals &nbsp;·&nbsp; 96,844 sessions &nbsp;·&nbsp; 7.2 MiB</div>
+        <div class="tw"><span>Fast because</span><b>43&#215; fewer rows than events</b>, and an aggregate
+          projection answers the revision subquery so the current-state view prunes.</div>
+        <div class="td2"><span>We did</span>One 13-CTE state machine, in one file, for both the full
+          rebuild and the incremental run — so the oracle cannot drift from what it validates.</div>
       </div>
     </div>
   </div>
@@ -854,71 +782,52 @@ active = <span class="kw">started</span>
   </div>
 </section>
 
-<!-- ============================ 07 ARCHITECTURE II ============================ -->
+<!-- ============================ 05 ARCHITECTURE II ============================ -->
 <section class="slide">
   <div class="chrome">
-    <div class="eyebrow">06 &nbsp;/&nbsp; Architecture &nbsp;<span style="color:var(--fg-4)">II — the read path</span></div>
-    <div class="folio"><i>07</i> / 15</div>
+    <div class="eyebrow">04 &nbsp;/&nbsp; Architecture &nbsp;<span style="color:var(--fg-4)">II — the read path</span></div>
+    <div class="folio"><i>05</i> / 14</div>
   </div>
 
   <div class="body">
-    <h1>Two questions. Two structures.<br><span class="dim">Conflating them is the whole mistake.</span></h1>
+    <h1>Two questions.<br><span class="dim">Two structures.</span></h1>
 
-    <div class="flow" style="margin-top:18px">
-      <div class="node hot"><div class="nk">stage 02</div><div class="nn">concurrency_deltas</div></div>
-      <div class="arrow">&#8594;</div>
-      <div class="node"><div class="nk">checkpoint</div><div class="nn">bucket_net + day_anchor</div></div>
-      <div class="arrow">&#8594;</div>
-      <div class="node liv"><div class="nk">serving</div><div class="nn">concurrency_minute_versions</div></div>
-      <div class="arrow" style="width:34px">&nbsp;</div>
-      <div class="node liv"><div class="nk">live, independent</div><div class="nn">session_live_now</div></div>
-    </div>
-
-    <div class="grid g4" style="margin-top:16px;gap:14px;align-items:stretch">
+    <div class="grid g4" style="margin-top:24px;gap:16px;align-items:stretch;flex:1;min-height:0">
       <div class="tcard hot">
-        <div class="th"><span class="tn mono">concurrency_deltas</span><span class="te">SharedSumming</span></div>
-        <div class="tm"><b>6,435,460</b> rows · 34.9 MiB · nine masks</div>
-        <div class="tw"><span>Why it is fast</span>Two rows per interval per mask, and the answer is
-          <span class="mono">sum(delta) GROUP BY</span> the full key — so merges can lag arbitrarily
-          without changing what a query returns.</div>
-        <div class="td2"><span>What we did</span>An explicit column list, because a bare Summing table
-          sums your <i>dimensions</i>. Plus a conservation gate:
-          <span class="mono">sum(opens)</span> must equal <span class="mono">count()</span> of
-          intervals, and it throws with the ratio.</div>
+        <div class="th"><span class="tk">stage 02</span><span class="tn mono">concurrency_deltas</span></div>
+        <div class="tm"><b>6,435,460</b> rows &nbsp;·&nbsp; 34.9 MiB &nbsp;·&nbsp; nine masks</div>
+        <div class="tw"><span>Fast because</span>Two rows per interval per mask, and the answer is
+          <span class="mono">sum(delta)</span> over the full key — merges can lag without changing it.</div>
+        <div class="td2"><span>We did</span>An explicit column list, because a bare Summing table sums
+          your <i>dimensions</i>. Plus a conservation gate that throws with the ratio.</div>
       </div>
 
       <div class="tcard">
-        <div class="th"><span class="tn mono">bucket_net · day_anchor</span><span class="te">Summing · Replacing</span></div>
-        <div class="tm"><b>1,004,654</b> + 190,980,048 rows · 32.8 MiB</div>
-        <div class="tw"><span>Why it is fast</span>A window read never sums from
-          <span class="mono">t = 0</span>. It starts at the nearest anchor, so the cost is
-          O(checkpoints before the window) + O(deltas inside it), not O(history).</div>
-        <div class="td2"><span>What we did</span>Anchored per service day, so each day is
-          self-contained, a new day loads as an isolated partition, and a partition drop is a clean
-          retraction.</div>
+        <div class="th"><span class="tk">checkpoint</span><span class="tn mono">bucket_net · day_anchor</span></div>
+        <div class="tm"><b>1,004,654</b> + 190,980,048 rows &nbsp;·&nbsp; 32.8 MiB</div>
+        <div class="tw"><span>Fast because</span>A window read never sums from
+          <span class="mono">t = 0</span>. It starts at the nearest anchor, so cost is bounded by the
+          window, not by history.</div>
+        <div class="td2"><span>We did</span>Anchored per service day, so each day is self-contained and
+          a new day loads as an isolated partition.</div>
       </div>
 
       <div class="tcard liv">
-        <div class="th"><span class="tn mono">concurrency_minute_versions</span><span class="te">SharedMergeTree</span></div>
-        <div class="tm"><b>1,295,876</b> rows · 4.3 MiB · dense minutes</div>
-        <div class="tw"><span>Why it is fast</span>No cumulative sum at read time at all. A whole-day
-          peak <i>and</i> time-weighted average comes back in
-          <b class="mono y">5 ms reading 8,192 rows</b>.</div>
-        <div class="td2"><span>What we did</span>Immutable generations bound to a policy and a sealed
-          delta snapshot; nine rollup masks inside the sort key; peak computed
-          <b>after</b> aggregating the requested combination.</div>
+        <div class="th"><span class="tk">serving</span><span class="tn mono">concurrency_minute_versions</span></div>
+        <div class="tm"><b>1,295,876</b> rows &nbsp;·&nbsp; 4.3 MiB &nbsp;·&nbsp; dense minutes</div>
+        <div class="tw"><span>Fast because</span>No cumulative sum at read time at all. A whole-day peak
+          <i>and</i> time-weighted average comes back in <b>5 ms reading 8,192 rows</b>.</div>
+        <div class="td2"><span>We did</span>Immutable generations bound to a policy and a sealed
+          snapshot. Peak computed <b>after</b> aggregating the requested combination.</div>
       </div>
 
       <div class="tcard liv">
-        <div class="th"><span class="tn mono">session_live_now</span><span class="te">SharedAggregating</span></div>
-        <div class="tm"><b>96,844</b> session states · 2.6 MiB</div>
-        <div class="tw"><span>Why it is fast</span>O(open sessions), never history — identical cost on
-          day 1 and day 300. The read filters
-          <span class="mono">last_event_ts &gt; now() &minus; 120s</span>, so a quiet session
-          <b>falls out of the WHERE clause</b>.</div>
-        <div class="td2"><span>What we did</span>Nothing is written when a viewer stops — which is the
-          whole hard problem, because ClickHouse has no primitive that fires on absence.
-          <span class="mono">argMaxIf</span> states stop a heartbeat-only block clobbering playback state.</div>
+        <div class="th"><span class="tk">live, independent</span><span class="tn mono">session_live_now</span></div>
+        <div class="tm"><b>96,844</b> session states &nbsp;·&nbsp; 2.6 MiB</div>
+        <div class="tw"><span>Fast because</span>O(open sessions), never history — identical cost on day
+          1 and day 300. A quiet session <b>falls out of the WHERE clause</b>.</div>
+        <div class="td2"><span>We did</span>Nothing is written when a viewer stops, which is the whole
+          hard problem: ClickHouse has no primitive that fires on absence.</div>
       </div>
     </div>
   </div>
@@ -928,76 +837,70 @@ active = <span class="kw">started</span>
     <span>SonyLIV × ClickHouse</span>
   </div>
 </section>
-<!-- ============================ 08 THE CORE IDEA — HERO ============================ -->
+
+<!-- ============================ 06 CORE IDEA — METRICS ============================ -->
 <section class="slide bigidea">
   <div class="wash2"></div>
   <div class="chrome">
-    <div class="eyebrow">07 &nbsp;/&nbsp; The core idea</div>
-    <div class="folio"><i>08</i> / 15</div>
+    <div class="eyebrow">05 &nbsp;/&nbsp; The core idea</div>
+    <div class="folio"><i>06</i> / 14</div>
   </div>
 
   <div class="body">
-    <h1 class="mega">Two rows.<br><span class="dim">That is the whole idea.</span></h1>
+    <h1 class="mega">Two rows per interval.<br><span class="dim">Here is what that buys.</span></h1>
 
-    <!-- the interval → deltas diagram -->
-    <div class="idea">
-      <svg viewBox="0 0 1160 132" width="100%" height="132" style="display:block;overflow:visible">
+    <div class="metricrow">
+      <div class="mcell">
+        <div class="mlab">Events in</div>
+        <div class="mval">7,000,000</div>
+        <div class="mnote">the unseen day, ingested raw</div>
+      </div>
+      <div class="mcell">
+        <div class="mlab">Rows we keep</div>
+        <div class="mval y">163,740</div>
+        <div class="mnote"><b class="y">43&#215;</b> fewer — bounded by sessions, not session-minutes</div>
+      </div>
+      <div class="mcell">
+        <div class="mlab">Rows a dashboard reads</div>
+        <div class="mval y">8,192</div>
+        <div class="mnote"><b class="y">1,700&#215;</b> fewer than recomputing the same answer</div>
+      </div>
+      <div class="mcell">
+        <div class="mlab">Time to answer</div>
+        <div class="mval y">5 ms</div>
+        <div class="mnote"><b class="y">95&#215;</b> faster than the 476 ms raw scan</div>
+      </div>
+      <div class="mcell">
+        <div class="mlab">Rebuilds to correct it</div>
+        <div class="mval y">0</div>
+        <div class="mnote">a correction is subtraction, not a recompute</div>
+      </div>
+    </div>
+
+    <div class="ideawrap">
+      <svg viewBox="0 0 1160 74" width="100%" height="74" style="display:block;overflow:visible">
         <defs>
           <linearGradient id="bar-g" x1="0" y1="0" x2="1" y2="0">
             <stop offset="0" stop-color="#2CAEEC"/><stop offset=".45" stop-color="#9440F0"/>
             <stop offset="1" stop-color="#E256FD"/>
           </linearGradient>
         </defs>
-        <!-- baseline -->
-        <line x1="0" y1="106" x2="1160" y2="106" stroke="rgba(255,255,255,.13)" stroke-width="1"
+        <line x1="0" y1="58" x2="1160" y2="58" stroke="rgba(255,255,255,.12)" stroke-width="1"
               vector-effect="non-scaling-stroke"/>
-        <!-- the active interval -->
-        <rect x="196" y="46" width="716" height="26" rx="13" fill="url(#bar-g)" opacity=".9"/>
-        <text x="554" y="64" text-anchor="middle" font-family="Archivo" font-size="14" font-weight="700"
+        <rect x="196" y="26" width="716" height="20" rx="10" fill="url(#bar-g)" opacity=".92"/>
+        <text x="554" y="40" text-anchor="middle" font-family="Archivo" font-size="12" font-weight="700"
               fill="#0A0A12">one active viewing interval</text>
-        <!-- edges -->
-        <line x1="196" y1="24" x2="196" y2="106" stroke="#FAFF69" stroke-width="2" vector-effect="non-scaling-stroke"/>
-        <line x1="912" y1="24" x2="912" y2="106" stroke="#FF4D5E" stroke-width="2" vector-effect="non-scaling-stroke"/>
-        <circle cx="196" cy="106" r="5.5" fill="#FAFF69"/>
-        <circle cx="912" cy="106" r="5.5" fill="#FF4D5E"/>
-        <text x="196" y="16" text-anchor="middle" font-family="Chivo Mono" font-size="26" font-weight="600"
+        <line x1="196" y1="14" x2="196" y2="58" stroke="#FAFF69" stroke-width="2" vector-effect="non-scaling-stroke"/>
+        <line x1="912" y1="14" x2="912" y2="58" stroke="#FF4D5E" stroke-width="2" vector-effect="non-scaling-stroke"/>
+        <circle cx="196" cy="58" r="4.5" fill="#FAFF69"/>
+        <circle cx="912" cy="58" r="4.5" fill="#FF4D5E"/>
+        <text x="196" y="9" text-anchor="middle" font-family="Chivo Mono" font-size="19" font-weight="600"
               fill="#FAFF69">+1</text>
-        <text x="912" y="16" text-anchor="middle" font-family="Chivo Mono" font-size="26" font-weight="600"
+        <text x="912" y="9" text-anchor="middle" font-family="Chivo Mono" font-size="19" font-weight="600"
               fill="#FF4D5E">&#8722;1</text>
-        <text x="196" y="126" text-anchor="middle" font-family="Chivo Mono" font-size="10.5"
-              letter-spacing="1.6" fill="#6C6C82">START</text>
-        <text x="912" y="126" text-anchor="middle" font-family="Chivo Mono" font-size="10.5"
-              letter-spacing="1.6" fill="#6C6C82">END</text>
-        <!-- the rest of the timeline is empty on purpose -->
-        <text x="1064" y="100" text-anchor="middle" font-family="Archivo" font-size="12"
-              fill="#45455A" font-style="italic">nothing stored in between</text>
+        <text x="1050" y="52" text-anchor="middle" font-family="Archivo" font-size="11.5"
+              fill="#5A5A6B" font-style="italic">nothing stored in between</text>
       </svg>
-    </div>
-
-    <p class="ideasub">Concurrency at any instant is the running sum of those edges. Storage is bounded
-      by <b>sessions</b>, never by session&#8209;minutes — and a correction becomes
-      <b class="y">subtraction</b> instead of a rebuild.</p>
-
-    <div class="bigstats">
-      <div class="bs">
-        <div class="bsl">events in</div>
-        <div class="bsv">7,000,000</div>
-      </div>
-      <div class="bsarrow">&#8594;</div>
-      <div class="bs">
-        <div class="bsl">rows we keep</div>
-        <div class="bsv y">163,740</div>
-      </div>
-      <div class="bsarrow">&#8594;</div>
-      <div class="bs">
-        <div class="bsl">rows a dashboard reads</div>
-        <div class="bsv y">8,192</div>
-      </div>
-      <div class="bsarrow">&#8594;</div>
-      <div class="bs">
-        <div class="bsl">time to answer</div>
-        <div class="bsv y">5 ms</div>
-      </div>
     </div>
   </div>
 
@@ -1007,12 +910,11 @@ active = <span class="kw">started</span>
     <span>SonyLIV × ClickHouse</span>
   </div>
 </section>
-
 <!-- ============================ 09 CORRECTNESS ============================ -->
 <section class="slide">
   <div class="chrome">
-    <div class="eyebrow">08 &nbsp;/&nbsp; Correctness</div>
-    <div class="folio"><i>09</i> / 15</div>
+    <div class="eyebrow">06 &nbsp;/&nbsp; Correctness</div>
+    <div class="folio"><i>07</i> / 14</div>
   </div>
 
   <div class="body">
@@ -1072,470 +974,439 @@ active = <span class="kw">started</span>
   </div>
 </section>
 
-<!-- ============================ 10 UPDATE HANDLING ============================ -->
+<!-- ============================ 08 CHALLENGES ============================ -->
 <section class="slide">
   <div class="chrome">
-    <div class="eyebrow">09 &nbsp;/&nbsp; Update handling</div>
-    <div class="folio"><i>10</i> / 15</div>
+    <div class="eyebrow">07 &nbsp;/&nbsp; Challenges</div>
+    <div class="folio"><i>08</i> / 14</div>
   </div>
 
   <div class="body">
-    <h1>A third of the day never closed.<br><span class="dim">It did not matter.</span></h1>
-    <p class="lede">On the tuning data every one of 10,866 sessions had a Start and an End, so the
-      open-session problem could only be simulated. The unseen day supplied it for real —
-      <b>37,649 sessions that never end</b> and <b>25,403 that were already running</b> when the
-      window opened.</p>
+    <h1>What went wrong,<br><span class="dim">and what we did about it.</span></h1>
 
-    <div class="stats" style="margin-top:18px">
-      <div class="stat"><div class="sl">Sessions that never close</div><div class="sv r">37,649</div>
-        <div class="sd">34.7% of the day — the tuning extract had zero</div></div>
-      <div class="stat"><div class="sl">Sessions with no Start</div><div class="sv r">25,403</div>
-        <div class="sd">the window opens mid-stream; state is inferred, not assumed</div></div>
-      <div class="stat"><div class="sl">Intervals published</div><div class="sv y">163,740</div>
-        <div class="sd">over 96,844 sessions, all revision-resolved</div></div>
-      <div class="stat"><div class="sl">Rebuilds required</div><div class="sv y">0</div>
-        <div class="sd">every change is an additive, signed row</div></div>
-    </div>
-
-    <div class="grid g2" style="margin-top:18px;gap:24px;align-items:stretch">
-      <div class="panel" style="padding:15px 18px">
-        <div class="kicker">Why an open session is not a special case</div>
-        <p style="margin:0 0 10px;font-size:12.5px;line-height:1.48;color:var(--fg-2)">
-          An interval whose session is still live is published with a <b>provisional</b> end at the
-          lease expiry. When the next heartbeat lands, the session is re-derived and the pipeline
-          publishes the <i>difference</i>: <span class="mono y">+1</span> at the old expiry,
-          <span class="mono r">&minus;1</span> at the new one.</p>
-        <p style="margin:0;font-size:12.5px;line-height:1.48;color:var(--fg-2)">
-          The curve is therefore always correct as of its watermark, and it converges without anything
-          being rewritten. The touched-session query is bounded — it reads that session's history,
-          not the day's.</p>
-      </div>
-
-      <div class="panel" style="border-left:2px solid var(--ch-yellow);padding:15px 18px">
-        <div class="kicker">Proved on a hostile fixture, before the day arrived</div>
-        <table class="dt">
-          <tbody>
-            <tr><td class="k" style="width:56%">Event-time replay, 1% held back 30 min</td>
-              <td class="n y">0 diffs</td></tr>
-            <tr><td class="k">One late pause → signed rows emitted</td><td class="n">320</td></tr>
-            <tr><td class="k">Signed sum of those rows</td><td class="n y">0</td></tr>
-            <tr><td class="k">Independent paths that agree on active-ms</td><td class="n y">3</td></tr>
-          </tbody>
-        </table>
-        <p style="margin:11px 0 0;font-size:11.5px;line-height:1.45;color:var(--fg-3)">
-          Reusing a batch ID hard-fails. Reusing a minute generation hard-fails. A partial-minute
-          request is rejected and routed to the exact endpoint query rather than quietly answered with
-          a truncated bucket.</p>
-      </div>
-    </div>
+    <table class="dt ch">
+      <thead><tr>
+        <th style="width:23%">The challenge</th>
+        <th style="width:15%">What it looked like</th>
+        <th style="width:47%">How we solved it</th>
+        <th style="width:15%">Result</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">A third of the day never closed</td>
+          <td class="ev">37,649 sessions with no End<br>25,403 with no Start</td>
+          <td>An open session is published with a <b>provisional</b> end at its lease expiry. The next
+            heartbeat re-derives it and the pipeline publishes the difference — <span class="mono y">+1</span>
+            at the old expiry, <span class="mono r">&minus;1</span> at the new one.</td>
+          <td class="n y">0 rebuilds<small>curve correct as of its watermark</small></td>
+        </tr>
+        <tr>
+          <td class="k">Backgrounding almost never signalled</td>
+          <td class="ev">only 6.51% of sessions carry both bg and fg</td>
+          <td>The tuning day had 100% coverage and would have let us lean on bg/fg entirely. The lease
+            was built as the <b>primary</b> exclusion signal instead, with the background event as a
+            hard edge on top of it — not as a replacement.</td>
+          <td class="n y">held<small>no rule depended on bg arriving</small></td>
+        </tr>
+        <tr>
+          <td class="k">Liveness detection dropped Apple silently</td>
+          <td class="ev">58.6% IPHONE<br>63.6% APPLE_TV<br>emit no heartbeat trio</td>
+          <td>Liveness qualifies on <b>any</b> event rather than the periodic trio. A trio-based rule
+            returns a plausible number with most Apple traffic missing and raises nothing.</td>
+          <td class="n y">full coverage<small>21 platforms, none dropped</small></td>
+        </tr>
+        <tr>
+          <td class="k">Pause is invisible at the schema level</td>
+          <td class="ev">42 event names hidden under one event_type</td>
+          <td>The playback axis is parsed from the <span class="mono">event</span> column, not
+            <span class="mono">event_type</span>. Pause and error stop playback; play and resume restart
+            it; error never terminates.</td>
+          <td class="n y">98,703<small>pause events correctly excluded</small></td>
+        </tr>
+        <tr style="background:rgba(255,77,94,.05)">
+          <td class="k">A doubled curve passed every check we had</td>
+          <td class="ev">exactly 2&#215; the peak, all invariants green</td>
+          <td>Balance checks cannot detect a scalar multiple. Every stage now carries a
+            <b>conservation check against its input</b> — <span class="mono">sum(opens)</span> in the
+            deltas must equal <span class="mono">count()</span> of intervals — and it throws with the ratio.</td>
+          <td class="n y">ratio 1.000<small>on the unseen day</small></td>
+        </tr>
+        <tr>
+          <td class="k">Gates that only pass on data you know</td>
+          <td class="ev">hardcoded tuning-day answers</td>
+          <td>Every gate was rewritten to be reference-free. Had the old ones survived they would have
+            fired on <i>correct</i> unseen-day output and blocked the run — 19,882 is not 2,305.</td>
+          <td class="n y">7 assertions<small>none contains a known number</small></td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 
   <div class="foot">
-    <span class="src">Open-session counts measured on <b>sonyliv</b> · convergence fixtures in <b>solution/tools/verify_embedded.py</b> and <b>prototype/replay.py</b></span>
+    <span class="src">Every figure re-measured on <b>sonyliv</b> against the unseen day &nbsp;·&nbsp; the full Cloud-behaviour catalogue is in <b>CLAUDE.md</b></span>
     <span>SonyLIV × ClickHouse</span>
   </div>
 </section>
-<!-- ============================ 11 PERFORMANCE ============================ -->
+
+<!-- ============================ 09 PERFORMANCE ============================ -->
 <section class="slide">
   <div class="chrome">
-    <div class="eyebrow">10 &nbsp;/&nbsp; Query performance</div>
-    <div class="folio"><i>11</i> / 15</div>
+    <div class="eyebrow">08 &nbsp;/&nbsp; Query performance</div>
+    <div class="folio"><i>09</i> / 14</div>
   </div>
 
   <div class="body">
     <h1>The number that matters is not<br>latency. It is <span class="hl">rows read.</span></h1>
     <p class="lede">The brief says judges will look at what the queries read, not just how fast they
-      return. Both columns below come from the same service, on the same 7&#8209;million&#8209;event day.</p>
+      return. Every row below is from the same service, on the same 7&#8209;million&#8209;event day.</p>
 
-    <div class="rule" style="margin:17px 0"></div>
+    <div class="rule" style="margin:18px 0"></div>
 
-    <div class="grid g2" style="gap:26px;align-items:start">
-      <div>
-        <div class="kicker">Benchmark shapes · unseen day</div>
-        <table class="dt">
-          <thead><tr><th>Query</th><th style="text-align:right">Elapsed</th><th style="text-align:right">Rows read</th></tr></thead>
-          <tbody>
-            <tr><td class="k">Day peak + time-weighted average</td><td class="n y">5 ms</td><td class="n y">8,192</td></tr>
-            <tr><td class="k">Per-platform peak and each platform's own peak minute</td><td class="n y">7 ms</td><td class="n y">8,192</td></tr>
-            <tr><td class="k">Hour-grain peak + average, all hours</td><td class="n y">5 ms</td><td class="n y">8,192</td></tr>
-            <tr><td class="k">Conservation gate over every delta row</td><td class="n">110 ms</td><td class="n">677,016</td></tr>
-            <tr><td class="k" style="color:var(--fg-3)">Naive concurrency, recomputed from events
-                <small>the thing the serving tier exists to avoid</small></td>
-              <td class="n r">476 ms</td><td class="n r">13,945,916</td></tr>
-          </tbody>
-        </table>
-        <p style="margin:13px 0 0;font-size:12px;line-height:1.48;color:var(--fg-2)">
-          <b class="y">95&#215; faster and 1,700&#215; fewer rows</b> than recomputing the same answer
-          from events — and that gap widens with every day of history, because one side is bounded by
-          dimensions and the other by events.</p>
+    <table class="dt perf">
+      <thead><tr>
+        <th style="width:52%">Query</th>
+        <th style="width:16%;text-align:right">Elapsed</th>
+        <th style="width:16%;text-align:right">Rows read</th>
+        <th style="width:16%;text-align:right">Answer</th>
+      </tr></thead>
+      <tbody>
+        <tr><td class="k">Day peak + time-weighted average</td>
+          <td class="n y">5 ms</td><td class="n y">8,192</td><td class="n">19,882 / 9,911.6</td></tr>
+        <tr><td class="k">Hour-grain peak + average, every hour</td>
+          <td class="n y">5 ms</td><td class="n y">8,192</td><td class="n">24 buckets</td></tr>
+        <tr><td class="k">Per-platform peak and each platform's own peak minute</td>
+          <td class="n y">7 ms</td><td class="n y">8,192</td><td class="n">21 platforms</td></tr>
+        <tr><td class="k">Conservation gate over every delta row</td>
+          <td class="n">110 ms</td><td class="n">677,016</td><td class="n y">ratio 1.000</td></tr>
+        <tr><td class="k" style="color:var(--fg-3)">Naive concurrency, recomputed from events
+            <small>the thing the serving tier exists to avoid</small></td>
+          <td class="n r">476 ms</td><td class="n r">13,945,916</td><td class="n r">24,069</td></tr>
+      </tbody>
+    </table>
+
+    <div class="stats" style="margin-top:auto">
+      <div class="stat"><div class="sl">Versus recomputing from events</div><div class="sv y">95&#215; faster</div>
+        <div class="sd">1,700&#215; fewer rows — and the gap widens with every day of history</div></div>
+      <div class="stat"><div class="sl">Ingested</div><div class="sv">7,000,000</div>
+        <div class="sd">events, 0 rejected, 0 unjoinable content ids</div></div>
+      <div class="stat"><div class="sl">On disk</div><div class="sv y">87.45 <span style="font-size:16px">MiB</span></div>
+        <div class="sd">raw + clean, 35.2&#215; compression</div></div>
+      <div class="stat"><div class="sl">Serving p50</div><div class="sv y">7 <span style="font-size:16px">ms</span></div>
+        <div class="sd">from <span class="mono">system.query_log</span>, not a laptop proxy</div></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span class="src">Every elapsed figure and row count taken from the query's own statistics on <b>sonyliv</b></span>
+    <span>SonyLIV × ClickHouse</span>
+  </div>
+</section>
+
+<!-- ============================ 10 SERVICE ARCHITECTURE ============================ -->
+<section class="slide">
+  <div class="chrome">
+    <div class="eyebrow">09 &nbsp;/&nbsp; The system</div>
+    <div class="folio"><i>10</i> / 14</div>
+  </div>
+
+  <div class="body">
+    <h1>What is actually running.</h1>
+
+    <div class="svcwrap">
+      <div class="svccol">
+        <div class="svclabel">Produce</div>
+        <div class="svc"><b>sonyliv-gen</b><i>event generator · calibrated to the extract</i></div>
+        <div class="svc"><b>sonyliv-ingest</b><i>CSV loader · native columnar blocks</i></div>
+        <div class="svc"><b>sonyliv-api</b><i>Go · the write path and the read API</i></div>
       </div>
 
-      <div>
-        <div class="kicker">One rewrite, measured on the live service</div>
-        <div class="panel" style="padding:16px 19px">
-          <p style="margin:0 0 12px;font-size:12.5px;line-height:1.46;color:var(--fg-2)">
-            <span class="mono" style="color:var(--liv-magenta)">SELECT max(event_ts) FROM events_dedup</span>
-            was the #1 SELECT by both total time and total bytes — 694 executions reading
-            <b class="mono r">3.13 billion rows</b> and <b class="mono r">56.3 GB</b>.
-            <span class="mono">event_ts</span> is itself a <span class="mono">GROUP BY</span> key of
-            that view, so grouping cannot change its maximum. The base table is provably identical.</p>
+      <div class="svcarrow">&#8594;</div>
+
+      <div class="svccol core">
+        <div class="svclabel" style="color:var(--ch-yellow)">Store &amp; compute</div>
+        <div class="svc big"><b>ClickHouse Cloud</b>
+          <i>26.2 · ap-south-1 · 2 replicas</i>
+          <div class="svcinner">
+            <span>events_raw → events_clean</span>
+            <span>→ active_intervals</span>
+            <span>→ concurrency_deltas</span>
+            <span>→ minute tier + live state</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="svcarrow">&#8594;</div>
+
+      <div class="svccol">
+        <div class="svclabel">Consume</div>
+        <div class="svc liv"><b>Dashboard</b><i>Next.js · live, analytics, load simulator</i></div>
+        <div class="svc liv"><b>LibreChat + sonyliv-mcp</b><i>text-to-SQL over the serving tables</i></div>
+        <div class="svc"><b>ClickStack</b><i>6 dashboards · 5 alerts · pipeline traces</i></div>
+        <div class="svc"><b>Langfuse</b><i>the analyst prompt, versioned and synced</i></div>
+      </div>
+    </div>
+
+    <div class="svcfoot">
+      <div><span>Edge</span>nginx terminates TLS and routes <span class="mono">fastandfurious.live</span>
+        to the dashboard and <span class="mono">chat.fastandfurious.live</span> to LibreChat</div>
+      <div><span>Ship</span>four deploy scripts, one per thing with its own cadence — Go binaries and
+        systemd, MCP with a restricted ClickHouse user, LibreChat over Compose</div>
+      <div><span>Bring-up</span><span class="mono">./scripts/bootstrap.sh</span> takes an empty database
+        to a verified one, with seven reference-free assertions</div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span class="src">Source <b>deploy/README.md</b> · <b>clickstack/README.md</b> · <b>dashboard/</b> &nbsp;·&nbsp; every box below is deployed, not planned</span>
+    <span>SonyLIV × ClickHouse</span>
+  </div>
+</section>
+<!-- ============================ 11 LIBRECHAT ============================ -->
+<section class="slide">
+  <div class="chrome">
+    <div class="eyebrow">10 &nbsp;/&nbsp; Integration &nbsp;<span style="color:var(--fg-4)">I — LibreChat + ClickHouse MCP</span></div>
+    <div class="folio"><i>11</i> / 14</div>
+  </div>
+
+  <div class="body">
+    <h1>Ask it in <span class="hl">English</span>.<br><span class="dim">It answers in SQL.</span></h1>
+
+    <div class="shotgrid">
+      <div class="shotframe">
+        <div class="shotbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="shoturl mono">chat.fastandfurious.live</span></div>
+        <div class="shotslot" id="slot-librechat">
+          <div class="slotinner">
+            <div class="slotk">screenshot</div>
+            <div class="slott">chat.fastandfurious.live</div>
+            <div class="slotd">Drop a PNG in here — see <span class="mono">pitch/README.md</span>.
+              The instance is behind a login, so this frame is left empty rather than filled with
+              something we did not capture.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="shotside">
+        <div class="panel" style="padding:16px 18px">
+          <div class="kicker">It changed the schema, not just the demo</div>
+          <p style="margin:0;font-size:12.5px;line-height:1.5;color:var(--fg-2)">
+            The honest reason <span class="mono">concurrency_minute_versions</span> exists is this
+            integration. A flat, dense, one-table read surface is what makes text-to-SQL answerable.
+            An LLM reliably writes <span class="mono">max(minute_peak) … WHERE minute_start BETWEEN …</span>.
+            It will <b style="color:var(--wrong)">not</b> reliably write a day-anchored cumulative sum
+            over millisecond boundaries.</p>
+        </div>
+
+        <div class="panel" style="margin-top:14px;padding:16px 18px;border-left:2px solid var(--liv-magenta)">
+          <div class="kicker" style="color:var(--liv-magenta)">How it is wired</div>
           <table class="dt">
-            <thead><tr><th></th><th style="text-align:right">Elapsed</th><th style="text-align:right">Bytes read</th></tr></thead>
             <tbody>
-              <tr><td class="k mono">FROM events_dedup</td><td class="n r">1.058 s</td><td class="n r">162,146,488</td></tr>
-              <tr><td class="k mono">FROM events_clean</td><td class="n y">0.104 s</td><td class="n y">72,000,384</td></tr>
-              <tr><td class="k"></td><td class="n y">10.2&#215; faster</td><td class="n y">2.25&#215; fewer</td></tr>
+              <tr><td class="k" style="width:42%">sonyliv-mcp</td>
+                <td>a Go MCP server on its own systemd unit, against a <b>restricted ClickHouse
+                  user</b> — the model cannot reach anything but the serving views</td></tr>
+              <tr><td class="k">LiteLLM + Compose</td>
+                <td>model routing in front of LibreChat, deployed by
+                  <span class="mono">deploy-librechat.sh</span></td></tr>
+              <tr><td class="k">Langfuse</td>
+                <td>holds the analyst prompt. It is <b>versioned and synced</b>, not pasted into a
+                  config — <span class="mono">langfuse-prompt-sync.sh</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span class="src">Source <b>deploy/librechat/</b> · <b>ingest/cmd/sonyliv-mcp</b> · prompt in <b>deploy/librechat/prompts/serving-analyst.md</b></span>
+    <span>SonyLIV × ClickHouse</span>
+  </div>
+</section>
+
+<!-- ============================ 12 CLICKSTACK ============================ -->
+<section class="slide">
+  <div class="chrome">
+    <div class="eyebrow">11 &nbsp;/&nbsp; Integration &nbsp;<span style="color:var(--fg-4)">II — ClickStack</span></div>
+    <div class="folio"><i>12</i> / 14</div>
+  </div>
+
+  <div class="body">
+    <h1>It observes <span class="hl">the pipeline itself</span>.</h1>
+
+    <div class="shotgrid">
+      <div class="shotframe">
+        <div class="shotbar"><span class="dot r"></span><span class="dot y"></span><span class="dot g"></span>
+          <span class="shoturl mono">ClickStack — SonyLIV concurrency analytics</span></div>
+        <div class="shotslot" id="slot-clickstack">
+          <div class="slotinner">
+            <div class="slotk">screenshot</div>
+            <div class="slott">ClickStack dashboard</div>
+            <div class="slotd">Drop a PNG in here — see <span class="mono">pitch/README.md</span>.
+              ClickStack is reached through the Cloud console, so this frame is left empty rather than
+              filled with something we did not capture.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="shotside">
+        <div class="panel" style="padding:16px 18px">
+          <div class="kicker">Six dashboards, created through the API</div>
+          <p style="margin:0 0 11px;font-size:12px;line-height:1.48;color:var(--fg-2)">
+            Not clicked together by hand — so they are diffable, reviewable and reproducible on another
+            service. <span class="mono">apply.sh</span> is idempotent;
+            <span class="mono">check-tiles.sh</span> runs every tile's SQL and reports pass/fail.</p>
+          <table class="dt">
+            <tbody>
+              <tr><td class="k" style="width:52%">Live concurrency</td><td class="n">10 s grain</td></tr>
+              <tr><td class="k">Corrected concurrency</td><td class="n">1 min grain</td></tr>
+              <tr><td class="k">Pipeline observability</td><td class="n">lag · backlog · reads</td></tr>
+              <tr><td class="k">Benchmark answers</td><td class="n">with query evidence</td></tr>
+              <tr><td class="k">Grouped viewers · drop alerts</td><td class="n">per slice</td></tr>
             </tbody>
           </table>
         </div>
 
-        <div class="grid g3" style="margin-top:14px;gap:12px">
-          <div class="panel" style="padding:12px 14px">
-            <div class="kicker" style="margin-bottom:6px">Ingested</div>
-            <div class="num sm">7,000,000</div>
-            <div style="margin-top:6px;font-size:10.5px;line-height:1.3;color:var(--fg-3)">events, 0 rejected</div>
-          </div>
-          <div class="panel" style="padding:12px 14px">
-            <div class="kicker" style="margin-bottom:6px">On disk</div>
-            <div class="num sm y">87.45 <span style="font-size:13px">MiB</span></div>
-            <div style="margin-top:6px;font-size:10.5px;line-height:1.3;color:var(--fg-3)">raw + clean, 35.2&#215; compression</div>
-          </div>
-          <div class="panel" style="padding:12px 14px">
-            <div class="kicker" style="margin-bottom:6px">Serving p50</div>
-            <div class="num sm y">7 <span style="font-size:13px">ms</span></div>
-            <div style="margin-top:6px;font-size:10.5px;line-height:1.3;color:var(--fg-3)">from <span class="mono">system.query_log</span></div>
-          </div>
+        <div class="panel" style="margin-top:14px;padding:16px 18px;border-left:2px solid var(--ch-yellow)">
+          <div class="kicker">Five alerts, and one we deliberately do not fire</div>
+          <p style="margin:0 0 9px;font-size:12px;line-height:1.46;color:var(--fg-2)">
+            <b style="color:var(--ch-yellow)">Viewer drop</b> is measured against each slice's own
+            trailing 15-minute median, not a global threshold — the brief's suggested
+            LLM&#8239;+&#8239;ClickStack case. The alert carries the slice that moved, so the cause can
+            be separated from the symptom.</p>
+          <p style="margin:0;font-size:11.5px;line-height:1.45;color:var(--fg-3)">
+            <b style="color:var(--fg-2)">Not alerted:</b> &ldquo;any late event&rdquo;. Lateness is the
+            baseline behaviour of this stream, and an alert that fires constantly is not an alert.</p>
         </div>
       </div>
     </div>
   </div>
 
   <div class="foot">
-    <span class="src">Every elapsed figure and row count taken from the query's own statistics on <b>sonyliv</b> &nbsp;·&nbsp; nothing here is a laptop proxy</span>
+    <span class="src">Source <b>clickstack/</b> — 6 dashboards, 5 alerts, 4 sources, all as reviewable JSON &nbsp;·&nbsp; last full tile sweep in <b>TILE-VERIFICATION.md</b></span>
     <span>SonyLIV × ClickHouse</span>
   </div>
 </section>
 
-<!-- ============================ 12 OPERATIONS ============================ -->
+<!-- ============================ 13 REQUIREMENTS ============================ -->
 <section class="slide">
   <div class="chrome">
-    <div class="eyebrow">11 &nbsp;/&nbsp; Operations</div>
-    <div class="folio"><i>12</i> / 15</div>
+    <div class="eyebrow">12 &nbsp;/&nbsp; Against the brief</div>
+    <div class="folio"><i>13</i> / 14</div>
   </div>
 
   <div class="body">
-    <h1>Deployed, not described.</h1>
-    <p class="lede">The database comes up from nothing with one command, and the command refuses to
-      pass quietly. That is how the unseen day was loaded.</p>
+    <h1>Every requirement,<br><span class="dim">and what we built for it.</span></h1>
 
-    <div class="grid g2" style="margin-top:18px;gap:26px;align-items:start">
-      <div>
-        <pre class="code" style="font-size:13.5px">$ ./scripts/bootstrap.sh</pre>
-        <p style="margin:13px 0 0;font-size:12.5px;line-height:1.48;color:var(--fg-2)">
-          Creates every table, view, materialized view and dictionary; loads the seed CSVs; builds the
-          interval and serving tiers; then runs <b>seven assertions</b> that are all reference-free —
-          none contains a number from the tuning day. Python stdlib over HTTPS;
-          <span class="mono">clickhouse-client</span> is not required.</p>
-
-        <div class="grid g2" style="margin-top:16px;gap:12px">
-          <div class="panel" style="padding:13px 16px">
-            <div class="kicker" style="margin-bottom:7px">Service</div>
-            <div style="font-family:'Chivo Mono',monospace;font-size:11.5px;line-height:1.6;color:var(--fg-2)">
-              sonyliv<br>aws ap&#8209;south&#8209;1<br>ClickHouse 26.2<br>2 replicas</div>
-          </div>
-          <div class="panel" style="padding:13px 16px">
-            <div class="kicker" style="margin-bottom:7px">Unseen-day run</div>
-            <div style="font-family:'Chivo Mono',monospace;font-size:11.5px;line-height:1.6;color:var(--fg-2)">
-              7,000,000 loaded<br>0 rejected<br>163,740 intervals<br>ratio 1.000</div>
-          </div>
-        </div>
-      </div>
-
-      <div>
-        <div class="kicker">What we would not claim</div>
-        <table class="dt">
-          <tbody>
-            <tr><td class="k" style="width:40%">Compactor coordination</td>
-              <td>A fenced Keeper lease is specified but not deployed. The embedded verifier is
-                single-worker and does not prove that external property.</td></tr>
-            <tr><td class="k">The mask set</td>
-              <td>A missing mask's <i>deltas</i> can be re-derived from mask 15; its <i>peak</i>
-                cannot, because peaks do not sum. The benchmark query set was never published.</td></tr>
-            <tr><td class="k">Latency on other hardware</td>
-              <td>Never claimed without a <span class="mono">system.query_log</span> row from the
-                target service behind it.</td></tr>
-          </tbody>
-        </table>
-
-        <div class="panel" style="margin-top:16px;border-left:2px solid var(--liv-magenta);padding:15px 18px">
-          <div class="kicker" style="color:var(--liv-magenta);margin-bottom:7px">Behaviour at 100&#215;</div>
-          <p style="margin:0;font-size:12px;line-height:1.46;color:var(--fg-2)">
-            700 M events a day, ~10.8 M sessions, ~16.4 M intervals. The serving tier grows with
-            <b>dimensions × minutes</b>, not with events: 1,440 minutes × nine masks is the same shape
-            at 1&#215; and at 100&#215;. What grows is the interval build, and that is a partitioned,
-            per-day, restartable job — not a query anyone waits on.</p>
-        </div>
-      </div>
-    </div>
+    <table class="dt req">
+      <thead><tr>
+        <th style="width:26%">What the brief required</th>
+        <th style="width:52%">What we built</th>
+        <th style="width:22%">Evidence, unseen day</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td class="k">Correctness — foreground-only means foreground-only</td>
+          <td>A five-clause predicate that excludes background, pause <i>and</i> silence, versioned in
+            <span class="mono">policy.yaml</span> and stamped on every published answer.</td>
+          <td class="n y">19,882 vs 24,069<span>21.1% of the naive count was never watching</span></td>
+        </tr>
+        <tr>
+          <td class="k">Query performance — judges look at what you read</td>
+          <td>A dense minute tier with no cumulative sum at read time, anchored per day so a window read
+            never starts at <span class="mono">t = 0</span>.</td>
+          <td class="n y">5 ms · 8,192 rows<span>1,700&#215; fewer than recomputing</span></td>
+        </tr>
+        <tr>
+          <td class="k">Update handling — absorb open sessions incrementally</td>
+          <td>Provisional ends at lease expiry, then signed new&#8722;old corrections. No
+            <span class="mono">ALTER UPDATE</span>, no rebuild, anywhere in the pipeline.</td>
+          <td class="n y">0 rebuilds<span>34.7% of the day never closed</span></td>
+        </tr>
+        <tr>
+          <td class="k">Design quality — defend the trade-offs</td>
+          <td>Every switch carries its measured cost; every rejected alternative carries the number that
+            rejected it. Conservation gates compare each stage against its input, not itself.</td>
+          <td class="n y">ratio 1.000<span>sum(opens) = count() = 163,740</span></td>
+        </tr>
+        <tr>
+          <td class="k">ClickHouse as the primary datastore</td>
+          <td>Ingestion, modelling and every concurrency computation live in ClickHouse. Nothing is
+            calculated in application code.</td>
+          <td class="n y">7,000,000<span>events, 0 rejected</span></td>
+        </tr>
+        <tr>
+          <td class="k">Meaningfully integrate ClickStack / LibreChat / Langfuse</td>
+          <td>All three. ClickStack observes the pipeline, LibreChat answers over the serving tables,
+            Langfuse versions the analyst prompt — and one of them changed the schema.</td>
+          <td class="n y">6 dashboards<span>5 alerts · 1 MCP server</span></td>
+        </tr>
+        <tr>
+          <td class="k">The unseen day — no pipeline evidence, no credit</td>
+          <td>Full-scan and incremental are the same file, so the oracle cannot drift from the path it
+            validates. Every figure in this deck came back out of the service.</td>
+          <td class="n y">query_log<span>behind every number here</span></td>
+        </tr>
+      </tbody>
+    </table>
   </div>
 
   <div class="foot">
-    <span class="src">Source <b>scripts/README.md</b> · gates at the foot of <b>pipeline/sql/022_populate_serving.sql</b> and <b>041_minute_verify.sql</b></span>
+    <span class="src">Requirements quoted from <b>PROBLEM_STATEMENT.md</b> §Requirements and §How you will be evaluated</span>
     <span>SonyLIV × ClickHouse</span>
   </div>
 </section>
 
-<!-- ============================ 13 SILENT FAILURES ============================ -->
-<section class="slide">
-  <div class="chrome">
-    <div class="eyebrow">12 &nbsp;/&nbsp; What Cloud taught us</div>
-    <div class="folio"><i>13</i> / 15</div>
-  </div>
+<!-- ============================ 14 THANK YOU ============================ -->
+<section class="slide thanks">
+  <div class="wash3"></div>
 
-  <div class="body">
-    <h1>Nine ways to be <span class="hl">confidently wrong</span><br>
-      <span class="dim">— none of which reproduce on a laptop.</span></h1>
+  <svg class="curve" viewBox="0 0 1200 300" preserveAspectRatio="none">
+    <defs>
+      <linearGradient id="ty-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#9440F0" stop-opacity=".34"/>
+        <stop offset="1" stop-color="#9440F0" stop-opacity="0"/>
+      </linearGradient>
+      <linearGradient id="ty-line" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0" stop-color="#2CAEEC"/><stop offset=".55" stop-color="#9440F0"/>
+        <stop offset=".8" stop-color="#E256FD"/><stop offset="1" stop-color="#FFBA0D"/>
+      </linearGradient>
+    </defs>
+    <path fill="url(#ty-fill)" d="M0,300 L 0.0,299.4 L 11.8,299.4 L 23.5,299.4 L 35.3,299.5 L 47.1,299.4 L 58.8,299.4 L 70.6,299.4 L 82.4,299.4 L 94.1,299.4 L 105.9,299.4 L 117.6,299.4 L 129.4,299.4 L 141.2,299.3 L 152.9,299.3 L 164.7,299.3 L 176.5,299.2 L 188.2,299.3 L 200.0,299.2 L 211.8,299.2 L 223.5,299.2 L 235.3,299.2 L 247.1,299.1 L 258.8,299.1 L 270.6,299.1 L 282.4,299.1 L 294.1,299.1 L 305.9,299.1 L 317.6,299.0 L 329.4,299.0 L 341.2,299.0 L 352.9,299.0 L 364.7,299.0 L 376.5,298.9 L 388.2,298.9 L 400.0,299.0 L 411.8,299.0 L 423.5,299.0 L 435.3,298.9 L 447.1,298.8 L 458.8,298.8 L 470.6,298.8 L 482.4,298.7 L 494.1,298.6 L 505.9,298.5 L 517.6,285.6 L 529.4,144.9 L 541.2,135.3 L 552.9,128.5 L 564.7,122.8 L 576.5,117.9 L 588.2,112.9 L 600.0,109.4 L 611.8,105.8 L 623.5,103.1 L 635.3,100.7 L 647.1,98.3 L 658.8,97.1 L 670.6,96.6 L 682.4,95.4 L 694.1,94.1 L 705.9,92.9 L 717.6,91.0 L 729.4,88.9 L 741.2,86.4 L 752.9,85.2 L 764.7,84.0 L 776.5,83.8 L 788.2,85.2 L 800.0,85.4 L 811.8,86.0 L 823.5,86.8 L 835.3,89.4 L 847.1,89.0 L 858.8,90.2 L 870.6,89.4 L 882.4,89.3 L 894.1,86.8 L 905.9,85.0 L 917.6,84.9 L 929.4,83.7 L 941.2,82.9 L 952.9,81.0 L 964.7,80.3 L 976.5,78.6 L 988.2,76.9 L 1000.0,76.1 L 1011.8,75.3 L 1023.5,73.3 L 1035.3,72.0 L 1047.1,70.9 L 1058.8,70.6 L 1070.6,72.9 L 1082.4,82.6 L 1094.1,82.5 L 1105.9,84.8 L 1117.6,88.1 L 1129.4,87.8 L 1141.2,87.5 L 1152.9,87.6 L 1164.7,86.5 L 1176.5,86.0 L 1188.2,85.2 L 1200.0,85.0 L 1200,300 Z"/>
+    <polyline fill="none" stroke="url(#ty-line)" stroke-width="2" vector-effect="non-scaling-stroke"
+      points="0.0,299.4 11.8,299.4 23.5,299.4 35.3,299.5 47.1,299.4 58.8,299.4 70.6,299.4 82.4,299.4 94.1,299.4 105.9,299.4 117.6,299.4 129.4,299.4 141.2,299.3 152.9,299.3 164.7,299.3 176.5,299.2 188.2,299.3 200.0,299.2 211.8,299.2 223.5,299.2 235.3,299.2 247.1,299.1 258.8,299.1 270.6,299.1 282.4,299.1 294.1,299.1 305.9,299.1 317.6,299.0 329.4,299.0 341.2,299.0 352.9,299.0 364.7,299.0 376.5,298.9 388.2,298.9 400.0,299.0 411.8,299.0 423.5,299.0 435.3,298.9 447.1,298.8 458.8,298.8 470.6,298.8 482.4,298.7 494.1,298.6 505.9,298.5 517.6,285.6 529.4,144.9 541.2,135.3 552.9,128.5 564.7,122.8 576.5,117.9 588.2,112.9 600.0,109.4 611.8,105.8 623.5,103.1 635.3,100.7 647.1,98.3 658.8,97.1 670.6,96.6 682.4,95.4 694.1,94.1 705.9,92.9 717.6,91.0 729.4,88.9 741.2,86.4 752.9,85.2 764.7,84.0 776.5,83.8 788.2,85.2 800.0,85.4 811.8,86.0 823.5,86.8 835.3,89.4 847.1,89.0 858.8,90.2 870.6,89.4 882.4,89.3 894.1,86.8 905.9,85.0 917.6,84.9 929.4,83.7 941.2,82.9 952.9,81.0 964.7,80.3 976.5,78.6 988.2,76.9 1000.0,76.1 1011.8,75.3 1023.5,73.3 1035.3,72.0 1047.1,70.9 1058.8,70.6 1070.6,72.9 1082.4,82.6 1094.1,82.5 1105.9,84.8 1117.6,88.1 1129.4,87.8 1141.2,87.5 1152.9,87.6 1164.7,86.5 1176.5,86.0 1188.2,85.2 1200.0,85.0"/>
+  </svg>
 
-    <div class="grid" style="grid-template-columns:1.42fr 1fr;gap:28px;margin-top:18px;align-items:start">
-      <div>
-        <div class="traps">
-          <div class="trap"><span class="i">01</span>
-            <span class="t">A dictionary reports <code>LOADED</code> with <b>zero rows</b>, per replica.
-              Every <code>dictGetOrDefault</code> silently returns the default; routing decides whether
-              you get the right answer.</span>
-            <span class="m">33,464 / 0</span></div>
-          <div class="trap"><span class="i">02</span>
-            <span class="t"><code>MergeTree</code> becomes SharedMergeTree on Cloud, moving dedup onto a
-              window that <b>expires on a timer</b>. &ldquo;Re-running a load is a no-op&rdquo; stops
-              being true one hour in.</span>
-            <span class="m">3,600 s</span></div>
-          <div class="trap"><span class="i">03</span>
-            <span class="t"><code>insert_deduplication_token</code> did not make a large
-              <code>INSERT SELECT</code> idempotent. It ran twice, four seconds apart, byte-identical.</span>
-            <span class="m">524,292 &#215;2</span></div>
-          <div class="trap" style="background:rgba(255,77,94,.05)"><span class="i r">04</span>
-            <span class="t"><b style="color:var(--wrong)">A doubled Summing curve passes every balance
-              invariant.</b> <code>sum(net)=0</code>, <code>min(running)=0</code>,
-              <code>opens=closes</code> — all still true at exactly twice the peak.</span>
-            <span class="m r">exactly 2&#215;</span></div>
-          <div class="trap"><span class="i">05</span>
-            <span class="t">SummingMergeTree keeps the <b>oldest</b> <code>DateTime64</code>, not an
-              arbitrary one. A lease timestamp therefore reads as already expired.</span>
-            <span class="m">91.05%</span></div>
-          <div class="trap"><span class="i">06</span>
-            <span class="t">With no explicit column list, Summing sums your <b>dimensions</b>. A wrapped
-              <code>user_key</code> still looks plausible; a corrupted <code>content_id</code> misses the
-              dictionary entirely.</span>
-            <span class="m">96.7% &gt; 2&#8310;&#8308;</span></div>
-          <div class="trap"><span class="i">07</span>
-            <span class="t">An output alias <b>shadows the column it filters on</b>. The predicate becomes
-              <code>13 = 5</code> and the deployed view returned zero rows, with no error.</span>
-            <span class="m">0 vs 85,553</span></div>
-          <div class="trap"><span class="i">08</span>
-            <span class="t">Adjacent SQL string literals are a parse error, so every gate in the minute
-              tier's verifier <b>had never executed</b> — rows shipped with no verification firing.</span>
-            <span class="m">6 gates dead</span></div>
-          <div class="trap"><span class="i">09</span>
-            <span class="t">Projections <code>throw</code> on Replacing / Summing / Aggregating tables by
-              default, and a <code>SELECT … FINAL</code> cannot use one at all.</span>
-            <span class="m">7 of 13 blocked</span></div>
-        </div>
-      </div>
-
-      <div>
-        <div class="kicker" style="color:var(--ch-yellow)">And the rules they turned into</div>
-
-        <div class="ruleitem">
-          <div class="rh">A check that only inspects one layer cannot validate that layer.</div>
-          <div class="rb">Internal-consistency checks are structurally incapable of detecting a scalar
-            multiple. Every stage carries a conservation check tying its output back to its
-            <i>input</i> — on the unseen day, <span class="mono">sum(opens)</span> in the deltas equals
-            <span class="mono">count()</span> of intervals at ratio <span class="mono y">1.000</span>.</div>
-        </div>
-
-        <div class="ruleitem">
-          <div class="rh">No gate may contain a number we happen to know.</div>
-          <div class="rb">Gates that hardcoded tuning-day answers were found and removed. Had they
-            survived, every one would have fired on <i>correct</i> unseen-day output and blocked the
-            pipeline — 19,882 is not 2,305.</div>
-        </div>
-
-        <div class="ruleitem">
-          <div class="rh">Assert enrichment resolved before writing.</div>
-          <div class="rb">A dimension that is 100% fallback is a failure, not a data characteristic.
-            This holds whatever the root cause turns out to be.</div>
-        </div>
-
-        <div class="ruleitem">
-          <div class="rh">Run the verifier. Then break something on purpose.</div>
-          <div class="rb">A verification file that has never been executed is worse than no
-            verification, because its presence is read as coverage.</div>
-        </div>
-
-        <div class="ruleitem">
-          <div class="rh">Measure on the service. Never infer.</div>
-          <div class="rb">Every defect above was invisible on a laptop and invisible in code review.</div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="foot">
-    <span class="src">All nine measured against the live service and written up in <b>CLAUDE.md</b> &nbsp;·&nbsp; each one cost real hours to find</span>
-    <span>SonyLIV × ClickHouse</span>
-  </div>
-</section>
-<!-- ============================ 14 INTEGRATIONS + DEMO ============================ -->
-<section class="slide">
-  <div class="chrome">
-    <div class="eyebrow">13 &nbsp;/&nbsp; Open-source integration</div>
-    <div class="folio"><i>14</i> / 15</div>
-  </div>
-
-  <div class="body">
-    <h1>Two integrations, each doing<br>work the pipeline <span class="dim">actually needs.</span></h1>
-
-    <div class="grid g2" style="margin-top:18px;gap:26px;align-items:stretch">
-      <div class="panel" style="border-left:2px solid var(--ch-yellow);height:100%;padding:15px 18px">
-        <div class="tag ok">ClickStack</div>
-        <div style="margin-top:13px;font-size:15px;font-weight:700;color:var(--fg);
-                    font-variation-settings:'wdth' 104,'wght' 700">It observes the pipeline itself.</div>
-        <p style="margin:8px 0 0;font-size:12px;line-height:1.45;color:var(--fg-2)">
-          One trace spans the whole publication path:</p>
-        <pre class="code" style="margin-top:10px;font-size:10.5px;line-height:1.55;padding:11px 14px;border-left-width:1px;border-left-color:var(--hair)">replay.read → raw.insert → session.normalize → boundary.correct
-   → minute.build → generation.validate → generation.publish</pre>
-        <p style="margin:11px 0 0;font-size:11.5px;line-height:1.45;color:var(--fg-2)">
-          Carrying <span class="mono">run_id</span>, source SHA, policy version, touched sessions,
-          ingest-lag quantiles, correction backlog, dictionary misses, read rows/bytes and the answer
-          hash — the <b style="color:var(--ch-yellow)">pipeline evidence bundle</b> the unseen day demands.</p>
-        <div class="rule" style="margin:12px 0"></div>
-        <div class="kicker" style="margin-bottom:7px">Alerts that are actionable</div>
-        <p style="margin:0 0 9px;font-size:11.5px;line-height:1.44;color:var(--fg-3)">
-          Any negative concurrency · non-zero daily delta balance · dictionary misses above zero ·
-          generation hash mismatch against the independent oracle.</p>
-        <p style="margin:0;font-size:11.5px;line-height:1.44;color:var(--fg-3)">
-          <b style="color:var(--ch-yellow)">Concurrency decline</b> — the brief's own suggested
-          LLM&#8239;+&#8239;ClickStack case — comes off the same minute tier. A drop is trivial to
-          detect and useless without a cause, so the alert carries the slice that moved and the model
-          separates <i>the asset ended</i> from <i>the platform broke</i> from <i>nobody is enjoying
-          this</i>.</p>
-      </div>
-
-      <div class="panel" style="border-left:2px solid var(--liv-magenta);height:100%;padding:15px 18px">
-        <div class="tag" style="border-color:rgba(226,86,253,.5);color:var(--liv-magenta)">LibreChat + ClickHouse MCP</div>
-        <div style="margin-top:13px;font-size:15px;font-weight:700;color:var(--fg);
-                    font-variation-settings:'wdth' 104,'wght' 700">It changed the schema, not just the demo.</div>
-        <p style="margin:8px 0 0;font-size:12px;line-height:1.45;color:var(--fg-2)">
-          <i>&ldquo;What was peak concurrency on Android in the last hour?&rdquo;</i> answered
-          conversationally, straight off the serving tables.</p>
-        <p style="margin:11px 0 0;font-size:12px;line-height:1.45;color:var(--fg-2)">
-          The honest reason <span class="mono">concurrency_minute_versions</span> exists is this
-          integration: a flat, dense, one-table read surface is what makes text-to-SQL answerable.
-          An LLM can reliably write:</p>
-        <pre class="code" style="margin-top:10px;font-size:11px;line-height:1.55;padding:11px 14px;border-left-width:1px;border-left-color:var(--hair)">max(minute_peak) … WHERE minute_start
-                     BETWEEN … AND …</pre>
-        <p style="margin:11px 0 0;font-size:12px;line-height:1.45;color:var(--fg-2)">
-          It will <b style="color:var(--wrong)">not</b> reliably write a day-anchored cumulative sum
-          over millisecond boundaries. Latency was a side effect, never the justification.</p>
-        <div class="rule" style="margin:12px 0"></div>
-        <p style="margin:0;font-size:11.5px;line-height:1.44;color:var(--fg-3)">
-          Nine rollup masks materialised — <span class="mono">0,1,2,3,4,5,8,9,15</span>. Mask 12 is
-          omitted because <span class="mono">video_type</span> is functionally determined by
-          <span class="mono">content_id</span>, and mask 12 matched mask 4 on every row tested.</p>
-      </div>
+  <div class="tywrap">
+    <div class="tylock">
+      <svg width="72" height="72"><use href="#liv-mark"/></svg>
+      <span class="x">&#215;</span>
+      <svg width="76" height="68" viewBox="0 0 9 8"><use href="#ch-mark"/></svg>
     </div>
 
-    <div class="livebar" id="intg-live" style="margin-top:auto">
-      <div class="livelink" style="flex:1"><span class="dot"></span><b>fastandfurious.live</b>
-        <i>— the curve builds live; filter it and the minute view answers instantly</i></div>
-      <div class="livelink" style="flex:1"><span class="dot m"></span><b>chat.fastandfurious.live</b>
-        <i>— then ask the follow-up in plain English</i></div>
+    <h1 class="tyh">Thank you.</h1>
+    <p class="tysub">Counting real viewers, not ghosts.</p>
+
+    <div class="livebar" style="justify-content:center;margin-top:32px">
+      <div class="livelink"><span class="dot"></span><b>fastandfurious.live</b>
+        <i>— the concurrency curve, live</i></div>
+      <div class="livelink"><span class="dot m"></span><b>chat.fastandfurious.live</b>
+        <i>— ask it in plain English</i></div>
     </div>
-  </div>
 
-  <div class="foot">
-    <span class="src">Source <b>docs/DECISIONS.md</b> D3 · <b>pipeline/sql/040_concurrency_minute.sql</b> &nbsp;·&nbsp; Langfuse skipped — no LLM in the data path, weakest fit</span>
-    <span>SonyLIV × ClickHouse</span>
-  </div>
-</section>
-
-<!-- ============================ 15 CLOSE ============================ -->
-<section class="slide" style="justify-content:space-between">
-  <div class="chrome">
-    <div class="eyebrow">14 &nbsp;/&nbsp; In one line</div>
-    <div class="folio"><i>15</i> / 15</div>
-  </div>
-
-  <div class="body" style="justify-content:center">
-    <div class="grid" style="grid-template-columns:1.15fr 1fr;gap:56px;align-items:center">
-      <div>
-        <p class="thesis" style="max-width:none">A wrong number costs the same as a crash,<br>
-          and it arrives <span class="sp">without warning.</span><br>
-          <span style="color:var(--fg-3)">So we built the thing that</span>
-          <span class="hl">fails loud</span>
-          <span style="color:var(--fg-3)">instead.</span></p>
-
-        <div class="livebar" style="margin-top:30px">
-          <div class="livelink"><span class="dot"></span><b>fastandfurious.live</b></div>
-          <div class="livelink"><span class="dot m"></span><b>chat.fastandfurious.live</b></div>
-        </div>
-
-        <div class="metastrip" style="margin-top:22px;border-top-color:var(--hair-2);gap:34px">
-          <div>Unseen-day peak<b class="mono y">19,882 @ 11:15</b></div>
-          <div>Conservation<b class="mono y">ratio 1.000</b></div>
-          <div>Answer time<b class="mono y">5 ms · 8,192 rows</b></div>
-        </div>
-      </div>
-
-      <div>
-        <div class="panel" style="padding:20px 24px">
-          <div class="kicker">Judged on five axes &nbsp;—&nbsp; where each one lives</div>
-          <table class="dt">
-            <tbody>
-              <tr><td class="k" style="width:37%">Correctness</td>
-                <td>foreground-only excludes pause, background and silence; conservation gate ties
-                  deltas back to intervals at ratio 1.000</td></tr>
-              <tr><td class="k">Query performance</td>
-                <td>8,192 rows for a whole-day peak and average — 1,700× fewer than recomputing it,
-                  with a <span class="mono">system.query_log</span> row behind every figure</td></tr>
-              <tr><td class="k">Update handling</td>
-                <td>34.7% of the unseen day never closed; signed corrections absorbed it with zero
-                  rebuilds</td></tr>
-              <tr><td class="k">Design quality</td>
-                <td>every switch versioned in <span class="mono">policy.yaml</span> with its measured
-                  cost; every rejected alternative carries the number that rejected it</td></tr>
-              <tr><td class="k">The unseen day</td>
-                <td>full-scan and incremental are the same file, so the oracle cannot drift from the
-                  path it validates</td></tr>
-            </tbody>
-          </table>
-        </div>
-        <p style="margin:12px 2px 0;font-size:11px;line-height:1.45;color:var(--fg-4)">
-          <span class="mono" style="color:var(--fg-3)">ingest/</span> Go write path ·
-          <span class="mono" style="color:var(--fg-3)">pipeline/</span> the deployed stages ·
-          <span class="mono" style="color:var(--fg-3)">solution/</span> policy, SQL and the hash-locked harness ·
-          <span class="mono" style="color:var(--fg-3)">optimizations/</span> measured rewrites ·
-          <span class="mono" style="color:var(--fg-3)">scripts/</span> one-command bring-up
-        </p>
-      </div>
+    <div class="tymeta">
+      <span>Click&#8209;a&#8209;thon 2026 · Bengaluru · SonyLIV track</span>
+      <span class="sep">·</span>
+      <span>MIT licensed, public repository</span>
+      <span class="sep">·</span>
+      <span class="mono" style="color:var(--ch-yellow)">19,882 concurrent, verified</span>
     </div>
-  </div>
-
-  <div class="foot" style="border-top-color:var(--hair-2);padding-top:18px">
-    <div style="display:flex;align-items:center;gap:16px">
-      <svg width="34" height="34"><use href="#liv-mark"/></svg>
-      <span style="color:var(--fg-4)">&#215;</span>
-      <svg width="30" height="27" viewBox="0 0 9 8" style="color:var(--fg-3)"><use href="#ch-mark"/></svg>
-      <span style="margin-left:10px;color:var(--fg-3);letter-spacing:.18em">Click&#8209;a&#8209;thon 2026 · SonyLIV track</span>
-    </div>
-    <span class="src">MIT licensed · public repository · <b>counting real viewers, not ghosts</b></span>
   </div>
 </section>
 
 </div>
 
 
-<div class="hint">15 slides · 16:9 · <b>Cmd/Ctrl + P</b> → Save as PDF · margins <b>None</b> · background graphics <b>on</b></div>
+<div class="hint">14 slides · 16:9 · <b>Cmd/Ctrl + P</b> → Save as PDF · margins <b>None</b> · background graphics <b>on</b></div>
 
 </body>
 </html>

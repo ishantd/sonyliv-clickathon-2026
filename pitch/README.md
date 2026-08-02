@@ -3,9 +3,9 @@
 | File | What it is |
 |---|---|
 | [`index.html`](index.html) | The deck. One self-contained file — fonts, logos and the chart are all embedded, so it renders identically offline. |
-| [`pitch-deck.pdf`](pitch-deck.pdf) | The export. 15 pages, 960 × 540 pt (13.333 × 7.5 in = 16:9 landscape), ~1.55 MB. |
+| [`pitch-deck.pdf`](pitch-deck.pdf) | The export. 14 pages, 960 × 540 pt (13.333 × 7.5 in = 16:9 landscape). |
 
-Handbook limits: ≤ 15 slides, ≤ 20 MB. This is exactly 15 slides and well under the size cap.
+Handbook limits: ≤ 15 slides, ≤ 20 MB. This is 14 slides and well under the size cap.
 
 ## Submission fields
 
@@ -30,17 +30,36 @@ evaluation axes. Specific requirements and where they are met:
 
 | The brief asks for | Where |
 |---|---|
-| Active-interval definition under missing heartbeat / pause / background | Slides 4, 5 |
-| Representation: intervals, deltas, or hybrid | Slides 4, 6, 7, 8 |
-| Minute **and hour and day** peak + average without scanning raw history | Slides 4, 9, 11 |
-| Filter-friendliness across platform, country, content, video type, time grain | Slides 4, 9, 14 |
-| Still-open sessions whose ranges keep growing | Slides 4, 7, 10 |
-| Cross-dimension peaks landing on different minutes | Slides 4, 9 — the SAMSUNG_HTML_TV case |
-| Real-time content-metadata join | Slide 6 — `content_dict` |
-| ClickStack or LibreChat, meaningfully integrated | Slide 14 |
-| Optional: LLM + ClickStack concurrency-decline alerting | Slide 14 |
-| 100× behaviour | Slide 12 |
-| Unseen-day results with pipeline evidence | Slides 2, 9, 10, 11 — the whole deck runs on it |
+| The five questions the problem "turns on" | Slide 3 — quoted, answered, one line each |
+| Active-interval definition under missing heartbeat / pause / background | Slides 3, 8 |
+| Representation: intervals, deltas, or hybrid | Slides 3, 4, 5, 6 |
+| Minute **and hour and day** peak + average without scanning raw history | Slides 3, 7, 9 |
+| Filter-friendliness across platform, country, content, video type, grain | Slides 3, 7, 9 |
+| Still-open sessions whose ranges keep growing | Slides 3, 5, 8 |
+| Cross-dimension peaks landing on different minutes | Slides 3, 7 — the SAMSUNG_HTML_TV case |
+| Real-time content-metadata join | Slide 4 — `content_dict` |
+| ClickStack, LibreChat **and** Langfuse, meaningfully integrated | Slides 10, 11, 12 |
+| Optional: LLM + ClickStack concurrency-decline alerting | Slide 12 |
+| 100× behaviour | Slide 6 |
+| Unseen-day results with pipeline evidence | Slides 2, 7, 8, 9 — the whole deck runs on it |
+| Every stated evaluation axis | Slide 13, one row each |
+
+## Two screenshot slots to fill
+
+Slides 11 (LibreChat) and 12 (ClickStack) each carry a labelled empty frame. Neither could be
+captured: the LibreChat instance is behind a login, and ClickStack is only reachable through the
+Cloud console. They were left visibly empty rather than filled with a fabricated image.
+
+To fill one, base64 a PNG and replace the `<div class="slotinner">…</div>` inside
+`#slot-librechat` or `#slot-clickstack` with:
+
+```html
+<img src="data:image/png;base64,PASTE_HERE" alt="LibreChat answering a concurrency question">
+```
+
+`.shotslot img` already handles the sizing (`object-fit: cover`, top-left anchored). A ~1000px-wide
+PNG keeps the PDF small; `sips -Z 1000 in.png --out small.png` is enough.
+
 
 ## Re-exporting the PDF
 
