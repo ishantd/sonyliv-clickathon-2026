@@ -308,9 +308,17 @@ CREATE OR REPLACE VIEW {{db}}.serving_live_content AS
 SELECT
     bucket_start,
     content_id,
-    dictGetOrDefault({{db}}.content_dict, 'title',      tuple(content_id), '')        AS title,
-    dictGetOrDefault({{db}}.content_dict, 'video_type', tuple(content_id), 'unknown') AS video_type,
-    dictGetOrDefault({{db}}.content_dict, 'category',   tuple(content_id), 'unknown') AS category,
+    -- Fallback is '__unknown__', NOT 'unknown'. 'unknown' is a REAL catalogue value —
+    -- 1,089 of 33,464 titles carry video_type = 'unknown' — so using it as the miss
+    -- default makes a cold-replica dictionary miss indistinguishable from real data.
+    -- Dictionaries load per replica and an empty one still reports LOADED, so that
+    -- miss is the documented silent failure, and it self-heals before you can look.
+    -- With '__unknown__', `countIf(video_type = '__unknown__') > 0` is a valid alarm.
+    -- '' is no good either: masks store '' for unselected dimensions, so it is
+    -- ambiguous between "not carried by this mask" and "dictionary missed".
+    dictGetOrDefault({{db}}.content_dict, 'title',      tuple(content_id), '')            AS title,
+    dictGetOrDefault({{db}}.content_dict, 'video_type', tuple(content_id), '__unknown__') AS video_type,
+    dictGetOrDefault({{db}}.content_dict, 'category',   tuple(content_id), '__unknown__') AS category,
     bucket_peak,
     ending_concurrency,
     active_ms,
@@ -353,11 +361,14 @@ SELECT
     -- the busiest single TITLE in that category (measured 14), not the category's peak
     -- (measured 46). For a category peak, read grouping = 'category'. The average is
     -- safe either way — active_ms is additive, and both paths give 11.012060.
+    -- '__unknown__' on a miss, not '' — see the note on serving_live_content above.
+    -- '' would be ambiguous here in particular, because that is exactly what an
+    -- unselected dimension already stores.
     if(empty(video_type) AND content_id != 0,
-       dictGetOrDefault({{db}}.content_dict, 'video_type', tuple(content_id), ''),
+       dictGetOrDefault({{db}}.content_dict, 'video_type', tuple(content_id), '__unknown__'),
        video_type) AS video_type,
     if(empty(category) AND content_id != 0,
-       dictGetOrDefault({{db}}.content_dict, 'category', tuple(content_id), ''),
+       dictGetOrDefault({{db}}.content_dict, 'category', tuple(content_id), '__unknown__'),
        category) AS category,
     minute_peak,
     ending_concurrency,

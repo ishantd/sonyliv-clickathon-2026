@@ -24,10 +24,16 @@ both; the entire average discrepancy is one synthetic session of ours, reconcile
 decimals (see *What we verified*). So the switch was never going to buy correctness. That
 turns it into a pure cost question, and the costs are concrete:
 
-1. **The table we would read does not exist.** `concurrency_minute_versions` is undeployed
-   (§7). The deployed alternative is the day-anchored cumulative sum, which we measured at 7×
-   the rows and 11× the bytes of a flat minute read for the identical question (§7). Moving
-   would make the judged read-volume axis worse, not better.
+1. ~~**The table we would read does not exist.**~~ **Superseded — `040` is now deployed**
+   (272,070 rows, one variant, verified reproducing 2,305 / 855.578199). Re-measured on the
+   deployed table rather than the delta path: both read **8,192 rows** — one granule, a tie —
+   but his reads **544 KiB against our 144 KiB**, 3.8× the bytes, because `generation`,
+   `pipeline_run_id` (UUID) and `source_delta_snapshot` (UInt128) sit in the sort-key prefix
+   and are read on every query. Duration is a wash, 6 ms vs 5 ms.
+
+   So this argument is much weaker than it was: read volume no longer rules the switch out, it
+   just mildly disfavours it. Note the 3.8× is *entirely* the pinning columns — §8 removes
+   them, which would close the gap and is a reason to do §8 regardless of who reads what.
 2. **Two dimensions would be lost permanently.** No `app_version` mask exists anywhere in your
    pipeline, and adding one means the SummingMergeTree rebuild you deferred for silent-doubling
    risk (§5). Dashboards 02, 04 and 06 filter on it. Category peaks are likewise unavailable
@@ -61,7 +67,20 @@ forgot to finish.
 
 ---
 
-## 1. `concurrency_minute_versions` has no `clip_variant` column — **highest severity**
+## 1. `concurrency_minute_versions` has no `clip_variant` column — **highest severity, now live**
+
+> **Re-checked after `983a04b` ("040 is deployed") and `8d84ba1` ("fix the two
+> never-executed defects"): still unfixed, and now holding data.** Verified on the service:
+> 272,070 rows, `generation = 1`, `pipeline_run_id = 00000000-…-0001`,
+> `source_delta_snapshot = 1`, 9 masks, and no `clip_variant` column. 272,070 matches your §4
+> sizing for **one** variant (~272K), so the table is currently correct — it holds `unclipped`
+> only. It reproduces canonical exactly: peak 2,305, average 855.5781994444444.
+>
+> That is the good news and also the whole risk. The table is right *because* the second
+> variant has not been loaded, and your contract §3 says both "are always built". Loading
+> `clipped` at this generation is now a one-command, irreversible corruption of a table that
+> currently holds the correct answer. This is the cheapest fix in this document and the most
+> expensive omission.
 
 `040_concurrency_minute.sql` defines the table as:
 
@@ -104,6 +123,12 @@ sonyliv.pipeline_watermark →
   stage: stage02_serving   policy_version: sonyliv-active-v1
   watermark: 2026-08-01 16:22:20.425   state_revision: 1   sessions_applied: 10848
 ```
+
+**Re-checked after `040` was deployed: unchanged, and now it bites.** The deployed rows carry
+`generation = 1`, `pipeline_run_id = 00000000-0000-0000-0000-000000000001` and
+`source_delta_snapshot = 1` — sentinel values a reader has no way to learn except by selecting
+`DISTINCT` from the table it is trying to query, or by being told. Our read above had to
+hardcode all three.
 
 No `generation`, no `pipeline_run_id`, no `source_delta_snapshot`. A dashboard tile or a
 text-to-SQL layer therefore cannot construct a valid query without a hardcoded UUID, which
@@ -196,12 +221,16 @@ We solved this separately with a 10-second serving tier fed by generated wall-cl
 in `sonyliv_prod`. No action needed from you — recorded so nobody wires dashboard 01 to
 `session_live_state` and concludes the pipeline is broken.
 
-## 7. `concurrency_minute_versions` is still undeployed
+## 7. ~~`concurrency_minute_versions` is still undeployed~~ — RESOLVED
 
-Absent from `system.tables`. Your §2 calls deploying `040` "the highest-value next step" and
-§8 repeats it. Without it the cheapest correct dashboard read is the day-anchored cumulative
-sum, which we measured at **57,346 rows / 1.62 MiB / 28 ms** against **8,192 rows / 144 KiB /
-4 ms** for a flat minute table answering the identical question. Read volume is judged.
+Deployed in `983a04b`. Verified independently: 272,070 rows, 9 masks, and it reproduces the
+canonical hot-hour figures exactly (peak 2,305, average 855.5781994444444) from a plain
+`max()`/`sum()` over a range, no window function. It does what it was built to do.
+
+Kept in this document only to record the measurement it makes possible: the deployed flat read
+is **8,192 rows / 544 KiB / 6 ms** against our **8,192 rows / 144 KiB / 5 ms**. The old
+comparison against the delta path — 57,346 rows / 1.62 MiB / 28 ms — is what deploying this
+removed, and it was worth removing.
 
 ---
 
@@ -324,6 +353,87 @@ and cost is proportional to changed sessions. You already retain every revision 
 `active_intervals`, so the prior state needed to cancel is available — this is the standard
 incremental pattern for a Summing table, and it is what would let you claim incremental
 correction end to end rather than only at the interval layer.
+
+---
+
+## 9. Correction: the `sonyliv_prod` builder did not die, it wedged — and it is fixed
+
+`optimizations/README.md` is a genuinely good investigation and refutes four plausible causes
+correctly (empty staging table, the `dictGet` probe, replica churn, the latency spikes). One
+conclusion is wrong, and we can correct it from the other side of the fence because it was our
+process:
+
+> This was a client-side process death on the host running the builder.
+
+**The process was alive.** We found PID 44895 still running at 00:50 UTC with 2 h of elapsed
+time, having last published at 23:22. It was not dead — it was failing on every 10-second tick
+with:
+
+```
+pass failed, retrying next tick: 50000 sessions dirtied, at or above --dirty-cap 50000:
+run once with --full rather than catching up in slices
+```
+
+Root cause: the incremental workset is selected from `dirty_sessions` using an in-process
+`lastPass` timestamp, which starts at the zero value. Once the queue exceeded the 50,000 cap
+the guard returned **before** `lastPass` was advanced, so every subsequent tick asked the same
+question and got the same answer. `--full` did not help either — it skipped the branch that
+sets `lastPass`. Measured backlog when we found it: **446,130 sessions queued against a cap of
+50,000**, wedged across process restarts.
+
+This matters for your write-up because the two diagnoses imply different fixes. "Process
+death" points at supervision. The actual defect is unrecoverable-by-construction: a restart
+could never clear it, so a systemd unit would have restarted it into the same wall forever.
+Your observation that **nothing was watching `serving_watermark`** is correct and worth keeping
+— it is why 90 minutes passed unnoticed — but it is the detection gap, not the cause.
+
+Fixed on our side: a cold start now promotes to the full rebuild the error already asks for
+(`Intervals` replaces per session, so it is idempotent), while the guard still fires mid-run
+where a spike that large genuinely means something abnormal. `lastPass` is also now captured
+before the workset is chosen, so a session dirtied *during* a pass is picked up by the next one
+rather than skipped. Verified: cold start self-heals in 23.8 s, then ticks at 0.5 s on
+worksets of 97–259 sessions.
+
+One thing in that section we accept without argument: the **ownership gap**. 6.94M rows
+carrying `_source_file` values of `fleet`, `mock-dashboard` and `manual` write no
+`ingest_batches` row, and those are our producers. 77% of the table having no provenance record
+is a fair finding against us.
+
+## 10. `'unknown'` is a real catalogue value — we had the bug you just fixed
+
+Your `8d84ba1` change to the mask-13 view is a better call than ours and we are adopting it:
+
+> Default is `'__unknown__'` (policy.yaml: unknown_string), NOT `'unknown'`. `'unknown'` is a
+> REAL catalogue value: 1,089 titles carry it.
+
+We had exactly this defect in `serving_live_content`, which resolves `video_type` and
+`category` with `'unknown'` as the `dictGetOrDefault` fallback — so a cold-replica dictionary
+miss is indistinguishable from the 1,089 titles whose video_type genuinely *is* `unknown`. That
+is the silent-fallback failure mode your own trap #7 warns about, and our fallback defeated the
+assertion that would have caught it.
+
+Worth noting the same reasoning rules out `''` as a fallback in *our* minute view, which is
+what we reached for first: masks store `''` for unselected dimensions, so an empty result is
+ambiguous between "this mask does not carry that dimension" and "the dictionary missed".
+`'__unknown__'` is unambiguous against both. Aligning on it.
+
+## 11. The unseen day adds two dimensions, and it lands on both of us
+
+`data/surprise_spec.md` (7,000,000 events, 2026-07-31) adds one column to each input:
+
+- **raw events → `video_resolution`**, named as a filter dimension
+- **content → `show_name`**, named as a filter dimension
+
+Both are additive schema changes, but they are not free in either pipeline, and for the same
+reason: a new *filterable* dimension is only exactly answerable for peaks at a mask that
+carries it, and peaks cannot be re-derived from a finer mask. `show_name` is functionally
+determined by `content_id`, so it behaves like `category` — free for averages and for filtering
+via the dictionary (§4/§10), needing a real mask only for exact per-show peaks.
+`video_resolution` is a per-event attribute like `app_version` and needs a mask bit, which for
+`concurrency_deltas` means the SummingMergeTree rebuild that keeps getting deferred.
+
+Flagging it here because the mask set is in the sort key of both our tables and cannot change
+after rows exist. Worth deciding before loading the unseen day, not after.
 
 ---
 
