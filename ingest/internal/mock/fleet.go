@@ -295,13 +295,20 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 	from := now.Add(-time.Duration(minutes) * time.Minute)
 	f := fleetFilter(r)
 
-	// The ClickHouse half of this graph follows the dataset picker; the generator
-	// half is in-process fleet state and has no database to follow.
-	db, err := s.resolveDatabase(r.Context(), r.URL.Query().Get("db"))
-	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
-		return
-	}
+	// This graph is pinned to the server's own database and ignores `db`.
+	//
+	// Both its lines are about now and about this box. The generator series is
+	// in-process fleet state, which has no database to follow, and the ClickHouse
+	// series reads concurrency_minute, which only the in-process sealer writes and
+	// only here. Pointing the second line at another dataset therefore compares a
+	// curve from one place against a generator from another, over a window that
+	// dataset almost certainly does not cover — the evaluation load ends a day
+	// before the widest window this handler allows, so the honest result is an
+	// empty line that looks like a broken pipeline.
+	//
+	// /analytics is the surface that answers for any dataset: it reads the minute
+	// serving tier, which every database has, and takes absolute windows.
+	db := s.client.Database
 
 	resp := map[string]any{
 		"from":       from,
@@ -326,14 +333,12 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 	// the only one that is an independent oracle, which is why it stays reachable
 	// rather than being replaced.
 	//
-	// Both paths take db, so the dataset picker applies to whichever one is serving
-	// rather than silently reverting to the connection's own database on one of them.
-	//
-	// err is the one resolveDatabase already declared above, not a new binding: it
-	// has been checked and is nil here, and shadowing it in a var block would not
-	// compile.
+	// Both paths still take db explicitly rather than reading it off the client, so
+	// the database a query runs against stays visible at the call site even though
+	// there is now only one value it can be.
 	var (
 		points []fleet.CurvePoint
+		err    error
 		source = SourceServed
 		sealed time.Time
 	)
