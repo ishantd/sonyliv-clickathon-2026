@@ -209,7 +209,7 @@ WHERE grouping = {grouping:String}
   AND minute_start <  toDateTime({to:String},   'UTC')%[3]s
 GROUP BY %[4]s
 ORDER BY %[4]s
-LIMIT {cap:UInt32}`, db, peakExpr, where, g.bucket, g.Seconds*1000)
+LIMIT {cap:UInt32}`, db, peakExpr, where, g.bucketExpr(), g.Seconds*1000)
 	}
 
 	// shapeBreakdown.

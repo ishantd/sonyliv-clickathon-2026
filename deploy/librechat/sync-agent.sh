@@ -175,13 +175,42 @@ if [[ -n "${LIBRECHAT_SHARE_EMAILS:-}" ]]; then
             echo "  $email -> agent_editor"
         done
 
-        if [[ "$(jq 'length' <<<"$updated")" -gt 0 ]]; then
-            # public:false is passed explicitly rather than omitted. This endpoint
-            # sets the whole sharing state, so leaving it out on a PUT is how an
-            # agent quietly becomes public on some future refactor of the payload.
-            share="$(jq -n --argjson u "$updated" '{updated:$u, removed:[], public:false}')"
+        # LIBRECHAT_SHARE_PUBLIC=true grants every signed-in account viewer
+        # access, on top of whatever named grants were resolved above.
+        #
+        # UNDERSTAND WHAT "PUBLIC" MEANS ON THIS HOST BEFORE SETTING IT. It is
+        # not "everyone in the org" — LibreChat has no org here. Combined with
+        # ALLOW_REGISTRATION=true it is everyone on the internet who finds the
+        # hostname, signs up with any address, and is never asked to verify it
+        # (ALLOW_UNVERIFIED_EMAIL_LOGIN=true). Each of them can then drive the
+        # agent, which spends the Gemini key.
+        #
+        # That is a legitimate choice for a judged demo, where handing every
+        # judge a shared credential is worse. It is the wrong state to leave
+        # running afterwards: close registration when judging ends, and the
+        # exposure closes with it.
+        #
+        # viewer, not editor: public means strangers, and a stranger who can
+        # rewrite the analyst's instructions can point it at different tables or
+        # strip the rules the MCP server injects. Read and run, nothing else.
+        public=false
+        if [[ "${LIBRECHAT_SHARE_PUBLIC:-}" == "true" ]]; then
+            public=true
+        fi
+
+        if [[ "$(jq 'length' <<<"$updated")" -gt 0 || "$public" == "true" ]]; then
+            # public is passed explicitly on every call rather than omitted when
+            # false. This endpoint sets the WHOLE sharing state, so an omitted
+            # field is how an agent silently keeps — or loses — public access
+            # across a future change to this payload.
+            share="$(jq -n --argjson u "$updated" --argjson p "$public" \
+                '{updated:$u, removed:[], public:$p} + (if $p then {publicAccessRoleId:"agent_viewer"} else {} end)')"
             api PUT "/api/permissions/agent/$resource_id" --data-binary "$share" >/dev/null
-            echo "  shared with $(jq 'length' <<<"$updated") account(s), not public"
+            if [[ "$public" == "true" ]]; then
+                echo "  PUBLIC — every signed-in account can use this agent (viewer)"
+            else
+                echo "  shared with $(jq 'length' <<<"$updated") account(s), not public"
+            fi
         fi
     fi
 else

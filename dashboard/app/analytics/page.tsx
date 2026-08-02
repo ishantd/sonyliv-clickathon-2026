@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { ChartLegend, ConcurrencyLine, RankedBar } from "@/components/Charts";
 import { FilterBar } from "@/components/FilterBar";
 import { GrainNote, GrainPicker } from "@/components/GrainPicker";
+import { CUSTOM, RangePicker } from "@/components/RangePicker";
 import { LiveSessionsPanel } from "@/components/LiveSessions";
 import { PanelFrame } from "@/components/PanelFrame";
 import { ErrorNote } from "@/components/ui";
@@ -91,6 +92,10 @@ export default function AnalyticsPage() {
   // previous one — the single bug this feature must not have.
   const dbName = useDataset();
   const [winKey, setWinKey] = useState<string | null>(null);
+  // The typed range, in API form. Null means "follow the preset", which is the
+  // state the page opens in and returns to whenever a preset is chosen — so the
+  // two controls are one range rather than two competing sources of truth.
+  const [custom, setCustom] = useState<{ from: string; to: string } | null>(null);
   const [grainKey, setGrainKey] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>({});
 
@@ -127,12 +132,32 @@ export default function AnalyticsPage() {
   if (db && db.name !== seenDb) {
     setSeenDb(db.name);
     if (winKey !== null) setWinKey(null);
+    // Cleared with the window, and for the same reason: a range typed against
+    // 26 July finds nothing in a dataset whose only traffic is on the 31st, and
+    // an empty chart is indistinguishable from a broken one.
+    if (custom !== null) setCustom(null);
     if (Object.keys(filter).length) setFilter({});
   }
 
   // Recomputed only when the window or the filter changes, so a relative window
   // does not produce a new URL on every render and re-fetch forever.
-  const bounds = useMemo(() => (win ? windowParams(win) : null), [win]);
+  const presetBounds = useMemo(() => (win ? windowParams(win) : null), [win]);
+
+  // The typed range wins when it is set AND valid. An inverted range is held
+  // back rather than sent: the server rejects from >= to outright, so forwarding
+  // it would replace every panel with an error while someone is mid-edit — the
+  // half-typed state of a datetime field is not a question anyone asked.
+  const bounds = useMemo(() => {
+    if (!custom) return presetBounds;
+    const ms = (s: string) => Date.parse(`${s.replace(" ", "T")}Z`);
+    const ok =
+      custom.from !== "" &&
+      custom.to !== "" &&
+      Number.isFinite(ms(custom.from)) &&
+      Number.isFinite(ms(custom.to)) &&
+      ms(custom.from) < ms(custom.to);
+    return ok ? custom : presetBounds;
+  }, [custom, presetBounds]);
   const q = useMemo(() => {
     if (!db || !bounds) return null;
     // Every panel carries the grain, not just the curve. The breakdowns are
@@ -272,9 +297,9 @@ export default function AnalyticsPage() {
             {db.note}
           </p>
 
-          {/* Window and grain on ONE row, both as selects.
+          {/* Window, range and interval on one row.
 
-              They were two rows of pill buttons — three windows above, three
+              These were two rows of pill buttons — three windows above, three
               grains below — which came to eight boxes in the page's own accent
               styling before the reader reached the curve. The dataset picker in
               the nav is already a select, so three different treatments were
@@ -282,24 +307,30 @@ export default function AnalyticsPage() {
               was pushed down the page.
 
               The dataset is picked in the nav because it applies to every page.
-              These two are picked here because they do not. */}
-          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-            <label className="flex shrink-0 items-center gap-2">
-              <span className="eyebrow text-ink-3">Window</span>
-              <select
-                value={win?.key ?? ""}
-                onChange={(e) => setWinKey(e.target.value)}
-                aria-label="Time window"
-                className="rounded border border-line bg-sunken px-2 py-1 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink focus:border-accent-dim focus:outline-none"
-              >
-                {db.windows.map((w) => (
-                  <option key={w.key} value={w.key}>
-                    {w.label}
-                  </option>
-                ))}
-              </select>
-            </label>
+              These are picked here because they do not. */}
+          <RangePicker
+            windows={db.windows}
+            presetKey={custom ? CUSTOM : (win?.key ?? "")}
+            from={bounds?.from ?? ""}
+            to={bounds?.to ?? ""}
+            onPreset={(k) => {
+              // Choosing a preset drops the typed range entirely rather than
+              // copying the preset's instants into it. A relative window like
+              // "last hour" has to stay relative — frozen into two absolute
+              // fields it would stop tracking the clock the moment it was
+              // selected, which is the one thing that window is for.
+              setCustom(null);
+              setWinKey(k);
+            }}
+            onFrom={(v) =>
+              setCustom({ from: v, to: custom?.to ?? bounds?.to ?? "" })
+            }
+            onTo={(v) =>
+              setCustom({ from: custom?.from ?? bounds?.from ?? "", to: v })
+            }
+          />
 
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
             <GrainPicker
               grains={grains}
               value={grain?.key ?? null}
@@ -308,7 +339,8 @@ export default function AnalyticsPage() {
 
             {/* The resolved bounds, right-aligned. This is the row's evidence:
                 a relative window like "last hour" is only checkable against the
-                absolute instants it turned into. */}
+                absolute instants it turned into, and a typed range is only
+                checkable against the seconds the fields do not show. */}
             {bounds ? (
               <span className="tnum ml-auto font-mono text-[0.6875rem] text-ink-3">
                 {bounds.from} → {bounds.to} UTC

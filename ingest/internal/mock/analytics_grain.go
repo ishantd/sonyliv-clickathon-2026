@@ -1,6 +1,9 @@
 package mock
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 // Time granularity for the concurrency series.
 //
@@ -34,22 +37,63 @@ type grain struct {
 	// window is too short to produce a useful number of buckets; the SQL uses it
 	// as the time-weighted average's divisor.
 	Seconds int `json:"seconds"`
-
-	// bucket wraps minute_start in the ClickHouse function that floors it to this
-	// grain. Unexported: it is SQL, and it has no business being on the wire.
-	bucket string
 }
 
 // grains is the whole surface, in ascending order so the UI renders it as a
 // scale rather than a menu.
 //
-// No week or month. The extract is thirteen days and the evaluation set is one,
-// so a month bucket would produce a single bar on every dataset we have —
-// a control whose every setting gives the same answer is furniture.
+// ONE MINUTE IS THE FLOOR, and it is a property of the storage rather than a
+// choice. serving_concurrency_minute holds one row per minute per dimension
+// combination, so a thirty-second bucket cannot be produced from it by
+// aggregation — half a minute's rows do not exist. Ten-second resolution does
+// exist, in serving_concurrency_live, but only over a trailing window and only
+// at content grain, so it answers a different question and is charted on /live.
+// Offering "30 seconds" here would be a control that silently returns
+// minute-shaped data.
+//
+// NO WEEK OR MONTH at the top. The tuning extract is thirteen days and the
+// evaluation set is one, so either would render a single bar on every dataset
+// that exists — a control whose every setting gives the same answer is
+// furniture. A day is already that on the unseen day, which is why the UI warns
+// when a window yields fewer than three buckets rather than hiding the option.
+//
+// Everything between is a multiple of the floor, and every bucket is produced by
+// toStartOfInterval so there is ONE expression rather than a family of
+// toStartOfHour / toStartOfFiveMinutes special cases that could disagree at the
+// edges. INTERVAL n SECOND aligns to the unix epoch, and since the whole system
+// is UTC, epoch alignment and wall-clock alignment are the same thing here: the
+// 86400-second bucket starts at UTC midnight, which is what toStartOfDay would
+// have given.
 var grains = []grain{
-	{Key: "minute", Label: "Minute", Seconds: 60, bucket: "minute_start"},
-	{Key: "hour", Label: "Hour", Seconds: 3600, bucket: "toStartOfHour(minute_start)"},
-	{Key: "day", Label: "Day", Seconds: 86400, bucket: "toStartOfDay(minute_start)"},
+	{Key: "minute", Label: "1 minute", Seconds: 60},
+	{Key: "5m", Label: "5 minutes", Seconds: 300},
+	{Key: "10m", Label: "10 minutes", Seconds: 600},
+	{Key: "15m", Label: "15 minutes", Seconds: 900},
+	{Key: "30m", Label: "30 minutes", Seconds: 1800},
+	{Key: "hour", Label: "1 hour", Seconds: 3600},
+	{Key: "3h", Label: "3 hours", Seconds: 10800},
+	{Key: "6h", Label: "6 hours", Seconds: 21600},
+	{Key: "12h", Label: "12 hours", Seconds: 43200},
+	{Key: "day", Label: "1 day", Seconds: 86400},
+}
+
+// bucketExpr is the ClickHouse expression that floors minute_start to this grain.
+//
+// Derived from Seconds rather than stored per entry, so a grain added to the
+// table above cannot arrive with a bucket function that disagrees with the
+// divisor the average is computed on — the one pairing in this file that must
+// never drift, because getting it wrong rescales the whole series without
+// changing its shape.
+//
+// The minute case is special-cased to the bare column, not for speed but for the
+// SQL served under each panel: `toStartOfInterval(minute_start, INTERVAL 60
+// SECOND)` on rows that are already one per minute is a no-op dressed up as an
+// aggregation, and that statement is on screen for judges to read.
+func (g grain) bucketExpr() string {
+	if g.Seconds <= 60 {
+		return "minute_start"
+	}
+	return fmt.Sprintf("toStartOfInterval(minute_start, INTERVAL %d SECOND)", g.Seconds)
 }
 
 // defaultGrain is what an unspecified or unrecognised request gets.
@@ -99,7 +143,8 @@ func panelNote(p panel, g grain) string {
 	}
 	unit := strings.ToLower(g.Label)
 	return "Peak is the exact maximum inside each " + unit +
-		"; the second series is the time-weighted average over the " + unit + ". " +
-		"Coarsening the grain does not change the peak — the peak of an hour is the largest of its " +
-		"minutes' peaks — so only the average rescales."
+		" bucket; the second series is the time-weighted average over it. " +
+		"Coarsening the interval does not change the peak — the peak of a bucket is the largest of " +
+		"the minute peaks inside it — so only the average rescales. One minute is the floor: the " +
+		"serving tier stores one row per minute, so nothing finer can be aggregated out of it."
 }
