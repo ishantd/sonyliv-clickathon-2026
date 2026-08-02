@@ -3,7 +3,9 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useSyncExternalStore } from "react";
-import { getToken, setToken } from "@/lib/api";
+import useSWR from "swr";
+import { fetcher, getToken, setToken } from "@/lib/api";
+import { setDataset, useDataset } from "@/lib/dataset";
 import { ClickHouseMark, SonyLivMark } from "./BrandMarks";
 
 /**
@@ -39,6 +41,65 @@ function TokenBadge() {
     >
       token set ×
     </button>
+  );
+}
+
+type DbOption = { name: string; label: string; note: string; writable: boolean };
+
+/**
+ * The dataset picker, in the nav so it applies to every page rather than to one.
+ *
+ * A <select>, not a row of buttons: the list is server-supplied and will grow, and
+ * a growing row of buttons competes with the page tabs for the same horizontal
+ * space. A picker stays one control however many datasets exist.
+ *
+ * The options come from /api/analytics, which is where they are hardcoded — in Go,
+ * where the same list is the SQL allowlist. Restating them here would be a second
+ * copy of a security-relevant list.
+ *
+ * Renders nothing until the list loads, and nothing if only one dataset exists: a
+ * picker with a single option is furniture, not a control.
+ */
+function DatasetPicker() {
+  const { data } = useSWR<{ databases: DbOption[]; default: string }>(
+    "/api/analytics",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
+  const selected = useDataset();
+
+  if (!data || data.databases.length < 2) return null;
+  const current =
+    data.databases.find((d) => d.name === selected) ??
+    data.databases.find((d) => d.name === data.default) ??
+    data.databases[0];
+
+  return (
+    <label className="flex shrink-0 items-center gap-1.5" title={current.note}>
+      <span className="sr-only">ClickHouse dataset</span>
+      <select
+        value={current.name}
+        onChange={(e) => setDataset(e.target.value)}
+        className="rounded border border-line bg-sunken px-2 py-1 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink focus:border-accent-dim focus:outline-none"
+      >
+        {data.databases.map((d) => (
+          <option key={d.name} value={d.name}>
+            {d.label}
+          </option>
+        ))}
+      </select>
+      {/* The one thing a reader on the evaluation set has to know: the controls on
+          the other pages do not write here. Shown as a state, not a warning —
+          nothing is wrong, it is simply read-only. */}
+      {!current.writable ? (
+        <span
+          className="rounded border border-line px-1.5 py-0.5 font-mono text-[0.625rem] text-ink-3"
+          title="The simulator writes only to the writable dataset. Reads follow this picker; writes do not."
+        >
+          read-only
+        </span>
+      ) : null}
+    </label>
   );
 }
 
@@ -191,8 +252,12 @@ export function Nav() {
 
             Rendered only when configured. A nav tab that leads to a placeholder is
             worse than an absent one, so an unset URL means the tab does not exist. */}
+        <div className="ml-auto flex shrink-0 items-center gap-3">
+          <DatasetPicker />
+        </div>
+
         <nav
-          className="ml-auto flex shrink-0 items-center gap-1"
+          className="flex shrink-0 items-center gap-1"
           aria-label="Other surfaces"
         >
           {externals.map((x) => (

@@ -261,7 +261,12 @@ func (s *Server) handleSimStatus(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleCurve(w http.ResponseWriter, r *http.Request) {
 	minutes, _ := strconv.Atoi(r.URL.Query().Get("minutes"))
-	points, err := Curve(r.Context(), s.client, minutes)
+	db, err := resolveDatabase(r.URL.Query().Get("db"), s.client.Database)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	points, err := Curve(r.Context(), s.client, db, minutes)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return

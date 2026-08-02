@@ -61,10 +61,24 @@ type window struct {
 // (`db.table`), and sonyliv_svc holds grants on each, so switching databases
 // needs no second client and no reconnect.
 type database struct {
-	Name    string   `json:"name"`
-	Label   string   `json:"label"`
-	Note    string   `json:"note"`
-	Windows []window `json:"windows"`
+	Name  string `json:"name"`
+	Label string `json:"label"`
+	Note  string `json:"note"`
+	// Writable describes, it does not enforce -- and the distinction matters, so
+	// state it rather than imply a guard that is not there.
+	//
+	// The write paths (fleet INSERT, the stepper, /api/events) never read a `db`
+	// parameter at all: they use the server's configured database, full stop. So
+	// the picker CANNOT point a write at another dataset, which is a stronger
+	// property than checking a flag would give -- there is no code path to guard.
+	// This field exists so the UI can say which dataset the simulator writes into,
+	// because a reader looking at the evaluation set needs to know the buttons on
+	// the other pages do not act on what they are seeing.
+	//
+	// It matters because a single stray test session already cost the July extract
+	// its exact figures; the same mistake here would be seven million rows.
+	Writable bool     `json:"writable"`
+	Windows  []window `json:"windows"`
 }
 
 // databases is the selector's whole surface.
@@ -75,9 +89,10 @@ type database struct {
 // populated; nothing else needs to change.
 var databases = []database{
 	{
-		Name:  "sonyliv_prod",
-		Label: "Mock ingestion (live)",
-		Note:  "Carries the graded July extract plus everything the generator, fleet and API have written since. The hot hour reproduces the canonical 2,305 / 855.578199.",
+		Name:     "sonyliv_prod",
+		Label:    "Mock ingestion",
+		Writable: true,
+		Note:     "The graded July extract plus everything the generator, fleet and API have written since. Writable, and the only dataset the simulator writes into. The hot hour reproduces the canonical 2,305 / 855.578199.",
 		Windows: []window{
 			{Key: "hot", Label: "Hot hour (26 Jul)", From: "2026-07-26 10:00:00", To: "2026-07-26 11:00:00"},
 			{Key: "extract", Label: "Whole extract", From: "2026-07-14 00:00:00", To: "2026-07-27 00:00:00"},
@@ -86,9 +101,10 @@ var databases = []database{
 		},
 	},
 	{
-		Name:  "sonyliv_unseen",
-		Label: "Unseen day (31 Jul)",
-		Note:  "The sealed evaluation dataset: 7,000,000 events for 2026-07-31, loaded through the same pipeline. Peak 14,506 at 11:15.",
+		Name:     "sonyliv_unseen",
+		Label:    "Evaluation set — 31 Jul",
+		Writable: false,
+		Note:     "7,000,000 events for 2026-07-31, loaded through the same pipeline. Read-only here: the simulator will not write into it, so it stays exactly as it was loaded. Peak 14,506 at 11:15.",
 		Windows: []window{
 			{Key: "peak", Label: "Peak hour (31 Jul)", From: "2026-07-31 11:00:00", To: "2026-07-31 12:00:00"},
 			{Key: "day", Label: "Whole day", From: "2026-07-31 00:00:00", To: "2026-08-01 00:00:00"},
@@ -118,6 +134,17 @@ func resolveDatabase(requested, fallback string) (string, error) {
 	}
 	return "", fmt.Errorf("unknown database %q; selectable: %s",
 		requested, strings.Join(names, ", "))
+}
+
+// databaseWritable reports whether a resolved database accepts writes.
+// Unknown names are not writable, so a future entry defaults to safe.
+func databaseWritable(name string) bool {
+	for _, d := range databases {
+		if d.Name == name {
+			return d.Writable
+		}
+	}
+	return false
 }
 
 // panel is one chart's query.

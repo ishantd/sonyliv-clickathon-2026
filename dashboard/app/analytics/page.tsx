@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { ConcurrencyLine, RankedBar } from "@/components/Charts";
 import { ErrorNote, Panel, Stat, StatGrid } from "@/components/ui";
 import { fetcher } from "@/lib/api";
+import { useDataset } from "@/lib/dataset";
 
 /**
  * The ClickStack dashboards, served from this box.
@@ -152,10 +153,13 @@ export default function AnalyticsPage() {
     revalidateOnFocus: false,
   });
 
-  // Both selections are stored as KEYS, not objects, and resolved against the
-  // server's list on every render. Storing the object would pin a stale window
-  // across a database switch — the one bug this selector must not have.
-  const [dbName, setDbName] = useState<string | null>(null);
+  // The dataset is chosen in the nav and shared by every page, so this one reads
+  // it rather than owning it. The window stays local: it is meaningful only here.
+  //
+  // Both are resolved against the server's list on every render rather than stored
+  // as objects, so a dataset switch cannot leave a window pinned to the previous
+  // one — the single bug this feature must not have.
+  const dbName = useDataset();
   const [winKey, setWinKey] = useState<string | null>(null);
 
   const db =
@@ -168,6 +172,15 @@ export default function AnalyticsPage() {
   // switching to a dataset whose data lives elsewhere on the timeline still lands
   // on something populated.
   const win = db?.windows.find((w) => w.key === winKey) ?? db?.windows[0] ?? null;
+
+  // Clearing on a dataset change is what makes the fallback above land on the NEW
+  // dataset's first window. Keyed on the name rather than an effect, so it happens
+  // during render and no frame is painted with the previous dataset's window.
+  const [seenDb, setSeenDb] = useState<string | null>(null);
+  if (db && db.name !== seenDb) {
+    setSeenDb(db.name);
+    if (winKey !== null) setWinKey(null);
+  }
 
   // Recomputed only when the window changes, so a relative window does not produce
   // a new URL on every render and re-fetch forever.
@@ -220,35 +233,8 @@ export default function AnalyticsPage() {
 
       {meta && db ? (
         <div className="mb-5 flex flex-col gap-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[0.6875rem] tracking-wide text-ink-3 uppercase">
-              Dataset
-            </span>
-            {meta.databases.map((d) => (
-              <button
-                key={d.name}
-                onClick={() => {
-                  setDbName(d.name);
-                  // Clearing the window is the point: the next render resolves it
-                  // against the NEW database's list and lands on its first entry.
-                  setWinKey(null);
-                }}
-                aria-current={d.name === db.name ? "true" : undefined}
-                title={d.note}
-                className={`rounded border px-2.5 py-1 text-[0.8125rem] transition-colors ${
-                  d.name === db.name
-                    ? "border-accent-dim bg-accent-wash text-accent"
-                    : "border-line text-ink-2 hover:text-ink"
-                }`}
-              >
-                {d.label}
-                <span className="ml-1.5 font-mono text-[0.6875rem] text-ink-3">
-                  {d.name}
-                </span>
-              </button>
-            ))}
-          </div>
-
+          {/* The dataset itself is picked in the nav, because it applies to every
+              page. Its description stays here, where there is room to read it. */}
           <p className="max-w-[62rem] text-[0.75rem] leading-relaxed text-ink-3">
             {db.note}
           </p>
