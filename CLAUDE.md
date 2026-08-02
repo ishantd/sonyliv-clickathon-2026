@@ -178,6 +178,69 @@ groupArrayArray, groupUniqArrayArray, …`), so revision-resolved fields need fu
 `-State`/`-Merge`. And `max` is not a substitute: it is a ratchet, while a late correction can
 legitimately move a value *backward*.
 
+### Projections throw on every Replacing/Summing/Aggregating table by default
+
+`deduplicate_merge_projection_mode` is **`throw`** on both replicas (default,
+unchanged). Its in-server description restricts projections to "classic" MergeTree;
+Shared**Replacing**/**Summing**/**Aggregating** are not classic, so `ADD PROJECTION`
+**throws**. Measured: **9 of 16** MergeTree tables in `sonyliv_prod` and **7 of 13** in
+`sonyliv` are blocked — including `events_clean`, `concurrency_deltas` and
+`session_live_state`. The escapes all cost something: `drop` discards the projection on
+merge, `rebuild` pays on every merge, and `ignore` is documented as possibly producing an
+**incorrect answer**. `events_clean` is blocked twice over — a `SELECT ... FINAL` cannot
+use a projection at all.
+
+Projections remain available on the classic `SharedMergeTree` tables: `events_raw`,
+`dirty_sessions`, `serving_concurrency_minute`, `ingest_batches`. See
+`optimizations/sql/020_projections.sql`.
+
+### The published projection docs are ahead of the server
+
+`docs/sql-reference/statements/alter/projection` documents `WHERE` inside a projection
+definition; `docs/data-modeling/projections` simultaneously lists "No WHERE clauses in
+projection definitions" as a limitation. **The two pages contradict each other** — the site
+publishes *latest*, not 26.2. Projection `WHERE` arrived in **26.7** (changelog #102347)
+and is a **parser error** on 26.2. Verify version-dependent syntax with `EXPLAIN AST`
+against the service rather than trusting the docs page.
+
+Related gate: `_part_offset` filter projections do exist in 26.2, but
+`min_table_rows_to_use_projection_index` and `max_projection_rows_to_use_projection_index`
+both default to **1,000,000**, so on a smaller table the projection index is a silent no-op.
+
+### `async_insert` defaults to 1 in 26.2, and the dedup token is inert on that path
+
+Cloud measures `async_insert = 1, default = 1, changed = 0` — a change from the
+long-standing OSS default of 0. Any client forcing it to 0 is fighting the default.
+
+The trap underneath: **`async_insert_deduplicate` defaults to 0**, so
+`insert_deduplication_token` does **nothing** on the async path and a retry duplicates
+silently. If a write is async and wants idempotency it must set both. Separately, the docs
+say not to combine `deduplicate_blocks_in_dependent_materialized_views` with async inserts
+where dependent MVs exist — and the setting that used to make that pairing throw is
+obsolete in 26.2, so it now proceeds without warning. Both corrections are in
+`ingest/internal/chx/loader.go`.
+
+### System log retention is longer than it looks — union the numbered tables
+
+`system.query_log` appearing to start two hours ago does **not** mean the history is gone.
+ClickHouse renames a system log table to a numbered suffix when the generation changes at
+startup, and the old ones remain queryable: `query_log_1`, `query_log_2`, `query_log_3`,
+and likewise for `metric_log`, `session_log`, `text_log`, `part_log`, `error_log`,
+`asynchronous_metric_log`. On 2026-08-02 the current `query_log` began at 22:23:46 while
+the numbered tables reached back to **08:38:54** — the difference between "lost to
+retention" and a complete answer.
+
+Caveat: a numbered table may exist on only one replica, so `clusterAllReplicas` over it
+fails with "Table does not exist". Enumerate first:
+
+```sql
+SELECT hostName(), name, total_rows FROM clusterAllReplicas(default, system.tables)
+WHERE database = 'system' AND name LIKE '%log\_%' ORDER BY name, hostName();
+```
+
+De-duplicate on `(hostname, event_time)` when unioning — `clusterAllReplicas` can return
+the same row from both replicas' copies.
+
 ### A conflict check against a ReplacingMergeTree is a tautology
 
 Checking for duplicate keys that disagree on payload returns zero trivially once
