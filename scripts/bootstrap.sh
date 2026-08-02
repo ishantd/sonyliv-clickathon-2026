@@ -307,7 +307,13 @@ file through 'sonyliv-ingest events', which carries its own dedup token."
   fi
 
   GEN="$REPO_ROOT/ingest/bin/sonyliv-ingest"
-  if [[ ! -x "$GEN" && $DRY_RUN -eq 0 ]]; then
+  # ALWAYS rebuild. This was `if [[ ! -x "$GEN" ]]`, which never rebuilt a STALE
+  # binary -- and a stale loader is silent, not loud. Measured 2026-08-02: the
+  # binary was built Aug 1 21:52, video_resolution and show_name landed Aug 2
+  # 08:14, and the binary held zero occurrences of "show_name". The DDL made both
+  # columns, the load reported 7,000,000 rows and 0 rejects, every gate passed --
+  # and events_raw had 0 rows with a video_resolution. go build is incremental.
+  if [[ $DRY_RUN -eq 0 ]]; then
     info "building sonyliv-ingest…"
     ( cd "$REPO_ROOT/ingest" && go build -o bin/sonyliv-ingest ./cmd/sonyliv-ingest ) \
       || die "go build failed — install Go, or load the CSVs by hand"
@@ -405,6 +411,11 @@ if [[ $DO_BUILD -eq 1 ]]; then
        --param "policy_version=$POLICY_VERSION" \
        --param "clip_variant=unclipped" \
        --param "generation=$MINUTE_GENERATION"
+
+    # 050 LAST: the dashboard views read concurrency_minute_current, so the table
+    # must exist and 041 must have passed before they mean anything. Pure DDL --
+    # CREATE OR REPLACE VIEW only, no parameters.
+    ch "$REPO_ROOT/pipeline/sql/050_dashboard_views.sql" --rewrite-db sonyliv
   else
     info "skipped (dry run) — 011_build_active_intervals.sql, 022_populate_serving.sql, 040_concurrency_minute.sql, 041_minute_verify.sql"
   fi
@@ -431,6 +442,31 @@ if [[ $DO_VERIFY -eq 1 && $DRY_RUN -eq 0 ]]; then
     die "V1 FAILED — objects missing from $DATABASE: $missing"
   fi
   pass "V1  every expected object exists"
+
+  # V1b — a column the SOURCE CSV provides must not be empty in the table.
+  # The check that was missing when the stale-binary bug shipped: every other
+  # gate passed while both new columns were 100% empty. Reference-free -- it
+  # compares the CSV HEADER against the table, so it needs no expected value and
+  # skips a column the CSV does not carry.
+  if [[ $DRY_RUN -eq 0 && -n "$EVENTS_CSV" && -f "$EVENTS_CSV" ]]; then
+    for pair in "events_raw:video_resolution:$EVENTS_CSV" "content_dim:show_name:$CONTENT_CSV"; do
+      tbl="${pair%%:*}"; rest="${pair#*:}"; col="${rest%%:*}"; csv="${rest#*:}"
+      [[ -n "$csv" && -f "$csv" ]] || continue
+      head -1 "$csv" | grep -q "$col" || continue
+      filled="$(scalar "SELECT countIf($col != '') FROM $DATABASE.$tbl" || echo 0)"
+      total="$(scalar "SELECT count() FROM $DATABASE.$tbl" || echo 0)"
+      if [[ "${total//[[:space:]]/}" != "0" && "${filled//[[:space:]]/}" == "0" ]]; then
+        die "V1b FAILED — $tbl.$col is EMPTY in all $total rows, but the source CSV
+provides it:  $csv
+The loader wrote nothing into it. Usual cause is a STALE binary built before the
+column existed:
+  strings ingest/bin/sonyliv-ingest | grep -c '^$col\$'
+  cd ingest && go build -o bin/sonyliv-ingest ./cmd/sonyliv-ingest
+Then TRUNCATE $DATABASE.$tbl and reload -- existing rows cannot be back-filled."
+      fi
+      pass "V1b $tbl.$col populated ($filled of $total rows)"
+    done
+  fi
 
   # V2 — the dictionary is loaded AND non-empty on EVERY replica. A dictionary
   # is the only per-replica object here, and an empty one reports LOADED, so
