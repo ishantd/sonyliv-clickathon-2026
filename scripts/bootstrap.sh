@@ -184,11 +184,19 @@ ensure_dictionary_loaded() {
     empty="$(scalar "SELECT countIf(element_count = 0) FROM clusterAllReplicas(default, system.dictionaries) WHERE database='$DATABASE' AND name='content_dict'" || echo '')"
     total="$(scalar "SELECT count() FROM clusterAllReplicas(default, system.dictionaries) WHERE database='$DATABASE' AND name='content_dict'" || echo '')"
 
-    if [[ -n "$empty" && "$empty" == "0" && -n "$total" && "$total" != "0" ]]; then
+    # Three distinct outcomes, and conflating them produces a misleading error.
+    if [[ -z "$total" || "$total" == "0" ]]; then
+      # Not "empty" -- ABSENT. system.dictionaries has no row for it on any
+      # replica, so 001 never created it or the name is wrong. Retrying a reload
+      # cannot fix that, so fail immediately rather than after 8 sleeps.
+      die "content_dict does not exist on any replica (system.dictionaries returned no rows).
+Re-run stage 1: ingest/sql/001_content.sql creates it."
+    fi
+    if [[ "$empty" == "0" ]]; then
       pass "content_dict loaded on all $total replica(s) (attempt $i)"
       return 0
     fi
-    info "content_dict empty on ${empty:-?} of ${total:-?} replica(s), retrying ($i/$attempts)"
+    info "content_dict empty on ${empty:-?} of ${total} replica(s), retrying ($i/$attempts)"
     sleep 2
   done
 
