@@ -149,6 +149,11 @@ func runIntervals(ctx context.Context, r *concurrency.Runner, full bool, dirtyCa
 		return nil, fmt.Errorf("read ingest watermark: %w", err)
 	}
 
+	// Captured BEFORE the workset is chosen, not after the pass finishes. A session
+	// dirtied while this pass is running must be picked up by the next one, and
+	// advancing lastPass to the finish time would skip it.
+	passStart := time.Now().UTC()
+
 	var keys []uint64
 	if !full {
 		keys, err = r.DirtySessions(ctx, *lastPass, dirtyCap)
@@ -160,12 +165,32 @@ func runIntervals(ctx context.Context, r *concurrency.Runner, full bool, dirtyCa
 			// reason — a quiet pass is the normal state of a live loop.
 			fmt.Printf("intervals  no sessions dirtied since %s, skipped\n",
 				lastPass.UTC().Format("15:04:05"))
-			*lastPass = time.Now().UTC()
+			*lastPass = passStart
 			return []uint64{}, nil
 		}
 		if len(keys) >= dirtyCap {
-			return nil, fmt.Errorf("%d sessions dirtied, at or above --dirty-cap %d: "+
-				"run once with --full rather than catching up in slices", len(keys), dirtyCap)
+			// lastPass is in-process state, so a RESTARTED loop starts at the zero
+			// time and asks for every session ever dirtied. With any backlog that
+			// is always at or above the cap, and the error used to return before
+			// lastPass advanced — so every subsequent tick asked the same question
+			// and got the same answer. The loop could never recover on its own, and
+			// --full did not help because it skipped this block and left lastPass
+			// zero too. Measured: 446,130 sessions queued against a cap of 50,000,
+			// wedged across restarts until the cap was raised by hand.
+			//
+			// On a cold start, promote to the full rebuild the error asks for
+			// instead of demanding a human do it. Intervals REPLACES each session's
+			// row, so a full pass is idempotent and safe to reach for. Mid-run the
+			// guard still fires: once lastPass is set, a spike this large means
+			// something abnormal and silently rebuilding everything would hide it.
+			if lastPass.IsZero() {
+				fmt.Printf("intervals  cold start with %d sessions queued (cap %d) — "+
+					"promoting to a full rebuild\n", len(keys), dirtyCap)
+				keys = nil // empty workset means every session
+			} else {
+				return nil, fmt.Errorf("%d sessions dirtied, at or above --dirty-cap %d: "+
+					"run once with --full rather than catching up in slices", len(keys), dirtyCap)
+			}
 		}
 	}
 
@@ -173,6 +198,9 @@ func runIntervals(ctx context.Context, r *concurrency.Runner, full bool, dirtyCa
 	if err != nil {
 		return nil, err
 	}
+	// Set on every successful pass, including --full and the promoted cold start.
+	// Leaving it zero after a full pass was the second half of the wedge.
+	*lastPass = passStart
 	fmt.Println(st)
 	// The cursor is wall-clock, not the event watermark, because
 	// dirty_sessions.last_ingested_at records when a row was inserted rather than
