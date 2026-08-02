@@ -66,6 +66,8 @@ removable.** No object in this database is orphaned.
 | `concurrency_day_anchor` | SharedReplacingMergeTree | 430,584 | Level at each UTC midnight. Base term of a windowed peak. |
 | `concurrency_deltas_to_bucket_mv` | MaterializedView | — | Only writer of `concurrency_bucket_net`. |
 | `content_dim` / `content_current` / `content_dict` | RMT / View / Dictionary | 33,464 | Catalogue. `content_dict` is the enrichment path. |
+| `concurrency_minute_versions` | SharedMergeTree | 272,070 | **Flat minute tier — start here for dashboards.** One row per (minute, mask, dims), `minute_peak` and `active_entity_ms` precomputed. Deployed 2026-08-02. |
+| `concurrency_minute_mask13` | View | — | Mask 13 (platform+content+video_type) off the above, at zero storage cost. |
 | `session_live_state` | SharedAggregatingMergeTree | 10,848 | The deployed answer to "who is live now". |
 | `events_raw_to_clean_mv`, `events_raw_to_dirty_mv` | MaterializedView | — | Sole writers of `events_clean` and `dirty_sessions`. |
 
@@ -81,15 +83,16 @@ removable.** No object in this database is orphaned.
 
 ### Tier 3 — in the repo, **not deployed** on the service
 
-`session_live_now` + `events_clean_to_live_mv` (`pipeline/sql/030`),
-`concurrency_minute_versions` + `concurrency_minute_mask13` (`pipeline/sql/040`).
+`session_live_now` + `events_clean_to_live_mv` (`pipeline/sql/030`) — the designed
+live path. `policy.yaml` names 030, not 020/022, as the authoritative live
+implementation, so today's live answer comes from `session_live_state` while the
+designed one sits unapplied.
 
-**This matters for ClickStack.** `concurrency_minute_versions` is the flat,
-one-row-per-minute read surface — the thing that makes a dashboard or a
-text-to-SQL layer answerable without writing a day-anchored cumulative sum. It
-exists in SQL and is verified in `pipeline/sql/041_minute_verify.sql`, but it has
-never been applied to the service. **If ClickStack wants a simple read surface,
-deploying 040 is the highest-value next step.**
+> `pipeline/sql/040` **was deployed on 2026-08-02** and is now Tier 1 — see
+> `concurrency_minute_versions` above and the flat read in §5.7. Two syntax
+> defects had to be fixed first; 030 still carries one of them (a `COMMENT` split
+> across adjacent string literals, which ClickHouse parses as an error, not a
+> concatenation). That is fixed in the file now but 030 has still never run.
 
 ---
 
@@ -385,6 +388,50 @@ Verified output:
 Note the instants. **Slice peaks do not coincide with the global peak and do not
 sum to it** (2,388 vs 2,305). Any dashboard that adds slice peaks is wrong.
 
+### 5.7 The flat read — use this one for ClickStack
+
+Everything above sweeps boundaries. Since 040 was deployed, peak and average are
+one `max()` and one `sum()` over a precomputed minute table. No window function,
+no cumsum, nothing to get subtly wrong.
+
+```sql
+SELECT max(minute_peak)                                          AS peak_concurrency,
+       sum(active_entity_ms) / dateDiff('millisecond',
+           {from:DateTime64(3,'UTC')}, {to:DateTime64(3,'UTC')}) AS avg_concurrency
+FROM sonyliv.concurrency_minute_versions
+WHERE generation = 1
+  AND policy_version = 'sonyliv-active-v1'
+  AND entity      = 'session'
+  AND rollup_mask = 0
+  AND minute_start >= {from:DateTime64(3,'UTC')}
+  AND minute_start <  {to:DateTime64(3,'UTC')};
+-- 10:00-11:00 on 2026-07-26 -> 2305 and 855.5781994444444, one granule, 5.7 ms
+```
+
+Both numbers match §5.2 and §5.3 exactly. Prefer this for every panel; keep the
+boundary sweeps for auditing it.
+
+**Pin `generation`.** The sort key leads with it and the table is a plain
+MergeTree, not Replacing — a second build writes a *new* generation alongside the
+old one. A query without `generation =` sums across builds. Today only
+generation 1 exists.
+
+**Re-running the producer at the same generation doubles the average, not the
+peak.** Duplicate rows leave `max(minute_peak)` at 2,305 — looking perfectly
+healthy — while `sum(active_entity_ms)` doubles. It is the inverse of the
+SummingMergeTree failure in trap 2, and just as quiet. C4 in
+`041_minute_verify.sql` is what catches it. Bump the generation instead.
+
+**One known, benign disagreement.** `041`'s C3 compares `ending_concurrency`
+against a cumsum over `concurrency_deltas` and comments "expect 0". On the
+deployed table it returns **9** — all nine masks at the single minute
+`2026-07-26 10:39`, each off by exactly 1. Cause: one interval ends precisely on
+a minute boundary. `ending_concurrency` measures the level *at* `minute_end` and
+correctly excludes it under `[start, end)`; the cumsum measures the level *just
+before* `minute_end` and still counts it. Different instants, both right. The
+producer is correct and C3's expectation is what is mis-specified. Peak and
+average are unaffected — C4 is exact to the millisecond.
+
 ---
 
 ## 6. Traps
@@ -489,11 +536,12 @@ individually — all 18 are correct under the policy:
   running-sum-from-epoch appears to answer both and scales for neither: a prefix
   sum reads from t=0 by construction, and no sort key, skip index or projection
   prunes it.
-- **Consider deploying `pipeline/sql/040_concurrency_minute.sql` first.** It gives
-  one flat row per (minute, mask, dims) with `minute_peak` and `active_entity_ms`
-  already computed — no window functions, no day-anchored cumsum. That is a far
-  better target for dashboard panels and for any text-to-SQL layer. It is written
-  and verified but **not applied to the service**.
+- **Build panels on `concurrency_minute_versions` (§5.7).** Deployed 2026-08-02:
+  272,070 rows, one flat row per (minute, mask, dims) with `minute_peak` and
+  `active_entity_ms` already computed. `max()` + `sum()`, no window function, no
+  day-anchored cumsum — 5.7 ms and a single granule for an hour-wide query. This
+  is the surface a text-to-SQL layer can actually be trusted with. Always pin
+  `generation`.
 - **Sort keys, for predicate ordering.** All four `concurrency_*` tables lead with
   `(policy_version, clip_variant, rollup_mask, platform, country, content_id,
   video_type, <time>)`. Filter left-to-right; a predicate on `boundary_ts` alone

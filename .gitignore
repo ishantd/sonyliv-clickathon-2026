@@ -29,6 +29,10 @@ venv/
 # Logs
 *.log
 
+# clickhouse-client, installed at the repo root by `curl https://clickhouse.com/ | sh`.
+# 664 MB — never commit it.
+/clickhouse
+
 # Local tooling state
 ruvector.db
 
