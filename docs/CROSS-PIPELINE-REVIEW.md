@@ -137,6 +137,9 @@ pattern would drop onto `concurrency_minute_versions` directly if you partition 
 instead of month, and it removes the doubling class of failure entirely rather than guarding
 against it.
 
+That said, we have since measured our own approach hitting a wall of its own, and §8 proposes
+what we think is the better answer for *both* pipelines. Read §8 before copying our pattern.
+
 ## 4. `video_type` and `category` are free wherever `content_id` is present
 
 You already use this dependency for `concurrency_minute_mask13` (mask 13 ≡ mask 5). It
@@ -199,6 +202,128 @@ Absent from `system.tables`. Your §2 calls deploying `040` "the highest-value n
 §8 repeats it. Without it the cheapest correct dashboard read is the day-anchored cumulative
 sum, which we measured at **57,346 rows / 1.62 MiB / 28 ms** against **8,192 rows / 144 KiB /
 4 ms** for a flat minute table answering the identical question. Read volume is judged.
+
+---
+
+## 8. Suggested design change: make a correction *sparse*, for both of us
+
+This is the one place we think both pipelines are wrong in the same way, and it is worth more
+than anything else in this document.
+
+### The problem, measured on our side
+
+Our minute layer rebuilds a **whole UTC day** into a staging table and swaps it with
+`ALTER TABLE … REPLACE PARTITION`. That swap is atomic and idempotent, and it is what lets our
+read view work without `FINAL`. But the partition is a day, so a day is also the *minimum*
+rebuild. Publishing one new minute rewrites every minute since midnight:
+
+| UTC hour | avg build | rows rewritten per cycle |
+|---:|---:|---:|
+| 20:00 | 682 ms | 28,599 |
+| 21:00 | 949 ms | 28,452 |
+| 22:00 | 1,460 ms | 92,555 |
+| 23:00 | **2,547 ms** | **146,922** |
+
+At 23:00 it rewrites ~147,000 rows to publish about one minute of new information — roughly
+1,400× write amplification, growing linearly until midnight resets it.
+
+Your `concurrency_minute_versions` has the same property arrived at differently. `generation`
+leads the `ORDER BY` on a plain `MergeTree`, so a read pins one generation and sees only rows
+written at it. Your own note states the consequence:
+
+> Corrections must write a **complete** generation, never a sparse patch — a sparse correction
+> makes every uncorrected minute vanish from the answer.
+
+So on both sides, correcting one session costs a full rewrite of the correction unit — a day
+for us, a generation for you. Neither is proportional to what actually changed.
+
+### The proposal
+
+Key on the dimension tuple **plus** `minute_start`, and make the generation the *version*
+rather than part of the identity:
+
+```sql
+CREATE TABLE sonyliv.concurrency_minute_versions
+(
+    policy_version   LowCardinality(String),
+    clip_variant     Enum8('unclipped' = 1, 'clipped' = 2),   -- see §1
+    entity           Enum8('session' = 1, 'user' = 2),
+    rollup_mask      UInt16,
+    service_date     Date,
+    minute_start     DateTime64(3, 'UTC'),
+    platform         LowCardinality(String),
+    country          LowCardinality(String),
+    video_type       LowCardinality(String),
+    content_id       Int64,
+    generation       UInt64,        -- version, NOT identity
+    minute_peak      UInt64,
+    active_entity_ms UInt64,
+    ending_concurrency UInt64,
+    source_boundary_points UInt64
+)
+ENGINE = ReplacingMergeTree(generation)
+PARTITION BY toYYYYMMDD(service_date)      -- day, not month: bounds any rewrite you do want
+ORDER BY (policy_version, clip_variant, entity, rollup_mask,
+          service_date, platform, country, video_type, content_id, minute_start);
+```
+
+A correction then becomes: recompute only the minutes the changed sessions touch, insert them
+at a higher `generation`, done. Cost is proportional to **changed minutes**, not to elapsed
+day or to the size of a generation. Nothing is truncated, nothing is swapped, and a partial
+write is not a correctness hazard — it is just a smaller correction.
+
+### What it buys
+
+- **Sparse corrections become legal**, which removes the silent footgun in your own note. A
+  patch that covers only the affected minutes is now the *correct* thing to write.
+- **§2 disappears.** Readers stop pinning `generation`, `pipeline_run_id` and
+  `source_delta_snapshot` entirely — they read current state. There is nothing to discover, so
+  there is no need for a discovery table, and no wrong-pin-returns-empty failure mode.
+- **§1's doubling becomes structurally impossible.** Re-running the producer at the same or a
+  higher generation *replaces* rather than accumulating. This is the failure that cost a day
+  on 2026-08-01 and that your C9 check cannot see, because `max()` is idempotent under
+  duplication.
+- **Write amplification collapses** from O(minutes elapsed) to O(minutes changed).
+
+### What it costs — stated honestly, because it is not free
+
+`sum(active_entity_ms)` becomes wrong without deduplication: two generations of the same key
+both count until parts merge, and merges are asynchronous. So the additive columns need
+`FINAL`, or a view doing `argMax(…, generation) … GROUP BY key`.
+
+Two mitigations worth knowing:
+
+- **`max(minute_peak)` is safe without `FINAL`.** Duplicates cannot raise a maximum, so peak
+  queries — the headline metric — pay nothing.
+- **`FINAL` here is cheap for the reason your contract already gives for
+  `concurrency_day_anchor`**: reads are prefix-bounded by the sort key
+  (`policy_version, clip_variant, entity, rollup_mask, …`), so `FINAL` merges a narrow range
+  rather than the table. This is not the unbounded `FINAL` your contract rightly warns about.
+
+Net trade: give up `FINAL`-free additive reads, gain sparse corrections, kill the doubling
+class outright, and drop generation pinning. On a scored axis called "incremental update
+handling" we think that trade is clearly right, and we are making it on our side too.
+
+### Two traps if you take this
+
+1. **The sort key IS the dedup key.** Adding a dimension column later without adding it to
+   `ORDER BY` silently collapses rows that should be distinct — no error, just a smaller
+   answer. We have hit this. `ORDER BY` is immutable, so the key has to be right on the first
+   write.
+2. **This makes §1 strictly worse if unfixed.** Without `clip_variant` in the key, the two
+   variants share a key and one would silently *overwrite* the other. Under the current
+   `MergeTree` the same omission doubles; under `ReplacingMergeTree` it halves. Both are
+   silent, and neither is recoverable after the fact. Fix §1 before adopting §8.
+
+### The equivalent fix for `concurrency_deltas`
+
+The same idea, adapted for `SummingMergeTree`, where you cannot replace a row: **retraction**.
+When a session's intervals change, emit compensating negative boundaries cancelling the
+superseded `state_revision`, then the new ones. The sum stays exact, no `TRUNCATE` is needed,
+and cost is proportional to changed sessions. You already retain every revision in
+`active_intervals`, so the prior state needed to cancel is available — this is the standard
+incremental pattern for a Summing table, and it is what would let you claim incremental
+correction end to end rather than only at the interval layer.
 
 ---
 
