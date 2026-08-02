@@ -241,6 +241,92 @@ WHERE database = 'system' AND name LIKE '%log\_%' ORDER BY name, hostName();
 De-duplicate on `(hostname, event_time)` when unioning — `clusterAllReplicas` can return
 the same row from both replicas' copies.
 
+### An output alias shadows the column it filters on, silently
+
+`toUInt16(13) AS rollup_mask ... WHERE rollup_mask = 5` in one query level does
+**not** filter the stored column — the alias wins, the predicate becomes `13 = 5`,
+and the result is **zero rows with no error**. This shipped: the deployed
+`concurrency_minute_mask13` returned 0 against 85,553 mask-5 rows in its source.
+Isolated on the service against the same data:
+
+```
+toUInt16(13) AS rollup_mask + WHERE rollup_mask = 5   ->      0
+output alias renamed                                  -> 85,553
+WHERE pushed into a subquery                          -> 85,553
+```
+
+Put the filter in a subquery when a projection alias reuses a source column name.
+And assert derived views are non-empty while their source is not — that is a
+reference-free check and it is the only reason this was found (`041` G6).
+
+### Adjacent string literals are a parse error, so a `throwIf` message must be ONE literal
+
+ClickHouse has no C-style implicit concatenation. This:
+
+```sql
+throwIf(cond,
+  'part one '
+  'part two')
+```
+
+is `Code: 62. Syntax error`, not a joined string. **Every gate in `041` was written
+this way and had therefore never executed** — the 272,070-row minute tier was
+deployed with none of its verification firing, including the check its own header
+called "the only reference-free check". Write one long literal (as `011` and `022`
+already do) or use `concat()`. Detect the pattern with:
+
+```bash
+python3 - <<'PY'
+import re, glob
+for f in glob.glob('**/*.sql', recursive=True):
+    lines = open(f).read().split('\n')
+    for i, l in enumerate(lines):
+        if not re.fullmatch(r"\s+'.*'\s*", l): continue
+        j = i - 1
+        while j >= 0 and (not lines[j].strip() or lines[j].strip().startswith('--')): j -= 1
+        if j >= 0 and lines[j].rstrip().endswith("'"): print(f"{f}:{i+1}")
+PY
+```
+
+The generalisable rule: **a verification file that has never been executed is worse
+than no verification**, because its presence is read as coverage. Run it, break
+something on purpose, and confirm the gate fires.
+
+### 26.2 does not push a filter through a `Window` step, even when the predicate is in the `PARTITION BY`
+
+Replacing an `IN (SELECT … GROUP BY …)` revision-resolution with
+`max(rev) OVER (PARTITION BY policy_version, clip_variant, session_key)` looks like
+it should let a `policy_version`/`clip_variant` predicate prune, since both are in
+the `PARTITION BY`. It does not: `EXPLAIN indexes = 1` shows `Condition: true`,
+`Granules: 8/8`, with the `Filter` node **above** the `Window`, plus an added full
+`Sorting` step. Measured 63,894 rows against a 32,768 prefix-bounded floor.
+
+### Aggregate projections work on classic SharedMergeTree, and they can serve an `IN`-subquery
+
+A normal view is inlined, so a caller's predicate pushes into the view's **outer**
+scan — but nothing pushes it into an `IN (SELECT … GROUP BY …)` subquery, which
+therefore scans the whole table on every read. `active_intervals_current` read
+**96,662 rows to return 31,947** (= 63,894 unprunable inner + 32,768 pruned outer)
+against a 32,768 floor.
+
+An aggregate projection whose body is *exactly* the subquery is substituted for it:
+`ReadFromMergeTree (active_intervals) Granules 8/8` becomes
+`ReadFromMergeTree (proj_session_revision) Granules 3/8`. Confirm with
+`force_optimize_projection = 1` — and always pair it with a negative control, since
+an unrelated aggregate must throw `PROJECTION_NOT_USED` or the test proves nothing.
+
+Eligibility splits the schema. `deduplicate_merge_projection_mode = throw` blocks
+`ADD PROJECTION` on Replacing/Summing/Aggregating; of the 13 MergeTree tables in
+`sonyliv`, **6 are eligible** (`active_intervals`, `concurrency_minute_versions`,
+`events_raw`, `dirty_sessions`, `ingest_batches`, `ingest_rejects`) and **7 are
+blocked**. Note the consequence for any redesign: turning a classic table into a
+`ReplacingMergeTree` **forfeits projections on it**.
+
+(`min_table_rows_to_use_projection_index` and
+`max_projection_rows_to_use_projection_index` live in `system.settings`, not
+`system.merge_tree_settings` — both 1,000,000. Querying the wrong table returns zero
+rows and reads as "the setting does not exist".)
+
 ### A conflict check against a ReplacingMergeTree is a tautology
 
 Checking for duplicate keys that disagree on payload returns zero trivially once
