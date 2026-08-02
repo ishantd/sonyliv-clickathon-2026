@@ -316,7 +316,9 @@ SELECT
     -- With '__unknown__', `countIf(video_type = '__unknown__') > 0` is a valid alarm.
     -- '' is no good either: masks store '' for unselected dimensions, so it is
     -- ambiguous between "not carried by this mask" and "dictionary missed".
-    dictGetOrDefault({{db}}.content_dict, 'title',      tuple(content_id), '')            AS title,
+    -- Always carries content (mask 4), so there is no "not carried" case here and
+    -- an unresolved id is the only reason to be empty. Name it.
+    dictGetOrDefault({{db}}.content_dict, 'title',      tuple(content_id), '__unknown__') AS title,
     dictGetOrDefault({{db}}.content_dict, 'video_type', tuple(content_id), '__unknown__') AS video_type,
     dictGetOrDefault({{db}}.content_dict, 'category',   tuple(content_id), '__unknown__') AS category,
     bucket_peak,
@@ -340,7 +342,18 @@ SELECT
     if(empty(dim_label), 'all', dim_label) AS dim_values,
     dim_mask,
     content_id,
-    if(content_id = 0, '', dictGetOrDefault({{db}}.content_dict, 'title', tuple(content_id), '')) AS title,
+    -- Two different absences, two different values, and tiles depend on the
+    -- difference. '' means this row's mask does not carry a content dimension at
+    -- all. '__unknown__' means it does, but the id did not resolve — either
+    -- missing from the catalogue or a cold-replica dictionary.
+    --
+    -- Before this, both were '', so the leaderboard's `title != ''` predicate --
+    -- there to drop rows that carry no content -- ALSO dropped real viewing of
+    -- unresolvable titles, silently and with no row count to reveal it. Zero rows
+    -- on this extract (all 3,352 titles resolve, all 1,779.50 viewer-hours kept),
+    -- but the unseen day has a fresh catalogue and no such guarantee.
+    if(content_id = 0, '',
+       dictGetOrDefault({{db}}.content_dict, 'title', tuple(content_id), '__unknown__')) AS title,
     platform,
     country,
     app_version,

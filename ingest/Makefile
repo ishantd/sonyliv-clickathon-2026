@@ -61,8 +61,21 @@ rollup-live: build
 	$(BIN)/sonyliv-ingest concurrency --layer live --loop 10s
 
 ## rollup-check: assert the serving layers against the canonical measured figures
+#
+# GATING. 090 emits one row per invariant with its own verdict, which prints
+# beautifully and, until now, always exited 0 -- so a FAIL was something a human
+# had to notice. That is the same defect that left the sibling pipeline's gates
+# unexecuted for a whole deployment: a check that cannot fail a build is
+# documentation, not a check. The table is still printed in full, because which
+# invariant broke matters more than that one did.
 rollup-check:
-	./concurrency/ch.sh --file concurrency/sql/090_validate_serving.sql --format PrettyCompactMonoBlock
+	@out=$$(./concurrency/ch.sh --file concurrency/sql/090_validate_serving.sql --format PrettyCompactMonoBlock); \
+	 printf '%s\n' "$$out"; \
+	 if printf '%s' "$$out" | grep -q 'FAIL'; then \
+	   echo; echo "rollup-check: FAILED -- $$(printf '%s' "$$out" | grep -c 'FAIL') invariant(s) above"; exit 1; \
+	 else \
+	   echo; echo "rollup-check: all invariants pass"; \
+	 fi
 
 ## clickstack: create or update the ClickStack connection, sources and dashboards
 clickstack:

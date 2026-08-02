@@ -351,6 +351,71 @@ WITH
             min_baseline = 25, persist_minutes = 1)
     ),
 
+    -- ---------------------------------------------------------------------
+    -- Is video_resolution session-static? This DECIDES whether it may ever be
+    -- a serving mask, and it is a question, not an assertion.
+    --
+    -- policy.yaml names five session_static dimensions and deliberately excludes
+    -- audio_language, subtitle_language and player_version from serving masks,
+    -- because a session that changes the value does not belong to exactly one
+    -- slice -- which breaks ending_concurrency's additivity and makes a per-slice
+    -- peak ill-defined. Measured violations there: 8,796 / 2,980 / 1,600 sessions.
+    --
+    -- video_resolution arrives with the unseen day and is defined as "resolution
+    -- DURING video playback", which adaptive bitrate changes mid-session by
+    -- design. So the prior is that it belongs with the excluded three, not with
+    -- app_version (0 violations). This check settles it on real data rather than
+    -- on the prior, and it PASSES either way: a non-zero count is information,
+    -- not a failure. What would be a failure is materialising a mask on the
+    -- assumption and reporting a wrong peak.
+    d_resolution_static AS
+    (
+        SELECT
+            'INVARIANT',
+            'video_resolution: session-static? (decides mask eligibility)',
+            'informational -- report, never fail',
+            if(count() = 0,
+               'no video_resolution data yet; unseen day not loaded',
+               concat(toString(countIf(distinct_resolutions > 1)), ' of ',
+                      toString(count()), ' sessions change resolution mid-session',
+                      ' -> ', if(countIf(distinct_resolutions > 1) = 0,
+                                 'ELIGIBLE as a session dimension',
+                                 'NOT eligible; treat like audio_language'))),
+            1
+        FROM
+        (
+            SELECT session_key, uniqExact(video_resolution) AS distinct_resolutions
+            FROM {{db}}.events_dedup
+            WHERE video_resolution != ''
+            GROUP BY session_key
+        )
+    ),
+
+    -- ---------------------------------------------------------------------
+    -- The dictionary-miss alarm the '__unknown__' sentinel exists to enable.
+    --
+    -- Dictionaries load per replica and an EMPTY one still reports LOADED, so a
+    -- query routed to a cold replica silently returns the fallback for every row
+    -- and then self-heals -- gone by the time anyone looks. '__unknown__' cannot
+    -- occur in the catalogue ('unknown' can, and does, on 1,089 titles), so this
+    -- count is zero when healthy and non-zero only on a real miss.
+    --
+    -- Scoped to rows that CARRY a content dimension: at masks without one the
+    -- title is legitimately '' and no lookup was attempted.
+    d_dict_resolves AS
+    (
+        SELECT
+            'INVARIANT',
+            'content_dict resolves every id it is asked about',
+            '0 unresolved lookups',
+            concat(toString(countIf(title = '__unknown__')), ' unresolved of ',
+                   toString(count()), ' content-carrying rows'),
+            countIf(title = '__unknown__') = 0
+        FROM {{db}}.serving_minute_current
+        WHERE grouping IN ('content', 'platform + content', 'all dimensions')
+          AND minute_start >= hot_h0 AND minute_start < hot_h1
+    ),
+
     -- Absence of data must read as zero, not as nothing. Traffic stops dead at 11:30 on
     -- 2026-07-26, so 11:31 onward have no source rows at all; the grid plus LEFT JOIN is
     -- what turns them into a breach instead of an empty result set that no threshold can
@@ -391,6 +456,8 @@ FROM
     UNION ALL SELECT * FROM i_watermark
     UNION ALL SELECT * FROM d_alignment
     UNION ALL SELECT * FROM d_absence
+    UNION ALL SELECT * FROM d_resolution_static
+    UNION ALL SELECT * FROM d_dict_resolves
 )
 -- FAIL sorts before PASS, so anything wrong is the first thing on screen.
 ORDER BY verdict, kind DESC, check
