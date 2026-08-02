@@ -158,6 +158,10 @@ func (s *Server) Handler() http.Handler {
 	// same serving-layer views. Named panels only -- see analytics.go for why a
 	// ?sql= parameter is not offered.
 	api.HandleFunc("GET /api/analytics", s.handleAnalyticsList)
+	// Registered BEFORE the wildcard: Go 1.22 routing prefers the more specific
+	// literal pattern, but stating the order keeps a reader from having to know
+	// that to be sure /api/analytics/dimensions is not a panel named "dimensions".
+	api.HandleFunc("GET /api/analytics/dimensions", s.handleAnalyticsDimensions)
 	api.HandleFunc("GET /api/analytics/{panel}", s.handleAnalytics)
 
 	mux.Handle("/api/", s.cors(s.auth(api)))
@@ -261,7 +265,7 @@ func (s *Server) handleSimStatus(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleCurve(w http.ResponseWriter, r *http.Request) {
 	minutes, _ := strconv.Atoi(r.URL.Query().Get("minutes"))
-	db, err := resolveDatabase(r.URL.Query().Get("db"), s.client.Database)
+	db, err := s.resolveDatabase(r.Context(), r.URL.Query().Get("db"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return

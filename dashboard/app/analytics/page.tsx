@@ -2,165 +2,90 @@
 
 import { useMemo, useState } from "react";
 import useSWR from "swr";
-import { ConcurrencyLine, RankedBar } from "@/components/Charts";
-import { ErrorNote, Panel, Stat, StatGrid } from "@/components/ui";
+import { ChartLegend, ConcurrencyLine, RankedBar } from "@/components/Charts";
+import { FilterBar } from "@/components/FilterBar";
+import { PanelFrame } from "@/components/PanelFrame";
+import { ErrorNote } from "@/components/ui";
+import {
+  asNum,
+  asStr,
+  col,
+  panelQuery,
+  useDimensionValues,
+  usePanel,
+  windowParams,
+  type Filter,
+  type Meta,
+  type PanelResponse,
+} from "@/lib/analytics";
 import { fetcher } from "@/lib/api";
 import { useDataset } from "@/lib/dataset";
+import { clock, count, decimal, stamp } from "@/lib/format";
 
 /**
- * The ClickStack dashboards, served from this box.
+ * Concurrency analytics: the answer, its slices, and its working.
  *
- * WHY REPRODUCE THEM. ClickStack is queries over ClickHouse, and this app already
- * talks to the same ClickHouse through the Go service. Linking out costs a login,
- * and managed ClickStack has no stable deep link — the documented route is
- * console -> service -> ClickStack -> Launch, which redirects through an
- * authenticated handoff. A demo tab that lands on a login page is not a demo tab.
+ * WHAT THIS PAGE IS FOR. The track's brief asks for a concurrency curve computed
+ * from the dataset, filters over the dataset's own dimensions applied to that
+ * curve and to every other view, and the ClickHouse queries behind them. All
+ * three are here, in that order of prominence, because that is their order of
+ * importance: the curve is the answer, the filters are how you interrogate it,
+ * and the SQL under each panel is why you should believe it.
  *
- * Every panel here reads the same serving-layer views the ClickStack tiles read,
- * so a number on this page and a number on that one come from one definition.
- * Cross-checked against the sibling pipeline's own published figures: this page
- * reports ANDROID_PHONE peaking at 1,461 at 10:55, which is what
- * docs/TABLE-CONTRACT.md section 5.6 reports from an independent query path.
+ * WHY THE PANELS ARE NOT ALL THE SAME SIZE. The curve is not one of six equal
+ * cards — it is the thing the page is about, so it gets the full width, twice the
+ * height and the headline readout in its own header. The breakdowns beneath it
+ * are peers of each other and are laid out as peers. A grid of identically-sized
+ * cards would say all seven answers matter equally, which is not true.
+ *
+ * Every panel reads the same serving-layer views the ClickStack tiles read, so a
+ * number on this page and a number on that one come from one definition.
  */
 
-type PanelResponse = {
-  panel: string;
-  title: string;
-  unit: string;
-  database: string;
-  from: string;
-  to: string;
-  columns: string[];
-  rows: unknown[][];
-  error?: string;
-};
-
-type Window = {
-  key: string;
-  label: string;
-  from: string;
-  to: string;
-  rel_minutes?: number;
-};
-
-type Database = {
-  name: string;
-  label: string;
-  note: string;
-  windows: Window[];
-};
-
-type Meta = { databases: Database[]; default: string };
-
-/*
- * Databases and their windows come from the server, not from here.
- *
- * The list is hardcoded — in Go, in analytics.go, where it is also the security
- * boundary: the chosen name is interpolated into panel SQL as a schema identifier,
- * which cannot be a bound parameter, so only an allowlist makes it safe. Restating
- * the options in the browser would be a second copy of a security-relevant list,
- * and the copy that drifts is the one nobody can see from the server.
- *
- * Windows are per-database for a reason worth keeping: they are not cosmetic. The
- * extract's interesting hour is 26 July; the unseen day's is 31 July. Carrying one
- * shared window list across a database switch would leave the chart empty and read
- * as broken, when in fact the data is simply somewhere else on the timeline.
- */
-function windowParams(w: Window): string {
-  if (w.rel_minutes) {
-    const to = new Date();
-    const from = new Date(to.getTime() - w.rel_minutes * 60_000);
-    const fmt = (d: Date) => d.toISOString().slice(0, 19).replace("T", " ");
-    return `from=${encodeURIComponent(fmt(from))}&to=${encodeURIComponent(fmt(to))}`;
-  }
-  return `from=${encodeURIComponent(w.from)}&to=${encodeURIComponent(w.to)}`;
-}
-
-/** Column index by name, so a reordered SELECT cannot silently mis-plot a series. */
-function col(r: PanelResponse, name: string): number {
-  const i = r.columns.indexOf(name);
-  if (i < 0) throw new Error(`panel ${r.panel} has no column ${name}`);
-  return i;
-}
-const num = (v: unknown) => (typeof v === "number" ? v : Number(v) || 0);
-const str = (v: unknown) => (v == null ? "" : String(v));
-
-/** One panel's fetch + its loading/error/empty states, so no chart renders a lie. */
-function usePanel(name: string, db: string | null, params: string | null, cap = 500) {
-  // Null key holds the request until the database and window are known. Fetching
-  // without a db would render the server's default and then swap under the reader
-  // — briefly showing one dataset's numbers under another's label.
-  const key = db && params ? `/api/analytics/${name}?db=${db}&${params}&cap=${cap}` : null;
-  const { data, error, isLoading } = useSWR<PanelResponse>(key, fetcher, {
-    keepPreviousData: true,
-    revalidateOnFocus: false,
-  });
-  return {
-    data,
-    // Two failure modes, kept apart: the request failed (no data at all) versus the
-    // query failed (data with an error field). The second still carries the panel's
-    // title and window, so the card can say which panel broke.
-    transport: error ? String(error) : undefined,
-    query: data?.error,
-    isLoading,
-  };
-}
-
-function PanelCard({
-  title,
-  children,
-  transport,
-  query,
-  isLoading,
-  empty,
-  note,
+/** One measurement in the hero's readout row. */
+function Readout({
+  label,
+  value,
+  hint,
+  tone = "plain",
 }: {
-  title: string;
-  children: React.ReactNode;
-  transport?: string;
-  query?: string;
-  isLoading: boolean;
-  empty: boolean;
-  note?: string;
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "plain" | "accent" | "muted";
 }) {
+  const color = {
+    plain: "text-ink",
+    accent: "text-accent",
+    muted: "text-ink-3",
+  }[tone];
   return (
-    <Panel title={title}>
-      {transport ? (
-        <ErrorNote error={transport} />
-      ) : query ? (
-        <ErrorNote error={query} />
-      ) : isLoading ? (
-        <p className="py-8 text-center text-[0.8125rem] text-ink-3">loading…</p>
-      ) : empty ? (
-        // Not an error, and said so. On the serving layer an empty window usually
-        // means the minute layer has not published it yet, which is a different
-        // fact from "no viewers" and the two must not look alike.
-        <p className="py-8 text-center text-[0.8125rem] text-ink-3">
-          No published rows in this window.
-        </p>
-      ) : (
-        children
-      )}
-      {note && !transport && !query ? (
-        <p className="mt-2 text-[0.6875rem] leading-relaxed text-ink-3">{note}</p>
-      ) : null}
-    </Panel>
+    <div className="min-w-0" title={hint}>
+      <div className="eyebrow text-ink-3">{label}</div>
+      <div className={`tnum mt-0.5 font-mono text-lg leading-none ${color}`}>
+        {value}
+      </div>
+    </div>
   );
 }
 
 export default function AnalyticsPage() {
-  const { data: meta, error: metaError } = useSWR<Meta>("/api/analytics", fetcher, {
-    revalidateOnFocus: false,
-  });
+  const { data: meta, error: metaError } = useSWR<Meta>(
+    "/api/analytics",
+    fetcher,
+    { revalidateOnFocus: false },
+  );
 
   // The dataset is chosen in the nav and shared by every page, so this one reads
-  // it rather than owning it. The window stays local: it is meaningful only here.
+  // it rather than owning it. The window and the filter stay local: they are
+  // meaningful only here.
   //
-  // Both are resolved against the server's list on every render rather than stored
-  // as objects, so a dataset switch cannot leave a window pinned to the previous
-  // one — the single bug this feature must not have.
+  // All three are resolved against the server's lists on every render rather than
+  // stored as objects, so a dataset switch cannot leave a window pinned to the
+  // previous one — the single bug this feature must not have.
   const dbName = useDataset();
   const [winKey, setWinKey] = useState<string | null>(null);
+  const [filter, setFilter] = useState<Filter>({});
 
   const db =
     meta?.databases.find((d) => d.name === dbName) ??
@@ -174,254 +99,460 @@ export default function AnalyticsPage() {
   const win = db?.windows.find((w) => w.key === winKey) ?? db?.windows[0] ?? null;
 
   // Clearing on a dataset change is what makes the fallback above land on the NEW
-  // dataset's first window. Keyed on the name rather than an effect, so it happens
-  // during render and no frame is painted with the previous dataset's window.
+  // dataset's first window, and what stops a filter selected on one dataset from
+  // silently narrowing another. Keyed on the name rather than run in an effect, so
+  // it happens during render and no frame is painted with the previous dataset's
+  // selection.
   const [seenDb, setSeenDb] = useState<string | null>(null);
   if (db && db.name !== seenDb) {
     setSeenDb(db.name);
     if (winKey !== null) setWinKey(null);
+    if (Object.keys(filter).length) setFilter({});
   }
 
-  // Recomputed only when the window changes, so a relative window does not produce
-  // a new URL on every render and re-fetch forever.
-  const params = useMemo(() => (win ? windowParams(win) : null), [win]);
-  const dbKey = db?.name ?? null;
+  // Recomputed only when the window or the filter changes, so a relative window
+  // does not produce a new URL on every render and re-fetch forever.
+  const bounds = useMemo(() => (win ? windowParams(win) : null), [win]);
+  const q = useMemo(() => {
+    if (!db || !bounds) return null;
+    return (cap: number) =>
+      panelQuery({ db: db.name, from: bounds.from, to: bounds.to, cap, filter });
+  }, [db, bounds, filter]);
 
-  const curve = usePanel("concurrency", dbKey, params, 5000);
-  const platform = usePanel("platform_peak", dbKey, params, 12);
-  const vtype = usePanel("video_type_hours", dbKey, params, 8);
-  const category = usePanel("category_hours", dbKey, params, 12);
-  const titles = usePanel("top_titles", dbKey, params, 15);
-  const fresh = usePanel("freshness", dbKey, params, 8);
+  // The filter's own options follow the window, so a filter never offers a value
+  // that would produce an empty chart. Unfiltered, deliberately: the values are
+  // what you could narrow TO, and narrowing them by the current selection would
+  // make a filter impossible to change once set.
+  const dimQuery = useMemo(
+    () =>
+      db && bounds
+        ? panelQuery({ db: db.name, from: bounds.from, to: bounds.to, cap: 200, filter: {} })
+        : null,
+    [db, bounds],
+  );
+  const { values: dimValues } = useDimensionValues(dimQuery);
+
+  const curveQ = q ? q(5000) : null;
+  const barQ = q ? q(12) : null;
+  const titleQ = q ? q(15) : null;
+
+  const curve = usePanel("concurrency", curveQ);
+  const platform = usePanel("platform_peak", barQ);
+  const vtype = usePanel("video_type_hours", barQ);
+  const category = usePanel("category_hours", barQ);
+  const country = usePanel("country_hours", barQ);
+  const appver = usePanel("app_version_peak", barQ);
+  const titles = usePanel("top_titles", titleQ);
+  const fresh = usePanel("freshness", barQ);
 
   const curveData = useMemo(() => {
     const d = curve.data;
     if (!d || d.error || !d.rows.length) return null;
-    const iM = col(d, "minute"), iP = col(d, "peak"), iA = col(d, "average");
+    const iM = col(d, "minute");
+    const iP = col(d, "peak");
+    const iA = col(d, "average");
     return {
-      // Time only: the date is in the window selector and repeating it on every
-      // tick leaves no room for the ticks themselves.
-      labels: d.rows.map((r) => str(r[iM]).slice(11, 16)),
-      peak: d.rows.map((r) => num(r[iP])),
-      average: d.rows.map((r) => num(r[iA])),
+      // Time only on the axis: the date is in the window selector, and repeating
+      // it on every tick leaves no room for the ticks themselves.
+      labels: d.rows.map((r) => clock(asStr(r[iM]))),
+      stamps: d.rows.map((r) => asStr(r[iM])),
+      peak: d.rows.map((r) => asNum(r[iP])),
+      average: d.rows.map((r) => asNum(r[iA]) ?? 0),
     };
   }, [curve.data]);
 
   const headline = useMemo(() => {
     if (!curveData) return null;
-    const peak = Math.max(...curveData.peak);
+    let peak: number | null = null;
+    let peakAt = "";
+    curveData.peak.forEach((v, i) => {
+      if (v != null && (peak == null || v > peak)) {
+        peak = v;
+        peakAt = curveData.stamps[i];
+      }
+    });
     // Mean of the per-minute time-weighted averages, which for equal-length
     // minutes IS the window's time-weighted average. Not a mean of peaks, which
     // would be meaningless.
-    const avg = curveData.average.reduce((a, b) => a + b, 0) / curveData.average.length;
-    return { peak, avg, minutes: curveData.peak.length };
+    const avg =
+      curveData.average.reduce((a, b) => a + b, 0) / curveData.average.length;
+    return { peak: peak as number | null, peakAt, avg, minutes: curveData.peak.length };
   }, [curveData]);
 
+  const exactPeak = curve.data?.mask?.exact_peak ?? true;
+
   return (
-    <main className="mx-auto w-full max-w-[80rem] px-5 py-6">
+    <>
       <header className="mb-5">
         <h1 className="text-[1.0625rem] text-ink">Concurrency analytics</h1>
-        <p className="mt-1 max-w-[62rem] text-[0.8125rem] leading-relaxed text-ink-2">
-          The ClickStack dashboards, served from this box against the same
-          serving-layer views. Peaks are read from the mask that carries the
-          dimension — never summed across slices, because two platforms peak at
-          different instants.
+        <p className="mt-1 max-w-[72ch] text-[0.8125rem] leading-relaxed text-ink-2">
+          Foreground-only concurrent viewers over time, read from the minute
+          serving tier. Every panel names the rollup it read, what the query cost
+          and the statement that produced it.
         </p>
       </header>
 
       <ErrorNote error={metaError} />
 
       {meta && db ? (
-        <div className="mb-5 flex flex-col gap-3">
-          {/* The dataset itself is picked in the nav, because it applies to every
-              page. Its description stays here, where there is room to read it. */}
-          <p className="max-w-[62rem] text-[0.75rem] leading-relaxed text-ink-3">
+        <div className="mb-4 flex flex-col gap-3">
+          <p className="max-w-[80ch] text-[0.75rem] leading-relaxed text-ink-3">
             {db.note}
           </p>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-[0.6875rem] tracking-wide text-ink-3 uppercase">
-              Window
-            </span>
+          {/* The dataset itself is picked in the nav, because it applies to every
+              page. The window is picked here, because it does not. */}
+          <div
+            className="flex flex-wrap items-center gap-2"
+            role="group"
+            aria-label="Time window"
+          >
+            <span className="eyebrow text-ink-3">Window</span>
             {db.windows.map((w) => (
               <button
                 key={w.key}
                 onClick={() => setWinKey(w.key)}
-                aria-current={w.key === win?.key ? "true" : undefined}
-                className={`rounded border px-2.5 py-1 text-[0.8125rem] transition-colors ${
+                aria-pressed={w.key === win?.key}
+                className={`rounded border px-2.5 py-1 text-[0.8125rem] transition-colors duration-150 ${
                   w.key === win?.key
                     ? "border-accent-dim bg-accent-wash text-accent"
-                    : "border-line text-ink-2 hover:text-ink"
+                    : "border-line text-ink-2 hover:border-ink-3 hover:text-ink"
                 }`}
               >
                 {w.label}
               </button>
             ))}
+            {bounds ? (
+              <span className="tnum ml-auto font-mono text-[0.6875rem] text-ink-3">
+                {bounds.from} → {bounds.to} UTC
+              </span>
+            ) : null}
           </div>
         </div>
       ) : null}
 
-      {headline ? (
-        <StatGrid>
-          {/* Sourced from the RESPONSE, not from the selector. If the two ever
-              disagree the numbers on screen came from somewhere the reader did not
-              choose, and a chart that cannot be attributed is worse than no chart. */}
-          <Stat
-            label="Dataset"
-            value={<span className="font-mono text-[0.8125rem]">{curve.data?.database ?? "—"}</span>}
-            tone="muted"
-          />
-          <Stat label="Exact peak concurrency" value={headline.peak.toLocaleString()} tone="live" />
-          <Stat
-            label="Time-weighted average"
-            value={headline.avg.toFixed(3)}
-          />
-          <Stat label="Minutes published" value={headline.minutes.toLocaleString()} tone="muted" />
-        </StatGrid>
+      {meta ? (
+        <FilterBar
+          dimensions={meta.dimensions}
+          values={dimValues}
+          filter={filter}
+          onChange={setFilter}
+          rollups={meta.rollups}
+          cappedAt={200}
+        />
       ) : null}
 
-      <div className="mt-5 grid gap-4">
-        <PanelCard
+      <div className="mt-4 grid gap-4">
+        {/* The hero. Full width, double height, and the headline numbers live in
+            its own header rather than in a separate tile row — one strong object
+            instead of two weak ones, and the numbers cannot be read apart from
+            the curve that produced them. */}
+        <PanelFrame
           title="Concurrency over time"
+          panel={curve.data}
+          query={curveQ}
           transport={curve.transport}
-          query={curve.query}
+          queryError={curve.query}
           isLoading={curve.isLoading}
+          isValidating={curve.isValidating}
           empty={!curveData}
-          note="Peak is the exact maximum inside each minute; the dashed series is the time-weighted average. They differ by roughly 2.7× over the hot hour, which is why both are drawn."
+          height={340}
+          aside={
+            headline ? (
+              <div className="flex flex-wrap items-end gap-x-6 gap-y-2">
+                <Readout
+                  label={exactPeak ? "Peak concurrent" : "Peak"}
+                  value={
+                    exactPeak && headline.peak != null
+                      ? count(headline.peak)
+                      : "withheld"
+                  }
+                  tone="accent"
+                  hint={
+                    exactPeak && headline.peak != null
+                      ? `Exact maximum inside a single minute, at ${stamp(headline.peakAt)} UTC.`
+                      : curve.data?.mask?.why
+                  }
+                />
+                <Readout
+                  label="Time-weighted avg"
+                  value={decimal(headline.avg)}
+                  hint="Mean of the per-minute time-weighted averages over this window."
+                />
+                <Readout
+                  label="Minutes"
+                  value={count(headline.minutes)}
+                  tone="muted"
+                  hint="Minutes the serving tier has published in this window."
+                />
+                <Readout
+                  label="Dataset"
+                  value={curve.data?.database ?? "—"}
+                  tone="muted"
+                  hint="Reported by the server, not by the picker: a chart that cannot be attributed is worse than no chart."
+                />
+              </div>
+            ) : null
+          }
         >
           {curveData ? (
-            <ConcurrencyLine
-              labels={curveData.labels}
-              peak={curveData.peak}
-              average={curveData.average}
-            />
+            <>
+              <ChartLegend withheldPeak={!exactPeak} />
+              <ConcurrencyLine
+                labels={curveData.labels}
+                peak={curveData.peak}
+                average={curveData.average}
+              />
+            </>
           ) : null}
-        </PanelCard>
+        </PanelFrame>
 
         <div className="grid gap-4 lg:grid-cols-2">
-          <PanelCard
-            title="Exact peak by platform"
-            transport={platform.transport}
-            query={platform.query}
-            isLoading={platform.isLoading}
-            empty={!platform.data?.rows.length}
-            note="Read from the platform-grain mask, so each bar is exact. These bars must not be added: the platforms peak at different instants, and their sum exceeds the true total."
-          >
-            {platform.data?.rows.length ? (
-              <RankedBar
-                label="peak"
-                labels={platform.data.rows.map((r) => str(r[col(platform.data!, "platform")]))}
-                values={platform.data.rows.map((r) => num(r[col(platform.data!, "peak")]))}
-              />
-            ) : null}
-          </PanelCard>
-
-          <PanelCard
+          <BreakdownPanel
+            title="Peak by platform"
+            dim="platform"
+            unit="peak"
+            state={platform}
+            query={barQ}
+          />
+          <BreakdownPanel
             title="Viewer-hours by content type"
-            transport={vtype.transport}
-            query={vtype.query}
-            isLoading={vtype.isLoading}
-            empty={!vtype.data?.rows.length}
-            note="'unknown' is a real catalogue value carried by 1,089 titles, not a missing one, so it is charted rather than dropped."
-          >
-            {vtype.data?.rows.length ? (
-              <RankedBar
-                cool
-                label="viewer-hours"
-                labels={vtype.data.rows.map((r) => str(r[col(vtype.data!, "video_type")]))}
-                values={vtype.data.rows.map((r) => num(r[col(vtype.data!, "viewer_hours")]))}
-              />
-            ) : null}
-          </PanelCard>
+            dim="video_type"
+            unit="viewer_hours"
+            state={vtype}
+            query={barQ}
+          />
+          <BreakdownPanel
+            title="Viewer-hours by category"
+            dim="category"
+            unit="viewer_hours"
+            state={category}
+            query={barQ}
+          />
+          <BreakdownPanel
+            title="Peak by app version"
+            dim="app_version"
+            unit="peak"
+            state={appver}
+            query={barQ}
+          />
         </div>
 
-        <PanelCard
-          title="Viewer-hours by category"
-          transport={category.transport}
-          query={category.query}
-          isLoading={category.isLoading}
-          empty={!category.data?.rows.length}
-          note="Viewer-hours is sum(active_ms), which is additive across every dimension — so unlike the peak panels, these bars do total correctly."
-        >
-          {category.data?.rows.length ? (
-            <RankedBar
-              cool
-              label="viewer-hours"
-              labels={category.data.rows.map((r) => str(r[col(category.data!, "category")]))}
-              values={category.data.rows.map((r) => num(r[col(category.data!, "viewer_hours")]))}
-              height={300}
-            />
-          ) : null}
-        </PanelCard>
-
-        <PanelCard
+        <PanelFrame
           title="Top titles by viewer-hours"
+          panel={titles.data}
+          query={titleQ}
           transport={titles.transport}
-          query={titles.query}
+          queryError={titles.query}
           isLoading={titles.isLoading}
+          isValidating={titles.isValidating}
           empty={!titles.data?.rows.length}
-          note="Ranked by viewer-hours, not peak: ranking by peak rewards a brief spike over a long watch, and peaks cannot be totalled."
+          height={320}
         >
-          {titles.data?.rows.length ? (
-            <div className="overflow-x-auto">
-              <table className="w-full text-[0.8125rem]">
-                <thead>
-                  <tr className="border-b border-line text-left text-ink-3">
-                    {titles.data.columns.map((c) => (
-                      <th key={c} className="px-2 py-1.5 font-normal whitespace-nowrap">
-                        {c.replace(/_/g, " ")}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {titles.data.rows.map((r, i) => (
-                    <tr key={i} className="border-b border-line-soft last:border-0">
-                      {r.map((v, j) => (
-                        <td
-                          key={j}
-                          className={`px-2 py-1.5 whitespace-nowrap ${
-                            typeof v === "number" ? "font-mono text-ink" : "text-ink-2"
-                          }`}
-                        >
-                          {typeof v === "number" ? v.toLocaleString() : str(v)}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : null}
-        </PanelCard>
+          {titles.data?.rows.length ? <TitleTable panel={titles.data} /> : null}
+        </PanelFrame>
 
-        <PanelCard
-          title="Serving layer freshness"
-          transport={fresh.transport}
-          query={fresh.query}
-          isLoading={fresh.isLoading}
-          empty={!fresh.data?.rows.length}
-          note="Read this before treating any recent dip as a drop. The minute layer publishes on a deliberate lag, so unpublished minutes are absent rather than zero — a stalled pipeline and an outage have the same shape on a chart."
-        >
-          {fresh.data?.rows.length ? (
-            <StatGrid>
-              {fresh.data.rows.map((r, i) => {
-                const lag = num(r[col(fresh.data!, "data_lag_s")]);
-                return (
-                  <Stat
-                    key={i}
-                    label={`${str(r[col(fresh.data!, "layer")])} lag`}
-                    value={`${lag.toLocaleString()}s`}
-                    // 900s is the same threshold the drop-detector staleness alert
-                    // fires on, so the page and the alert agree on "stale".
-                    tone={lag > 900 ? "bad" : "plain"}
-                  />
-                );
-              })}
-            </StatGrid>
-          ) : null}
-        </PanelCard>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <BreakdownPanel
+            title="Viewer-hours by country"
+            dim="country"
+            unit="viewer_hours"
+            state={country}
+            query={barQ}
+            height={180}
+          />
+
+          <PanelFrame
+            title="Serving layer freshness"
+            panel={fresh.data}
+            query={barQ}
+            transport={fresh.transport}
+            queryError={fresh.query}
+            isLoading={fresh.isLoading}
+            isValidating={fresh.isValidating}
+            empty={!fresh.data?.rows.length}
+            height={180}
+          >
+            {fresh.data?.rows.length ? <Freshness panel={fresh.data} /> : null}
+          </PanelFrame>
+        </div>
       </div>
-    </main>
+    </>
+  );
+}
+
+/**
+ * A ranked breakdown of one dimension.
+ *
+ * One component for all five because they differ only in which dimension they
+ * group by and which quantity they rank — and a peak panel that looked different
+ * from a viewer-hours panel for any reason other than that distinction would be
+ * teaching the reader something untrue.
+ */
+function BreakdownPanel({
+  title,
+  dim,
+  unit,
+  state,
+  query,
+  height = 260,
+}: {
+  title: string;
+  dim: string;
+  unit: "peak" | "viewer_hours";
+  state: ReturnType<typeof usePanel>;
+  query: string | null;
+  height?: number;
+}) {
+  const d = state.data;
+  const rows = d && !d.error ? d.rows : [];
+  const withheld = unit === "peak" && d ? !d.mask?.exact_peak : false;
+
+  // A peak panel whose peak is withheld falls back to the quantity that IS exact
+  // at every rollup, rather than rendering an empty chart. The bar's form changes
+  // with it, so the reader is not told "peak" while looking at viewer-hours.
+  const shown = withheld ? "viewer_hours" : unit;
+
+  const values = rows.map((r) => (d ? asNum(r[col(d, shown)]) : null));
+  const labels = rows.map((r) => (d ? asStr(r[col(d, dim)]) : ""));
+
+  return (
+    <PanelFrame
+      title={title}
+      panel={d}
+      query={query}
+      transport={state.transport}
+      queryError={state.query}
+      isLoading={state.isLoading}
+      isValidating={state.isValidating}
+      empty={!rows.length}
+      height={height}
+      aside={
+        withheld ? (
+          <span className="text-[0.6875rem] text-accent" title={d?.mask?.why}>
+            showing viewer-hours — peak withheld
+          </span>
+        ) : rows.length ? (
+          <span className="text-[0.6875rem] text-ink-3">
+            {count(rows.length)} {rows.length === 1 ? "value" : "values"}
+          </span>
+        ) : null
+      }
+    >
+      <RankedBar
+        label={shown === "peak" ? "peak" : "viewer-hours"}
+        labels={labels}
+        values={values}
+        variant={shown === "peak" ? "fill" : "outline"}
+        decimals={shown !== "peak"}
+        height={height}
+      />
+    </PanelFrame>
+  );
+}
+
+/** The title leaderboard, as a table: five columns of mixed types is not a chart. */
+function TitleTable({ panel }: { panel: PanelResponse }) {
+  const iTitle = col(panel, "title");
+  const iPeak = col(panel, "peak");
+  const iAt = col(panel, "peaked_at");
+  const iHours = col(panel, "viewer_hours");
+  const top = Math.max(...panel.rows.map((r) => asNum(r[iHours]) ?? 0), 1);
+
+  return (
+    <div className="-mx-1 overflow-x-auto">
+      <table className="w-full min-w-[34rem] text-[0.8125rem]">
+        <thead>
+          <tr className="border-b border-line text-left text-ink-3">
+            <th className="px-1 py-1.5 font-normal">Title</th>
+            <th className="px-1 py-1.5 text-right font-normal">Viewer-hours</th>
+            <th className="px-1 py-1.5 text-right font-normal">Peak</th>
+            <th className="px-1 py-1.5 text-right font-normal">Peaked at</th>
+          </tr>
+        </thead>
+        <tbody>
+          {panel.rows.map((r, i) => {
+            const hours = asNum(r[iHours]) ?? 0;
+            const peak = asNum(r[iPeak]);
+            return (
+              <tr
+                key={i}
+                className="group border-b border-line-soft last:border-0"
+              >
+                <td className="w-[45%] px-1 py-1.5">
+                  {/* The share bar is INSIDE the cell, behind the text, rather
+                      than a sixth column: it is a reading aid for the ranking
+                      that is already there, not a measurement of its own.
+
+                      The percentage resolves against this wrapper, which is why
+                      it exists — a percentage width inside a `max-width: 0`
+                      table cell resolves against nothing and renders a stub. */}
+                  <span className="relative block min-w-0">
+                    <span
+                      aria-hidden
+                      className="absolute inset-y-[-2px] left-0 rounded-sm bg-accent-wash transition-[width] duration-300"
+                      style={{ width: `${(hours / top) * 100}%` }}
+                    />
+                    <span className="relative block truncate text-ink-2 group-hover:text-ink">
+                      {asStr(r[iTitle])}
+                    </span>
+                  </span>
+                </td>
+                <td className="tnum px-1 py-1.5 text-right font-mono text-ink">
+                  {decimal(hours)}
+                </td>
+                <td className="tnum px-1 py-1.5 text-right font-mono text-ink-2">
+                  {peak == null ? (
+                    <span className="text-ink-3" title="Not exact at this rollup">
+                      —
+                    </span>
+                  ) : (
+                    count(peak)
+                  )}
+                </td>
+                <td className="tnum px-1 py-1.5 text-right font-mono text-ink-3">
+                  {asStr(r[iAt]) ? stamp(asStr(r[iAt])) : "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Serving-tier lag, per layer. */
+function Freshness({ panel }: { panel: PanelResponse }) {
+  const iLayer = col(panel, "layer");
+  const iLag = col(panel, "data_lag_s");
+  const iWatermark = col(panel, "watermark");
+  const iRows = col(panel, "rows_out");
+
+  return (
+    <ul className="flex flex-col gap-2">
+      {panel.rows.map((r, i) => {
+        const lag = asNum(r[iLag]) ?? 0;
+        // 900s is the same threshold the drop-detector staleness alert fires on,
+        // so this page and that alert agree on what "stale" means.
+        const stale = lag > 900;
+        return (
+          <li
+            key={i}
+            className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-0.5 rounded border border-line bg-sunken px-2.5 py-2"
+          >
+            <span className="font-mono text-[0.8125rem] text-ink-2">
+              {asStr(r[iLayer])}
+            </span>
+            <span
+              className={`tnum font-mono text-[0.8125rem] ${stale ? "text-bad" : "text-ink"}`}
+              title={`Watermark ${asStr(r[iWatermark])} UTC · ${count(asNum(r[iRows]))} rows published`}
+            >
+              {count(lag)}s behind
+            </span>
+          </li>
+        );
+      })}
+    </ul>
   );
 }

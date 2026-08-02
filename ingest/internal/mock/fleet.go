@@ -297,7 +297,7 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 
 	// The ClickHouse half of this graph follows the dataset picker; the generator
 	// half is in-process fleet state and has no database to follow.
-	db, err := resolveDatabase(r.URL.Query().Get("db"), s.client.Database)
+	db, err := s.resolveDatabase(r.Context(), r.URL.Query().Get("db"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return

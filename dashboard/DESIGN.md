@@ -77,19 +77,63 @@ earn.
   both carry it. Without it a grid item's default `min-width: auto` refuses to
   shrink below content — measured at a 537px column inside 350px, which put the
   whole page into horizontal scroll on a 390px viewport.
-- **The nav scrolls, it does not wrap.** Five items plus a two-line lockup do not
-  fit at 390px.
+- **The nav wraps below `lg`; it does not hide.** The rule here used to be "it
+  scrolls, it does not wrap", and it was wrong in a specific way: the tab strip is
+  the only `min-w-0` item in the header row, so it absorbed the whole shortfall
+  and collapsed to zero width while the lockup, the dataset picker and the
+  external links all still rendered. A header that drops its own navigation first
+  has its priorities backwards. Below 1024px the chrome takes row one and the tabs
+  take a full-width scrollable row two — measured at 768px, where inline tabs fit
+  only by clipping the active one to a single letter.
+
+- **A native `<select>` gets an explicit width, never a `max-width`.** Its
+  intrinsic minimum is its longest *option*, not its value, so the dataset picker
+  refused to shrink and overlapped the links beside it. `truncate` has no effect
+  on a select's own rendering either. A fixed width ends the negotiation and lets
+  the browser ellipsise the label.
+
+- **Charts carry no hue the system has not already earned.** The analytics charts
+  used to distinguish their second series with `#5b9dd9`. That broke the one rule
+  below, and for nothing: the second series is now white and dashed, which is
+  SonyLIV's own gold-over-white hierarchy, survives a projector and a greyscale
+  screenshot, and works for a reader who cannot separate blue from grey. Ranked
+  bars separate their two quantities the same way — filled is a peak and must not
+  be summed, outlined is viewer-hours and is additive.
+
+- **The chart key is DOM, not canvas.** Chart.js cannot draw a 2px dashed swatch
+  at 11px without it collapsing to a dot, which left two identical-looking
+  entries beside two visibly different lines. `ChartLegend` draws each swatch as
+  the line it stands for, in the app's own type.
+
+- **Loading is a skeleton that holds the panel's height**, never a spinner.
+  Six panels resolve at different times; a spinner in the middle of each one
+  reflows everything below it on every refetch.
+
+- **Absent is not zero, and both have to look different from broken.** A withheld
+  peak is `NULL` and the series simply is not drawn; an empty window says the
+  minute tier may not have published yet; a failed query shows its own message.
+  On a serving layer these are three different facts and the UI never collapses
+  them.
 - **The lockup uses both parties' real marks**, not lettering set in Inter:
-  SonyLIV's own header PNG (`public/sonyliv-mark.png`, from their CDN) over
-  ClickHouse's own SVG (`components/BrandMarks.tsx`, verbatim from clickhouse.com,
-  `fill="currentColor"` so the lockup tints it). Two brands in one lockup is
-  exactly where an approximation shows.
-  Stacked with the `×` between them: side by side, two wordmarks read as a
-  hyphenated product name. The ClickHouse mark sits at `ink-2`, a step below the
-  liv mark's own gold — a lockup where both parties shout has no hierarchy, and
-  this is the SonyLIV problem statement. The `×` is the only gold in the header.
-  The ClickHouse mark is 16px tall, not 13px: at 13px its cap height was ~7px,
-  present but not readable.
+  SonyLIV's own header PNG (`public/sonyliv-mark.png`, from their CDN) beside
+  ClickHouse's own symbol and wordmark (`components/BrandMarks.tsx`, the same 9×8
+  geometry the submission deck draws). Two brands in one lockup is exactly where
+  an approximation shows.
+
+  **One line, and both marks in their own colours** — revised from the stacked,
+  mono version this file used to describe. The stack existed because two
+  *wordmarks* side by side read as a hyphenated product name; leading the
+  ClickHouse side with its symbol solves that better, and costs half the header's
+  vertical budget, which the nav now spends on tabs. Colour is the one deliberate
+  exception to the one-signal-colour rule below: hue is reserved for state
+  everywhere else, but a logo is not state — it is someone else's property, and
+  the rule that stops the interface inventing hues is not a licence to restyle a
+  mark that is not ours. It also matches `pitch/index.html`; a deck and a product
+  that lock up their brands differently read as two projects.
+
+  The `×` is typographic and sits at `ink-3`. It used to be the header's only
+  gold, back when the ClickHouse side was mono and the join carried the emphasis;
+  with two coloured marks a gold `×` would be a third accent competing with both.
 
 ## Deliberately not done
 

@@ -6,7 +6,7 @@ import { useSyncExternalStore } from "react";
 import useSWR from "swr";
 import { fetcher, getToken, setToken } from "@/lib/api";
 import { setDataset, useDataset } from "@/lib/dataset";
-import { ClickHouseMark, SonyLivMark } from "./BrandMarks";
+import { ClickHouseMark, ClickHouseSymbol, SonyLivMark } from "./BrandMarks";
 
 /**
  * Shows whether a token is stored, and allows clearing it.
@@ -77,10 +77,22 @@ function DatasetPicker() {
   return (
     <label className="flex shrink-0 items-center gap-1.5" title={current.note}>
       <span className="sr-only">ClickHouse dataset</span>
+      {/* An EXPLICIT width, not a max-width, and that is a layout fix rather
+          than a preference.
+
+          A native select's intrinsic minimum is its longest OPTION, not its
+          value — "Evaluation set — 31 Jul" is wide enough that the control
+          refused to shrink, consumed the header row and overlapped the links
+          beside it. `max-width` does not help, because the element was already
+          being squeezed below its min-content size and won that fight;
+          `truncate` does not either, since it has no effect on a select's own
+          rendering. A fixed width ends the negotiation: the browser ellipsises
+          the label itself, and the full text is in the tooltip and in the
+          dataset note on the page. */}
       <select
         value={current.name}
         onChange={(e) => setDataset(e.target.value)}
-        className="rounded border border-line bg-sunken px-2 py-1 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink focus:border-accent-dim focus:outline-none"
+        className="w-[8.5rem] rounded border border-line bg-sunken px-2 py-1 text-[0.8125rem] text-ink-2 transition-colors hover:text-ink focus:border-accent-dim focus:outline-none sm:w-[11rem] lg:w-[13rem]"
       >
         {data.databases.map((d) => (
           <option key={d.name} value={d.name}>
@@ -104,39 +116,48 @@ function DatasetPicker() {
 }
 
 /**
- * The collaboration lockup: the real `liv` mark over the real ClickHouse wordmark.
+ * The collaboration lockup: both parties' real marks, joined.
  *
- * Both are the parties' own assets — SonyLIV's header PNG and ClickHouse's own
- * SVG — rather than lettering set in Inter and hoped to pass. Two brands in one
- * lockup is exactly where an approximation shows.
+ * Every glyph here is the owner's own asset — SonyLIV's header PNG, ClickHouse's
+ * symbol and wordmark from their own SVG — rather than lettering set in Inter and
+ * hoped to pass. Two brands in one lockup is exactly where an approximation
+ * shows.
  *
- * Stacked, because side by side two wordmarks read as a hyphenated product name
- * while stacked with the × between them reads as two parties. The left edges
- * align and the gap is tight, which is what binds them into one mark instead of
- * two logos that happen to be near each other.
+ * ONE LINE, NOT TWO. This used to stack the two marks with the × between them,
+ * on the reasoning that side by side they read as a hyphenated product name. That
+ * reasoning was answering a problem the symbol solves better: with ClickHouse's
+ * bars leading its wordmark, the right-hand side is unmistakably a second party's
+ * logo and no longer needs vertical separation to say so. One line also halves
+ * the header's height budget, which the nav spends on tabs instead.
  *
- * The × stays typographic and gold. It is a multiplication sign doing the job it
- * exists for — the one case where a glyph is not standing in for an icon — and
- * it is the only place the signal colour appears in the header, so the eye reads
- * the join rather than the chrome.
+ * It matches the submission deck's cover, deliberately — pitch/index.html sets
+ * the same two marks in the same order with the same join. A deck and a product
+ * that lock up their brands differently read as two projects.
  *
- * The ClickHouse mark inherits `currentColor` at ink-2, deliberately a step below
- * the liv mark's own gold: a lockup where both parties shout has no hierarchy,
- * and this is the SonyLIV problem statement.
+ * The × is typographic, at ink-3. It used to be the header's only gold, back when
+ * the ClickHouse side was a mono wordmark and the join needed to carry the
+ * emphasis. Now that both marks are in their own colours, a gold × would be a
+ * third accent competing with two logos — so the join recedes and the marks
+ * speak.
  */
 function Lockup() {
   return (
     <span
-      className="flex shrink-0 flex-col gap-1"
+      className="flex shrink-0 items-center gap-2"
       aria-label="SonyLIV × ClickHouse"
       title="SonyLIV × ClickHouse"
     >
-      <span className="flex items-center gap-1.5">
-        <SonyLivMark />
-        <span className="text-[0.8125rem] leading-none text-accent">×</span>
+      <SonyLivMark />
+      <span aria-hidden className="text-[0.75rem] leading-none text-ink-3">
+        ×
       </span>
-      <span className="text-ink-2">
-        <ClickHouseMark />
+      <span className="flex items-center gap-1.5 text-ink-2">
+        <ClickHouseSymbol className="h-[0.9375rem] w-auto" />
+        {/* The wordmark is the part that costs width, so it is the part that goes
+            first on a narrow viewport. The symbol alone still reads as
+            ClickHouse; a wordmark with no symbol beside SonyLIV's logo reads as
+            a caption. */}
+        <ClickHouseMark className="hidden h-3.5 w-auto sm:block" />
       </span>
     </span>
   );
@@ -207,42 +228,73 @@ const externals: {
  */
 const norm = (p: string) => (p.length > 1 ? p.replace(/\/+$/, "") : p);
 
+/**
+ * The route tabs.
+ *
+ * Extracted so the header can place them in two different slots — inline from
+ * `sm` up, on their own row below it — without the markup existing twice.
+ */
+function Tabs({ pathname, className = "" }: { pathname: string; className?: string }) {
+  return (
+    <nav
+      className={`flex min-w-0 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden ${className}`}
+      aria-label="Dashboards"
+    >
+      {routes.map((r) => {
+        // Exact match, not startsWith: "/" is a prefix of every route, so a
+        // prefix test would light up every tab everywhere.
+        const here = norm(pathname);
+        const active = here === norm(r.href) || (r.also?.includes(here) ?? false);
+        return (
+          <Link
+            key={r.href}
+            href={r.href}
+            aria-current={active ? "page" : undefined}
+            className={`rounded px-2.5 py-1 text-[0.8125rem] whitespace-nowrap transition-colors duration-150 ${
+              active
+                ? "bg-accent-wash text-accent"
+                : "text-ink-2 hover:bg-raised hover:text-ink"
+            }`}
+          >
+            {r.label}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 export function Nav() {
   const pathname = usePathname();
 
   return (
     <header className="sticky top-0 z-10 border-b border-line bg-ground/90 backdrop-blur">
-      <div className="mx-auto flex w-full max-w-[80rem] items-center gap-4 px-5 py-3 sm:gap-6">
-        <Lockup />
+      {/*
+        TWO ROWS UNTIL THERE IS ROOM FOR ONE.
 
-        <nav
-          className="flex min-w-0 gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          aria-label="Dashboards"
-        >
-          {routes.map((r) => {
-            // Exact match, not startsWith: "/" is a prefix of every route, so a
-            // prefix test would light up every tab everywhere.
-            const here = norm(pathname);
-            const active =
-              here === norm(r.href) || (r.also?.includes(here) ?? false);
-            return (
-              <Link
-                key={r.href}
-                href={r.href}
-                aria-current={active ? "page" : undefined}
-                className={`rounded px-2.5 py-1 text-[0.8125rem] whitespace-nowrap transition-colors ${
-                  active
-                    ? "bg-accent-wash text-accent"
-                    : "text-ink-2 hover:text-ink"
-                }`}
-              >
-                {r.label}
-              </Link>
-            );
-          })}
-        </nav>
+        This was a single flex row, and at 390px it failed in the way that
+        matters most: the tab strip is the only min-w-0 item, so it absorbed
+        every pixel of the shortfall and collapsed to zero width. The lockup, the
+        dataset picker and the external links all rendered; the primary
+        navigation did not. A header that drops its own navigation first has its
+        priorities exactly backwards.
 
-        {/* The other three surfaces of the demo, which are not this app.
+        Wrapping rather than hiding: every control stays reachable at every
+        width. The chrome takes the first row and the tabs take a full-width
+        scrollable second one, which is more room than they had inline.
+
+        The breakpoint is `lg`, not `sm`, and that is measured rather than
+        chosen: at 768px the tabs fit the row only by being clipped mid-word —
+        the active tab rendered as a single letter. One row is the better layout
+        exactly when it is not cramped, which on this header is from 1024px.
+      */}
+      <div className="mx-auto w-full max-w-[80rem] px-5 py-3">
+        <div className="flex items-center gap-3 sm:gap-4 md:gap-6">
+          <Lockup />
+
+          <Tabs pathname={pathname} className="hidden lg:flex" />
+
+        {/* The other surfaces of the demo, which are not this app.
 
             Plain <a>, never <Link>, and that is the whole reason this block is
             separate. Under NEXT_PUBLIC_BASE_PATH=/build a <Link href="/"> resolves
@@ -252,46 +304,53 @@ export function Nav() {
 
             Rendered only when configured. A nav tab that leads to a placeholder is
             worse than an absent one, so an unset URL means the tab does not exist. */}
-        <div className="ml-auto flex shrink-0 items-center gap-3">
-          <DatasetPicker />
+          <div className="ml-auto flex shrink-0 items-center gap-3">
+            <DatasetPicker />
+          </div>
+
+          <nav
+            className="flex shrink-0 items-center gap-1"
+            aria-label="Other surfaces"
+          >
+            {externals.map((x) => (
+              <a
+                key={x.label}
+                href={x.href}
+                // Only the off-box links open a tab. LibreChat is on this same
+                // host, so replacing the page is the right behaviour; ClickStack
+                // and Langfuse are elsewhere and losing the demo to a navigation
+                // would be a poor trade.
+                {...(x.newTab
+                  ? { target: "_blank", rel: "noopener noreferrer" }
+                  : {})}
+                title={x.title}
+                className="rounded px-2.5 py-1 text-[0.8125rem] whitespace-nowrap text-ink-2 transition-colors hover:text-ink"
+              >
+                {x.label}
+                {x.newTab ? (
+                  <span aria-hidden className="ml-1 text-ink-3">
+                    ↗
+                  </span>
+                ) : null}
+              </a>
+            ))}
+          </nav>
+
+          {/* Just the timezone. "writes to events_raw" was stating the obvious —
+              every page here writes to events_raw, so a permanent banner saying
+              so carried no information and spent header width doing it. UTC
+              stays because the tables are full of bare clock times and nothing
+              else on the page says which zone they are in. Dropped below `sm`,
+              where the row is tight and every page states UTC beside its own
+              timestamps anyway. */}
+          <span className="hidden font-mono text-[0.6875rem] text-ink-3 sm:inline">
+            UTC
+          </span>
+
+          <TokenBadge />
         </div>
 
-        <nav
-          className="flex shrink-0 items-center gap-1"
-          aria-label="Other surfaces"
-        >
-          {externals.map((x) => (
-            <a
-              key={x.label}
-              href={x.href}
-              // Only the off-box links open a tab. LibreChat is on this same host,
-              // so replacing the page is the right behaviour; ClickStack and
-              // Langfuse are elsewhere and losing the demo to a navigation would
-              // be a poor trade.
-              {...(x.newTab
-                ? { target: "_blank", rel: "noopener noreferrer" }
-                : {})}
-              title={x.title}
-              className="rounded px-2.5 py-1 text-[0.8125rem] whitespace-nowrap text-ink-2 transition-colors hover:text-ink"
-            >
-              {x.label}
-              {x.newTab ? (
-                <span aria-hidden className="ml-1 text-ink-3">
-                  ↗
-                </span>
-              ) : null}
-            </a>
-          ))}
-        </nav>
-
-        {/* Just the timezone. "writes to events_raw" was stating the obvious —
-            every page here writes to events_raw, so a permanent banner saying so
-            carried no information and spent header width doing it. UTC stays
-            because the tables are full of bare clock times and nothing else on
-            the page says which zone they are in. */}
-        <span className="font-mono text-[0.6875rem] text-ink-3">UTC</span>
-
-        <TokenBadge />
+        <Tabs pathname={pathname} className="mt-2 lg:hidden" />
       </div>
     </header>
   );

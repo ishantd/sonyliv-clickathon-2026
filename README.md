@@ -81,6 +81,44 @@ verification script are in [`deploy/README.md`](deploy/README.md).
   cannot be read. Model calls route through a LiteLLM sidecar, so every turn, tool call,
   latency and token count is traced.
 
+## SonyLIV track requirements
+
+Per [`SONYLIV_SUBMISSION_GUIDELINES.md`](https://github.com/sidagarwal04/click-a-thon-26-submissions/blob/main/SONYLIV_SUBMISSION_GUIDELINES.md).
+All of this is in the product UI at **`/analytics`**, not only in a screenshot —
+see [`dashboard/README.md`](dashboard/README.md#analytics--the-submission-surface).
+
+**1. Concurrency curve.** Concurrent foreground sessions per minute, over a
+selectable window, computed from the dataset in the problem statement and read
+from the minute serving tier. Two series — the exact maximum inside each minute
+and the time-weighted average. The default window is the 31 July match window
+(10:20–11:35 UTC), a full ramp to a peak of **14,506 at 11:15** and the drain
+after it. The ClickHouse statement that produced the chart is displayed under the
+chart itself, in runnable form, with the bound parameters; it is returned by the
+server with the result, so it cannot drift from the query that ran.
+
+**2. Dataset filters.** Six, applied to the curve and to every other view on the
+page:
+
+| filter | dataset column it is backed by |
+|---|---|
+| Platform | `events.platform` |
+| Country | `events.country` |
+| Content type | `content_dim.video_type`, joined on `events.content_id` |
+| Category | `content_dim.category`, joined on `events.content_id` |
+| App version | `events.app_version` |
+| Title | `content_dim.title`, joined on `events.content_id` |
+
+The filter set selects which pre-aggregated rollup answers the question. Where no
+rollup is materialised at exactly that combination, viewer-hours stays exact and
+the **peak is withheld rather than estimated** — a maximum over a finer grain is
+the busiest single combination, not the peak of the slice asked for. The UI says
+which rollup answered, and why, on every panel.
+
+**3. Evidence of cost.** Every panel prints what its query actually cost —
+ClickHouse execution time, rows read, bytes scanned — from the driver's progress
+counters. The unfiltered day curve reads 8,192 rows; recomputing the same answer
+from the event stream reads 13,945,916.
+
 ## Submission checklist
 
 Required components, per §2.3 / §5.2 of the Participant Handbook:
