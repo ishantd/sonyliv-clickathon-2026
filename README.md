@@ -5,6 +5,71 @@ Submission repo for [Click-a-thon 2026](https://clickhouse.com/clickathon/india2
 Problem statement reference: https://github.com/sidagarwal04/click-a-thon-2026/tree/main/SonyLiv
 (Full text is revealed to all teams at 12:00 pm IST on 1 August — nothing here is pre-built against it.)
 
+## Run it
+
+Docker, and nothing else. No Go, no Node, no ClickHouse install, no account.
+
+```bash
+cp .env.example .env      # optional — every value has a working default
+docker compose up
+```
+
+Then open **http://localhost:8088**.
+
+That one command starts ClickHouse, creates the database, applies the full schema,
+loads the extracts if you have them, and brings up the ingest API, the rollup loop
+and the dashboard — each gated on the previous finishing.
+[`.env.example`](.env.example) documents every knob; the ones worth knowing are
+`CH_DATABASE`, `DASHBOARD_PORT` and `DATA_DIR`.
+
+**Loading the supplied extracts** is optional. Drop either or both into `./data`
+before `docker compose up`:
+
+```
+data/ch-hackathon-content-data.csv     the catalogue   ~1.4 MB
+data/ch-hackathon-raw-data.csv         the events      ~1.8 GB
+```
+
+The unseen day's files work unchanged — the loader globs the prefix, so
+`*_surprise.csv` is picked up with no config change. Measured on a laptop, from an
+empty volume: **7,000,000 events in 1 m 10 s at 100,295 rows/s**, 0 retries, after
+which the rollup builds all 17 days of the serving layer — 992,811 minute rows for
+31 July alone — in **6.9 s**, and the peak reproduces exactly: 14,506 at 11:15,
+the same figure the ClickHouse Cloud deployment reports.
+
+With no CSVs the stack still comes up, and that is a working demo rather than a
+degraded one: create a fleet on `/fleet/new` and the curve builds from the
+simulator's own traffic, which is closer to what the product is for.
+`--profile traffic` starts one for you. If you load only one file, load the
+catalogue — without it every session resolves to `__unknown__` and the title,
+category and content-type panels collapse to a single bar.
+
+```bash
+docker compose --profile traffic up      # start a 250-session fleet immediately
+docker compose --profile mcp up          # serve the MCP tools over HTTP on :8848
+docker compose logs -f rollup            # watch the serving layer build
+docker compose down -v                   # stop, and delete the ClickHouse volume
+```
+
+Two things this stack deliberately does not reproduce. The `mcp` profile connects
+as the same user as everything else, so it demonstrates the tools and **not** the
+security boundary — the real deployment connects as `sonyliv_mcp`, which cannot
+read `events_clean` or `session_intervals` at all
+([`ingest/sql/manual/009_mcp_reader.sql`](ingest/sql/manual/009_mcp_reader.sql)).
+And it is a single node, so none of the ClickHouse Cloud behaviours in
+[`CLAUDE.md`](CLAUDE.md) — per-replica dictionary loads, SharedMergeTree
+substitution, projections blocked on Replacing tables — can appear here. Treat
+what runs locally as correct, not as evidence about how it behaves in Cloud.
+
+LibreChat is not in this compose file: it needs an LLM key, and a chat window that
+cannot reach a model is worse than an absent one. It has its own stack —
+`docker compose -f deploy/librechat/docker-compose.yml up`, with
+[`deploy/librechat/.env.example`](deploy/librechat/.env.example) as the guide.
+
+To run natively against ClickHouse Cloud instead — which is what the hosted demo
+does — see [`ingest/README.md`](ingest/README.md) and
+[`deploy/README.md`](deploy/README.md).
+
 ## Status
 
 Active build.

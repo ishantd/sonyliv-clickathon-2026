@@ -1,0 +1,40 @@
+# The build context is the repo root, because the Dockerfile needs both ingest/
+# and deploy/docker/. Everything below would otherwise be uploaded to the daemon
+# on every build.
+
+# The single biggest one: node_modules is ~500 MB and the image has no Node
+# stage, so it is pure upload cost.
+dashboard/node_modules/
+dashboard/.next/
+# dashboard/out is NOT excluded... except it is also not used: the build reads
+# the committed copy at ingest/internal/mock/web. Excluding it keeps the context
+# honest about what actually goes in.
+dashboard/out/
+
+# The extracts. 1.8 GB of CSV that is mounted at runtime, never built in.
+data/*.csv
+*.csv
+
+# Build output and local state.
+ingest/bin/
+.git/
+.claude/
+.gstack/
+
+# Secrets, belt and braces. .env is gitignored too, but a build context is a
+# separate mechanism and this file is the only thing standing between a local
+# .env and a layer in the image.
+.env
+*.env
+!*.env.example
+deploy/librechat/data-node/
+deploy/librechat/images/
+deploy/librechat/uploads/
+deploy/librechat/logs/
+
+# Docs and artefacts that cannot affect a build.
+docs/
+pitch/
+prototype/
+*.md
+!README.md
