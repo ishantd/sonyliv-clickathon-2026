@@ -8,6 +8,8 @@
 #   ./scripts/bootstrap.sh --no-seed            # schema only, for data arriving later
 #   ./scripts/bootstrap.sh --seed-only          # data into an existing schema
 #   ./scripts/bootstrap.sh --verify-only        # assert the deployment, change nothing
+#   ./scripts/bootstrap.sh --build-only         # rebuild derived tiers over loaded data
+#   ./scripts/bootstrap.sh --no-build           # schema + seed, no derivation
 #   ./scripts/bootstrap.sh --force              # permit reload into a populated target
 #
 # Creates, in dependency order: databases -> dimensions -> dictionary -> facts
@@ -41,12 +43,30 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APPLY="$REPO_ROOT/scripts/lib/apply_sql.py"
 
 # ---------------------------------------------------------------- arguments
-DRY_RUN=0; DO_SCHEMA=1; DO_SEED=1; DO_VERIFY=1; FORCE=0
+DRY_RUN=0; DO_SCHEMA=1; DO_SEED=1; DO_BUILD=1; DO_VERIFY=1; FORCE=0
 DATABASE="${CLICKHOUSE_DATABASE:-sonyliv}"
 EVENTS_CSV="${EVENTS_CSV:-}"
 CONTENT_CSV="${CONTENT_CSV:-}"
 POLICY_VERSION="${POLICY_VERSION:-sonyliv-active-v1}"
 HEARTBEAT_TIMEOUT_MS="${HEARTBEAT_TIMEOUT_MS:-120000}"
+
+# Minute-tier publication identity (pipeline/sql/040).
+#
+# MINUTE_GENERATION defaults to 1 for a fresh database. On a REBUILD into a
+# database that already holds a generation, pass a HIGHER one -- 040 writes into
+# a plain MergeTree, so re-running at the same generation appends a second copy
+# and 041's G1/G3 will throw. That is the intended behaviour: a doubled tier
+# should stop the script, not be served.
+MINUTE_GENERATION="${MINUTE_GENERATION:-1}"
+
+# A real UUID per run, so a row can be traced to the run that produced it.
+# uuidgen exists on macOS and on most Linux images; fall back to the kernel, then
+# to a fixed nil UUID rather than failing the whole bootstrap over lineage metadata.
+PIPELINE_RUN_ID="${PIPELINE_RUN_ID:-$(
+  uuidgen 2>/dev/null | tr 'A-Z' 'a-z' \
+    || cat /proc/sys/kernel/random/uuid 2>/dev/null \
+    || echo '00000000-0000-0000-0000-000000000000'
+)}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -54,8 +74,10 @@ while [[ $# -gt 0 ]]; do
     --database)    DATABASE="$2"; shift ;;
     --database=*)  DATABASE="${1#*=}" ;;
     --no-seed)     DO_SEED=0 ;;
-    --seed-only)   DO_SCHEMA=0; DO_VERIFY=0 ;;
-    --verify-only) DO_SCHEMA=0; DO_SEED=0 ;;
+    --no-build)    DO_BUILD=0 ;;
+    --build-only)  DO_SCHEMA=0; DO_SEED=0; DO_VERIFY=0 ;;
+    --seed-only)   DO_SCHEMA=0; DO_BUILD=0; DO_VERIFY=0 ;;
+    --verify-only) DO_SCHEMA=0; DO_SEED=0; DO_BUILD=0 ;;
     --force)       FORCE=1 ;;
     --events)      EVENTS_CSV="$2"; shift ;;
     --content)     CONTENT_CSV="$2"; shift ;;
@@ -75,11 +97,34 @@ pass()  { printf '%s    ok%s  %s\n' "$c_grn" "$c_off" "$*"; }
 
 # ---------------------------------------------------------------- config
 # .env is optional: the environment may already carry everything. Never echoed.
-if [[ -f "$REPO_ROOT/.env" ]]; then
-  set -a; # shellcheck disable=SC1091
-  source "$REPO_ROOT/.env"; set +a
-  info "loaded $REPO_ROOT/.env"
+#
+# ingest/.env is checked too, and in practice that is where the file actually is --
+# `sonyliv-ingest` reads it from there, so it is the one that exists. Looking only
+# at the repo root meant a correct setup still came up with CLICKHOUSE_HOST
+# defaulting to localhost, which fails at preflight with a connection error that
+# says nothing about the real cause. Root wins if both exist.
+#
+# The MAIN worktree is searched as well. .env is gitignored, so it does not exist
+# inside a git worktree at all -- running this script from
+# .claude/worktrees/<branch>/ therefore found no config, defaulted
+# CLICKHOUSE_HOST to localhost, and failed preflight with a connection error that
+# said nothing about the real cause.
+ENV_CANDIDATES=("$REPO_ROOT/ingest/.env" "$REPO_ROOT/.env")
+if main_wt="$(git -C "$REPO_ROOT" worktree list --porcelain 2>/dev/null | awk '/^worktree /{print $2; exit}')" \
+   && [[ -n "$main_wt" && "$main_wt" != "$REPO_ROOT" ]]; then
+  ENV_CANDIDATES+=("$main_wt/ingest/.env" "$main_wt/.env")
 fi
+
+env_loaded=0
+for envfile in "${ENV_CANDIDATES[@]}"; do
+  if [[ -f "$envfile" ]]; then
+    set -a; # shellcheck disable=SC1091
+    source "$envfile"; set +a
+    info "loaded $envfile"
+    env_loaded=1
+  fi
+done
+[[ $env_loaded -eq 0 ]] && warn "no .env found; relying on exported environment variables"
 
 CLICKHOUSE_HOST="${CLICKHOUSE_HOST:-localhost}"
 CLICKHOUSE_USER="${CLICKHOUSE_USER:-default}"
@@ -111,7 +156,19 @@ info "user      $CLICKHOUSE_USER"
 # ---------------------------------------------------------------- preflight
 step "Preflight"
 if [[ $DRY_RUN -eq 0 ]]; then
-  version="$(scalar 'SELECT version()')" || die "cannot reach ClickHouse at $CLICKHOUSE_HOST:$CLICKHOUSE_HTTP_PORT"
+  if ! version="$(scalar 'SELECT version()')" || [[ -z "$version" ]]; then
+    hint=""
+    [[ "$CLICKHOUSE_HOST" == "localhost" ]] && hint="
+CLICKHOUSE_HOST is still 'localhost', which means no .env was found and nothing
+was exported. .env is gitignored, so it does not exist inside a git worktree.
+Point at the real one:
+
+  set -a && . /path/to/main/checkout/ingest/.env && set +a
+"
+    [[ -z "$CLICKHOUSE_PASSWORD" ]] && hint="$hint
+CLICKHOUSE_PASSWORD is empty."
+    die "cannot reach ClickHouse at $CLICKHOUSE_HOST:$CLICKHOUSE_HTTP_PORT (HTTP)$hint"
+  fi
   pass "connected, ClickHouse $version"
   replicas="$(scalar "SELECT count() FROM system.clusters WHERE cluster='default'")"
   info "replicas in cluster 'default': $replicas"
@@ -126,7 +183,7 @@ if [[ $DO_SCHEMA -eq 1 ]]; then
   step "Stage 1/4 — ingest layer  (content, events_raw, events_clean, control)"
   for f in "$REPO_ROOT"/ingest/sql/*.sql; do ch "$f"; done
 
-  step "Stage 2/4 — interval + serving + minute DDL"
+  step "Stage 2/4 — interval + serving DDL"
   # Order is load-bearing: a materialized view must be created after its target.
   #
   # --rewrite-db is REQUIRED here and is not cosmetic. Unlike ingest/sql/*, the
@@ -135,7 +192,17 @@ if [[ $DO_SCHEMA -eq 1 ]]; then
   # the ingest layer in sonyliv_dev and the interval/serving layers in sonyliv —
   # two half-schemas in two databases, and the MVs draining across them. It is a
   # no-op when the target already is 'sonyliv'.
-  for f in 010_active_intervals.sql 020_serving_layer.sql 040_concurrency_minute.sql; do
+  #
+  # 040 is NOT in this list, and that is a fix, not an omission. It was here, and
+  # it could never have worked: the file is not pure DDL — it ends in a producer
+  # INSERT bound to five parameters (generation, policy_version, pipeline_run_id,
+  # source_delta_snapshot, clip_variant), and this loop passes none, so
+  # apply_sql.py would have failed the statement and returned 1. It also has to
+  # run AFTER 011 and 022, because it reads active_intervals and
+  # concurrency_deltas — at DDL time both are empty, so even a params-fixed run
+  # here would publish an empty generation. It now runs in stage 4 with its
+  # parameters. --dry-run never caught this because a dry run executes nothing.
+  for f in 010_active_intervals.sql 020_serving_layer.sql; do
     [[ -f "$REPO_ROOT/pipeline/sql/$f" ]] || die "missing pipeline/sql/$f"
     ch "$REPO_ROOT/pipeline/sql/$f" --rewrite-db sonyliv
   done
@@ -202,6 +269,13 @@ file through 'sonyliv-ingest events', which carries its own dedup token."
     fi
   fi
 
+fi
+
+# ---------------------------------------------------------------- build
+# Gated SEPARATELY from the seed. --no-seed means "do not load CSVs", not "do
+# not build" -- rebuilding the derived tiers over data that is already loaded is
+# the normal case on an existing database, and the two were conflated.
+if [[ $DO_BUILD -eq 1 ]]; then
   step "Stage 3b — build the interval, serving and minute tiers"
   if [[ $DRY_RUN -eq 0 ]]; then
     ch "$REPO_ROOT/pipeline/sql/011_build_active_intervals.sql" \
@@ -221,8 +295,31 @@ file through 'sonyliv-ingest events', which carries its own dedup token."
        --param "state_revision=1" \
        --param "allow_append=$FORCE" \
        --param "insert_token=stage02:$POLICY_VERSION:full:rev1"
+
+    # 040 runs HERE, not in stage 2, because it reads active_intervals and
+    # concurrency_deltas and both are only populated by the two steps above.
+    #
+    # Its first statement is a migration guard that THROWS if the table exists
+    # without clip_variant — ORDER BY is immutable, so that case needs a DROP and
+    # cannot be reached by ALTER. The guard's message says exactly what to run.
+    ch "$REPO_ROOT/pipeline/sql/040_concurrency_minute.sql" \
+       --rewrite-db sonyliv \
+       --param "generation=$MINUTE_GENERATION" \
+       --param "policy_version=$POLICY_VERSION" \
+       --param "pipeline_run_id=$PIPELINE_RUN_ID" \
+       --param "source_delta_snapshot=0" \
+       --param "clip_variant=unclipped"
+
+    # 041's six gating checks throw on failure, so a bad build stops the script
+    # rather than being served. They are reference-free: no check contains a
+    # value derived from the tuning extract, so they hold on the unseen day too.
+    ch "$REPO_ROOT/pipeline/sql/041_minute_verify.sql" \
+       --rewrite-db sonyliv \
+       --param "policy_version=$POLICY_VERSION" \
+       --param "clip_variant=unclipped" \
+       --param "generation=$MINUTE_GENERATION"
   else
-    info "skipped (dry run) — 011_build_active_intervals.sql, 022_populate_serving.sql"
+    info "skipped (dry run) — 011_build_active_intervals.sql, 022_populate_serving.sql, 040_concurrency_minute.sql, 041_minute_verify.sql"
   fi
 fi
 

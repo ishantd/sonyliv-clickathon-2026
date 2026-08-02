@@ -38,6 +38,7 @@ type session struct {
 	audioLang string
 	subLang   string
 	playerVer string
+	videoRes  string
 
 	startTime time.Time
 	endTime   time.Time // planned
@@ -185,6 +186,7 @@ func (g *Generator) spawnSession() {
 		audioLang:  audioLanguageDist.pick(g.rnd),
 		subLang:    subtitleLanguageDist.pick(g.rnd),
 		playerVer:  playerVersionDist.pick(g.rnd),
+		videoRes:   videoResolutionDist.pick(g.rnd),
 		startTime:  g.now,
 		emitsTrio:  g.rnd.Float64() < profile.TrioProbability,
 		foreground: true,
@@ -431,6 +433,7 @@ func (g *Generator) newEvent(s *session, eventType, event string, at time.Time) 
 		AudioLanguage:     s.audioLang,
 		SubtitleLanguage:  s.subLang,
 		PlayerVersion:     s.playerVer,
+		VideoResolution:   s.videoRes,
 	}
 }
 

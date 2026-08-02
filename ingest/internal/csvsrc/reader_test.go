@@ -1,6 +1,7 @@
 package csvsrc
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -294,5 +295,142 @@ func TestContentReaderQuarantinesBadRows(t *testing.T) {
 	}
 	if reasons[0] != ReasonBadRow || reasons[1] != ReasonBadContentID {
 		t.Errorf("reasons = %v, want [%s %s]", reasons, ReasonBadRow, ReasonBadContentID)
+	}
+}
+
+// The unseen dataset (data/surprise_spec.md) adds video_resolution to the raw
+// events and show_name to the catalogue. Both are read OPTIONALLY: present ->
+// carried through, absent -> empty string, so the original 13-column extract and
+// the 14-column surprise extract both load through one code path.
+//
+// The failure this guards against is not a crash. er.idx is a map, so a missing
+// key yields the zero value and rec[0] would be returned -- silently handing back
+// the FIRST column's value for the absent one. On the raw file column 0 is
+// content_id, so video_resolution would have read as "21311522" for every row.
+
+func TestEventReaderReadsOptionalVideoResolution(t *testing.T) {
+	const sessionID = "94D660E9F4D438A91A80A351320BE2B344B81FAFFE23A5BE677F93A6684F8DAC"
+	const userID = "7C7D3C62725140B3E15072BBD0166D5EA6C6811F0061AB2F53CA2179DF43858D"
+
+	// content_id deliberately FIRST, matching the real surprise header, so that a
+	// regression to rec[0] indexing shows up as the content id in the assertion.
+	header := "content_id,video_session_id,user_id,event_type,event,event_timestamp," +
+		"platform,app_version,country,audio_language,subtitle_language," +
+		"player_version,session_start_epoch,video_resolution\n"
+	row := "21311522," + sessionID + "," + userID + ",VideoPlay,Play,1785062009028," +
+		"JIO_ANDROID_TV,3.9.4,india,hin,OFF,1.8.2,1785062007336,%s\n"
+
+	for _, tc := range []struct{ name, raw, want string }{
+		{"plain", "1920*1080", "1920*1080"},
+		{"spaced kept verbatim at this layer", "1920 * 1080", "1920 * 1080"},
+		{"ladder prefix", "Auto-1280*720", "Auto-1280*720"},
+		{"na", "NA", "NA"},
+		{"empty", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "surprise.csv")
+			body := header + fmt.Sprintf(row, tc.raw)
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r, err := OpenEvents(path)
+			if err != nil {
+				t.Fatalf("OpenEvents: %v", err)
+			}
+			defer r.Close()
+
+			ev, reject, err := r.Next()
+			if err != nil || reject != nil {
+				t.Fatalf("Next: err=%v reject=%+v", err, reject)
+			}
+			if ev.VideoResolution != tc.want {
+				t.Errorf("VideoResolution = %q, want %q", ev.VideoResolution, tc.want)
+			}
+			// Normalization belongs to events_raw_to_clean_mv, not here: the
+			// landing table is source-faithful.
+			if ev.ContentID != 21311522 {
+				t.Errorf("content id = %d — column mapping drifted", ev.ContentID)
+			}
+		})
+	}
+}
+
+// The 13-column original extract must still load, with video_resolution empty
+// rather than holding content_id's value.
+func TestEventReaderToleratesAbsentVideoResolution(t *testing.T) {
+	const sessionID = "94D660E9F4D438A91A80A351320BE2B344B81FAFFE23A5BE677F93A6684F8DAC"
+	const userID = "7C7D3C62725140B3E15072BBD0166D5EA6C6811F0061AB2F53CA2179DF43858D"
+
+	body := "content_id,video_session_id,user_id,event_type,event,event_timestamp," +
+		"platform,app_version,country,audio_language,subtitle_language," +
+		"player_version,session_start_epoch\n" +
+		"21311522," + sessionID + "," + userID + ",VideoPlay,Play,1785062009028," +
+		"JIO_ANDROID_TV,3.9.4,india,hin,OFF,1.8.2,1785062007336\n"
+
+	path := filepath.Join(t.TempDir(), "original.csv")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, err := OpenEvents(path)
+	if err != nil {
+		t.Fatalf("OpenEvents on a 13-column file: %v", err)
+	}
+	defer r.Close()
+
+	ev, reject, err := r.Next()
+	if err != nil || reject != nil {
+		t.Fatalf("Next: err=%v reject=%+v", err, reject)
+	}
+	if ev.VideoResolution != "" {
+		t.Errorf("VideoResolution = %q, want empty — a missing column must not "+
+			"fall through to another column's value", ev.VideoResolution)
+	}
+	if ev.ContentID != 21311522 {
+		t.Errorf("content id = %d", ev.ContentID)
+	}
+}
+
+func TestContentReaderReadsOptionalShowName(t *testing.T) {
+	// With show_name, and without it. content_id is column 0 in both, so a
+	// regression to rec[0] indexing surfaces as the id text in ShowName.
+	for _, tc := range []struct{ name, body, want string }{
+		{
+			"present",
+			"content_id,title,video_type,category,show_name\n7,T,movie,drama,fkcbb\n",
+			"fkcbb",
+		},
+		{
+			"absent",
+			"content_id,title,video_type,category\n7,T,movie,drama\n",
+			"",
+		},
+		{
+			"present but empty",
+			"content_id,title,video_type,category,show_name\n7,T,movie,drama,\n",
+			"",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "content.csv")
+			if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			r, err := OpenContent(path)
+			if err != nil {
+				t.Fatalf("OpenContent: %v", err)
+			}
+			defer r.Close()
+
+			c, reject, err := r.Next()
+			if err != nil || reject != nil {
+				t.Fatalf("Next: err=%v reject=%+v", err, reject)
+			}
+			if c.ShowName != tc.want {
+				t.Errorf("ShowName = %q, want %q", c.ShowName, tc.want)
+			}
+			if c.ContentID != 7 {
+				t.Errorf("content id = %d — column mapping drifted", c.ContentID)
+			}
+		})
 	}
 }

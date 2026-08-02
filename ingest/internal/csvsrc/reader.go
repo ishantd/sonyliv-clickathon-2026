@@ -101,6 +101,18 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 	er.line++
 
 	get := func(col string) string { return strings.TrimSpace(rec[er.idx[col]]) }
+	// getOpt is for columns that may be absent from the header entirely.
+	// get() would index rec[0] on a missing column -- er.idx returns the zero
+	// value for an absent key -- and silently return content_id's value for
+	// video_resolution. That is a wrong value, not an error, so the optional
+	// lookup has to be explicit.
+	getOpt := func(col string) string {
+		i, ok := er.idx[col]
+		if !ok || i >= len(rec) {
+			return ""
+		}
+		return strings.TrimSpace(rec[i])
+	}
 	reject := func(reason, detail string) *RowReject {
 		return &RowReject{Line: er.line, Reason: reason, Detail: detail, Raw: strings.Join(rec, ",")}
 	}
@@ -140,6 +152,7 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 		AudioLanguage:     get("audio_language"),
 		SubtitleLanguage:  get("subtitle_language"),
 		PlayerVersion:     get("player_version"),
+		VideoResolution:   getOpt("video_resolution"),
 	}
 	return ev, nil, nil
 }
@@ -189,6 +202,15 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 	cr.line++
 
 	get := func(col string) string { return strings.TrimSpace(rec[cr.idx[col]]) }
+	// Optional column; see the note on getOpt in the event reader for why a
+	// missing key cannot go through get().
+	getOpt := func(col string) string {
+		i, ok := cr.idx[col]
+		if !ok || i >= len(rec) {
+			return ""
+		}
+		return strings.TrimSpace(rec[i])
+	}
 
 	contentID, err := ParseContentID(get("content_id"))
 	if err != nil {
@@ -209,10 +231,17 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 	if category == "" {
 		category = "unknown"
 	}
+	// show_name arrives with the unseen dataset and is absent from the original
+	// extract. Left as the empty string rather than mapped to 'unknown': unlike
+	// video_type and category, there is no evidence an empty show_name means
+	// "unclassified" here, and inventing a value would make "this catalogue has
+	// no show names at all" indistinguishable from "this title has none".
+	showName := getOpt("show_name")
 
 	return &model.Content{
 		ContentID: contentID,
 		Title:     get("title"),
+		ShowName:  showName,
 		VideoType: videoType,
 		Category:  category,
 	}, nil, nil

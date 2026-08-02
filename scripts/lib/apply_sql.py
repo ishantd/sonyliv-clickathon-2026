@@ -152,6 +152,39 @@ def strip_to_sql(stmt: str) -> str:
     return stmt.strip() if "".join(body_chars).strip() else ""
 
 
+def escape_sql_string(s: str) -> str:
+    """Escape for a single-quoted ClickHouse string literal.
+
+    Mirrors escapeSQLString in ingest/internal/chx/schema.go. A password with a
+    quote or a backslash in it would otherwise either break the DDL or, worse,
+    terminate the literal early and change what the statement means.
+    """
+    return s.replace("\\", "\\\\").replace("'", "\\'")
+
+
+def redact(text: str, secret: str) -> str:
+    """Remove a secret from anything about to be printed.
+
+    Applied to dry-run output, progress lines and server errors alike. The
+    content dictionary's SOURCE clause embeds credentials, so the substituted
+    DDL contains the password in plaintext -- printing a statement verbatim
+    would put it on the terminal and into any captured log. ClickHouse also
+    echoes offending SQL back in some error messages, which is why this wraps
+    errors too and not just the dry-run path.
+
+    BOTH the raw and the SQL-escaped spelling are removed, longest first.
+    Redacting only the raw form is not enough and fails silently: the statement
+    holds the ESCAPED password, so a secret containing a quote or a backslash
+    would not match and would be printed in full. Caught by testing with
+    p@ss\\/w0rd'x, which leaked as PASSWORD 'p@ss\\\\/w0rd\\'x'.
+    """
+    if not secret:
+        return text
+    for form in sorted({secret, escape_sql_string(secret)}, key=len, reverse=True):
+        text = text.replace(form, "********")
+    return text
+
+
 def summarise(stmt: str, width: int = 110) -> str:
     """First non-comment line, for progress output."""
     for line in stmt.splitlines():
@@ -236,6 +269,24 @@ def main() -> int:
         raw = sys.stdin.read() if args.file == "-" else open(args.file, encoding="utf-8").read()
         # {{db}} keeps the DDL portable across sonyliv / sonyliv_prod / a scratch db.
         raw = raw.replace("{{db}}", args.database)
+        # {{ch_user}} / {{ch_password}} exist only for the content dictionary's
+        # SOURCE(CLICKHOUSE(...)) clause, which authenticates even when it points
+        # at a table on the same server.
+        #
+        # These were NOT substituted here, and the consequence was silent:
+        # ingest/sql/001_content.sql would be applied with a literal
+        # '{{ch_user}}' as the username, CREATE OR REPLACE DICTIONARY would
+        # SUCCEED because Cloud lazy-loads dictionaries, and the failure would
+        # only appear on first use -- as an empty load, which
+        # system.dictionaries still reports as status = 'LOADED'. Every
+        # dictGetOrDefault would then return its default and video_type would be
+        # '__unknown__' everywhere, with no error anywhere.
+        #
+        # ingest/internal/chx/schema.go already did this correctly, so the
+        # dictionary worked when created by `sonyliv-ingest schema` and would
+        # have been broken by bootstrap.sh -- two paths, one of them wrong.
+        raw = raw.replace("{{ch_user}}", escape_sql_string(args.user))
+        raw = raw.replace("{{ch_password}}", escape_sql_string(args.password))
         if args.rewrite_db and args.rewrite_db != args.database:
             src = f"{args.rewrite_db}."
             n = raw.count(src)
@@ -248,9 +299,11 @@ def main() -> int:
     if not args.quiet:
         print(f"  {label}: {len(statements)} statement(s) -> {args.database}")
 
+    # Every print below goes through redact(): after the substitution above, the
+    # dictionary statement contains the real password in plaintext.
     for idx, stmt in enumerate(statements, 1):
         if args.dry_run:
-            print(f"\n-- [{idx}/{len(statements)}] {label}\n{stmt};")
+            print(redact(f"\n-- [{idx}/{len(statements)}] {label}\n{stmt};", args.password))
             continue
         try:
             out = execute(args, stmt, params)
@@ -258,13 +311,13 @@ def main() -> int:
             # Fail loud, and say exactly which statement, so the operator can
             # resume from here rather than re-running the whole stage blind.
             print(f"\nFAILED {label} statement {idx}/{len(statements)}:", file=sys.stderr)
-            print(f"  {summarise(stmt)}", file=sys.stderr)
-            print(f"\n{e}\n", file=sys.stderr)
+            print(redact(f"  {summarise(stmt)}", args.password), file=sys.stderr)
+            print(redact(f"\n{e}\n", args.password), file=sys.stderr)
             return 1
         if not args.quiet:
-            print(f"    [{idx}/{len(statements)}] ok  {summarise(stmt, 88)}")
+            print(redact(f"    [{idx}/{len(statements)}] ok  {summarise(stmt, 88)}", args.password))
         if out.strip():
-            print(out.rstrip())
+            print(redact(out.rstrip(), args.password))
     return 0
 
 

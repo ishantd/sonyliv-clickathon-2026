@@ -106,12 +106,16 @@
 -- existing table without clip_variant would make the CREATE below a no-op
 -- and the producer's new column list would then fail to insert, or worse,
 -- succeed against a stale shape. Throws with instructions instead.
+-- currentDatabase(), NOT a 'sonyliv' literal. apply_sql.py's --rewrite-db
+-- replaces the table prefix `sonyliv.` but cannot rewrite a string literal, so a
+-- hardcoded database name here would silently inspect the WRONG database under
+-- --database sonyliv_dev and the guard would pass while the real target was stale.
 SELECT throwIf(
     (SELECT count() FROM system.tables
-      WHERE database = 'sonyliv' AND name = 'concurrency_minute_versions') = 1
+      WHERE database = currentDatabase() AND name = 'concurrency_minute_versions') = 1
     AND
     (SELECT count() FROM system.columns
-      WHERE database = 'sonyliv' AND table = 'concurrency_minute_versions'
+      WHERE database = currentDatabase() AND table = 'concurrency_minute_versions'
         AND name = 'clip_variant') = 0,
     -- ONE string literal. ClickHouse has no C-style implicit concatenation, so
     -- 'part one' 'part two' is a SYNTAX ERROR, not a joined string -- the same
@@ -141,7 +145,7 @@ CREATE TABLE IF NOT EXISTS sonyliv.concurrency_minute_versions
     source_boundary_points UInt64
 )
 ENGINE = MergeTree
-PARTITION BY toYYYYMM(service_date)
+PARTITION BY toYYYYMMDD(service_date)
 ORDER BY (generation, policy_version, clip_variant, pipeline_run_id,
           source_delta_snapshot, entity, rollup_mask, service_date,
           platform, country, video_type, content_id, minute_start)
