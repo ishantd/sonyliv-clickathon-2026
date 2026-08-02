@@ -29,11 +29,33 @@ for _ in 1 2 3 4 5 6; do
   if [[ -f "$dir/.env" ]]; then env_file="$dir/.env"; break; fi
   dir="$(dirname "$dir")"
 done
+# .env fills in what the environment has NOT already set -- it does not override it.
+#
+# `set -a; . .env` was doing the opposite, and it cost a wrong-database run: an
+# explicit `CLICKHOUSE_DATABASE=sonyliv_unseen ./ch.sh --file 090_validate...` was
+# silently clobbered back to .env's sonyliv_prod, and the suite then reported a
+# full table of PASSes -- for the wrong database. Nothing errored, because both
+# databases have the same schema; only the numbers were from somewhere else.
+#
+# So the precedence is the conventional one: explicit environment beats file. Read
+# with `read -r` on a filtered stream rather than sourcing, so a value containing a
+# space or a `#` survives and nothing in .env can execute.
 if [[ -n "$env_file" ]]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$env_file"
-  set +a
+  while IFS='=' read -r key val; do
+    [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+    # Already set and non-empty: leave it alone. This is the whole point.
+    [[ -n "${!key:-}" ]] && continue
+    # Strip one layer of surrounding quotes, as a shell would have.
+    val="${val%$'\r'}"
+    # Length guard: ${val:1:-1} on a 0- or 1-character value is a bash error
+    # ("substring expression < 0"), which printed on every run before this.
+    if (( ${#val} >= 2 )); then
+      case "$val" in
+        \"*\"|\'*\') val="${val:1:${#val}-2}" ;;
+      esac
+    fi
+    export "$key=$val"
+  done < <(grep -vE '^[[:space:]]*(#|$)' "$env_file")
 fi
 
 : "${CLICKHOUSE_HOST:?CLICKHOUSE_HOST is not set (no .env found?)}"

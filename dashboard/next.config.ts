@@ -25,32 +25,38 @@ import type { NextConfig } from "next";
   special casing.
 */
 /*
-  basePath — what lets this app share one host and one port with LibreChat.
+  basePath — supported, and deliberately UNUSED by the demo deployment.
 
-  The demo box terminates TLS once, on :443, and LibreChat has to own `/` there:
-  its assets, its /api routes and its SSE stream are all absolute from the root,
-  and there is no supported way to rebase them. Two upstream requests for exactly
-  that are open and unanswered — danny-avila/LibreChat#5702 and discussion #2406 —
-  and DOMAIN_CLIENT/DOMAIN_SERVER only affect absolute URLs it generates
-  (OAuth callbacks, email), not where the client fetches its bundle from.
+  This app used to be built with NEXT_PUBLIC_BASE_PATH=/build so it could share one
+  host with LibreChat, which has to own `/`: LibreChat's assets, its /api routes and
+  its SSE stream are all absolute from the root, and there is no supported way to
+  rebase them. Two upstream requests for exactly that are open and unanswered —
+  danny-avila/LibreChat#5702 and discussion #2406 — and DOMAIN_CLIENT/DOMAIN_SERVER
+  only affect absolute URLs it generates (OAuth callbacks, email), not where the
+  client fetches its bundle from.
 
-  This app has no such problem, because basePath is a first-class Next feature. So
-  the app that CAN move is the one that moves: LibreChat keeps the root untouched
-  and this one goes to a prefix, which needs no sub_filter rewriting of hashed
-  asset names and no extra security-group rule.
+  That LibreChat constraint is still true. It stopped being OUR problem when the demo
+  gained a second hostname: LibreChat now lives on chat.fastandfurious.live and this
+  app owns the apex root. The deployed build is therefore a plain `npm run build` with
+  no prefix, and deploy/nginx/sonyliv.conf proxies `/` straight through with no
+  prefix-stripping.
 
-  Set at build time, not hardcoded, for two reasons. `next dev` must stay at `/` or
-  local development gains a prefix nobody wants. And the prefix belongs to the
-  deployment, not to the app — a second box could mount it elsewhere.
+  Splitting on Host beat splitting on path for a reason worth keeping written down:
+  under a prefix, NEXT_PUBLIC_API_BASE had to be held in lockstep with basePath, and
+  if it ever drifted this app's /api/... calls reached LibreChat's API instead of ours
+  — not a 404, a wrong service, which is a far worse way to fail. On its own hostname
+  that failure mode cannot exist at all.
 
-    NEXT_PUBLIC_BASE_PATH=/build npm run build     # behind nginx
-    npm run build                                  # standalone at root
+  The mechanism stays, because the prefix belongs to the deployment and not to the
+  app: another box may need to mount this under one, and `next dev` must stay at `/`
+  either way.
 
-  NEXT_PUBLIC_API_BASE must be set to the SAME value, and that is not redundant:
-  basePath rewrites links and asset URLs, but fetch() calls in lib/api.ts are
-  strings this app builds itself, so Next does not touch them. Leave it empty here
-  and the app requests /api/... at the root — which on the demo box is LibreChat's
-  API, not ours. It would not 404; it would reach the wrong service.
+    npm run build                                  # what the demo ships: apex root
+    NEXT_PUBLIC_BASE_PATH=/build npm run build     # behind a path prefix
+
+  If you do set a prefix, set NEXT_PUBLIC_API_BASE to the SAME value. That is not
+  redundant: basePath rewrites links and asset URLs, but the fetch() calls in
+  lib/api.ts are strings this app builds itself, so Next never touches them.
 */
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 

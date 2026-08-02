@@ -27,8 +27,12 @@
 # In steady state this script touches nothing and exits in milliseconds.
 set -uo pipefail
 
+# DOMAIN is the cert's primary name and also names the files lego writes; the rest are
+# SANs. Every name the cert should carry has to be listed here, because lego renews the
+# set it is given, not the set that happens to be on disk -- leave one out and the renewal
+# silently issues a narrower cert that then fails to match in a browser two months later.
 DOMAIN=fastandfurious.live
-ALT=www.fastandfurious.live
+ALTS=(www.fastandfurious.live chat.fastandfurious.live)
 EMAIL=siddhartha.mishra@gobblecube.ai
 LEGO_PATH=/etc/lego
 CRT="$LEGO_PATH/certificates/$DOMAIN.crt"
@@ -68,8 +72,11 @@ trap restore_nginx EXIT
 
 systemctl stop nginx
 
+domain_args=(--domains "$DOMAIN")
+for alt in "${ALTS[@]}"; do domain_args+=(--domains "$alt"); done
+
 lego --accept-tos --email "$EMAIL" \
-    --domains "$DOMAIN" --domains "$ALT" \
+    "${domain_args[@]}" \
     --tls \
     --path "$LEGO_PATH" \
     renew --days "$RENEW_WITHIN_DAYS"
