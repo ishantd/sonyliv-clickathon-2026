@@ -303,14 +303,35 @@ func (s *Server) handleFleetCurve(w http.ResponseWriter, r *http.Request) {
 		"timeout_ms": s.timeoutMS,
 	}
 
-	// Count only — the scope itself is resolved inside the query, against
-	// fleet_sessions. There is no cap and nothing to truncate.
 	_, scoped := s.fleet.List(f, 0, 1, now)
 	resp["scoped_sessions"] = scoped
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	points, err := FleetCurve(ctx, s.client, f, from, now, s.timeoutMS)
+
+	// Served by default; exact on request.
+	//
+	// The served path reads the materialised metric and computes only the unsealed
+	// tail, so its cost is the size of the answer. The exact path re-runs the state
+	// machine over every event of the fleet's own sessions — slower, narrower, and
+	// the only one that is an independent oracle, which is why it stays reachable
+	// rather than being replaced.
+	var (
+		points []fleet.CurvePoint
+		err    error
+		source = SourceServed
+		sealed time.Time
+	)
+	if r.URL.Query().Get("exact") == "1" {
+		source = SourceExact
+		points, err = ExactFleetCurve(ctx, s.client, f, from, now, s.timeoutMS)
+	} else {
+		points, sealed, err = ServedCurve(ctx, s.client, s.sealer, f, from, now)
+	}
+	resp["source"] = source
+	if !sealed.IsZero() {
+		resp["sealed_through"] = sealed
+	}
 	if err != nil {
 		resp["clickhouse"] = []fleet.CurvePoint{}
 		resp["clickhouse_error"] = err.Error()

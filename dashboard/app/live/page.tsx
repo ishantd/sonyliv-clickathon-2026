@@ -6,7 +6,7 @@ import useSWR from "swr";
 import { DualCurveChart } from "@/components/DualCurveChart";
 import { FleetFilters } from "@/components/FleetFilters";
 import { Caveat, ErrorNote, Panel, Stat, StatGrid } from "@/components/ui";
-import { fetcher, filterQuery, num } from "@/lib/api";
+import { clockTime, fetcher, filterQuery, num } from "@/lib/api";
 import type { FleetCurveResponse, FleetFilter } from "@/lib/types";
 
 const WINDOWS = [15, 30, 60, 180];
@@ -24,8 +24,13 @@ export default function LivePage() {
   const [filter, setFilter] = useState<FleetFilter>({});
   const [minutes, setMinutes] = useState(30);
 
+  // The served metric by default. `exact` re-runs the state machine over every
+  // event, scoped to the fleet's own sessions — slower and narrower, and the only
+  // one that is an independent oracle, so it stays one click away.
+  const [exact, setExact] = useState(false);
+
   const { data, error } = useSWR<FleetCurveResponse>(
-    `/api/fleet/curve?minutes=${minutes}&${filterQuery(filter)}`,
+    `/api/fleet/curve?minutes=${minutes}${exact ? "&exact=1" : ""}&${filterQuery(filter)}`,
     fetcher,
     { refreshInterval: 5000, keepPreviousData: true },
   );
@@ -63,6 +68,17 @@ export default function LivePage() {
               </button>
             ))}
           </div>
+          <button
+            type="button"
+            onClick={() => setExact(!exact)}
+            aria-pressed={exact}
+            title="Re-derive from raw events, scoped to the fleet's own sessions. Slower, and the only independent check on the served metric."
+            className={`rounded px-2 py-1 font-mono text-[0.6875rem] transition-colors ${
+              exact ? "bg-accent-wash text-accent" : "text-ink-3 hover:text-ink"
+            }`}
+          >
+            exact
+          </button>
           <span className="ml-auto font-mono text-[0.6875rem] text-ink-3">
             {num(data?.scoped_sessions)} sessions in scope
           </span>
@@ -91,6 +107,32 @@ export default function LivePage() {
             pipeline line unavailable: {data.clickhouse_error}
           </p>
         )}
+
+        <Caveat>
+          {data?.source === "exact" ? (
+            <>
+              <span className="text-ink-2">Exact.</span> The full state machine over
+              every event of the fleet&apos;s own sessions. This is the oracle — a
+              metric cannot validate itself — and it runs to the current minute.
+            </>
+          ) : (
+            <>
+              <span className="text-ink-2">Served</span> from{" "}
+              <code>concurrency_minute</code>, complete through{" "}
+              <span className="text-ink-2">
+                {data?.sealed_through
+                  ? clockTime(data.sealed_through).slice(0, 5)
+                  : "—"}{" "}
+                UTC
+              </span>
+              . The newest couple of minutes are not sealed yet, so the dashed line
+              stops short of the solid one — that distance is the pipeline&apos;s
+              lag, shown rather than hidden. The metric covers all traffic, not just
+              the fleet, so an unfiltered read can sit above the fleet line if
+              anything else is writing.
+            </>
+          )}
+        </Caveat>
 
         <ErrorNote error={error} />
       </Panel>

@@ -101,6 +101,34 @@ SETTINGS index_granularity = 8192
 COMMENT 'Simulator bookkeeping: one replaceable row per interactive fleet session.';
 
 
+-- Cleared session ids, in their OWN table.
+--
+-- This is the second attempt and the first one was wrong in an instructive way.
+-- Clearing used to write a tombstone row into fleet_sessions with a newer version,
+-- relying on ReplacingMergeTree to let it win. It does win — until a merge runs.
+-- A merge physically deletes the losing rows, so once a restored session
+-- re-persisted with a newer version still, the merge collapsed the pair and
+-- deleted the TOMBSTONE. Measured afterwards: 0 of 3,470 resurrected sessions had
+-- any tombstone row left. The marker cannot live in the keyspace it is trying to
+-- suppress.
+--
+-- Here it cannot be collapsed against anything, because nothing else writes this
+-- table. Append-only, one row per cleared id, and the exclusion is a set
+-- membership test with no version ordering to get wrong.
+--
+-- The TTL deliberately outlives fleet_sessions' own 7 days: if the marker expired
+-- first, the session row it suppresses would still be there and would come back.
+CREATE TABLE IF NOT EXISTS {{db}}.fleet_sessions_cleared
+(
+    video_session_id String,
+    cleared_at       DateTime64(3, 'UTC')
+)
+ENGINE = ReplacingMergeTree
+ORDER BY video_session_id
+TTL toDateTime(cleared_at) + INTERVAL 14 DAY
+COMMENT 'Session ids the operator cleared. Membership is terminal.';
+
+
 -- Migrations. CREATE TABLE IF NOT EXISTS is a no-op on a table that already
 -- exists, so columns added after the first deploy need their own statement —
 -- otherwise the schema step reports success while the new columns are missing,

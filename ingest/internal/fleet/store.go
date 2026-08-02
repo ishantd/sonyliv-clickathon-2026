@@ -65,6 +65,10 @@ type Persisted struct {
 type Store interface {
 	Save(ctx context.Context, rows []Persisted) error
 	Load(ctx context.Context) ([]Persisted, error)
+	// Clear marks ids as gone, terminally. Implementations must not express this
+	// as a newer row in the same keyspace as Save's — a ReplacingMergeTree merge
+	// deletes the losing row, and the losing row turns out to be the marker.
+	Clear(ctx context.Context, ids []string) error
 }
 
 // snapshot returns rows for sessions changed since the last call, clearing their
@@ -106,15 +110,6 @@ func (r *Registry) snapshot() []Persisted {
 			UpdatedAt:  time.Now().UTC(),
 		})
 		s.dirty = false
-	}
-	return out
-}
-
-// removedRows returns tombstones for ids dropped from the registry.
-func removedRows(ids []string, now time.Time) []Persisted {
-	out := make([]Persisted, 0, len(ids))
-	for _, id := range ids {
-		out = append(out, Persisted{ID: id, Removed: true, UpdatedAt: now})
 	}
 	return out
 }

@@ -216,7 +216,10 @@ func TestRemovedRowsAreSkippedByRestore(t *testing.T) {
 	}
 	cmd(t, r, views[0].ID, CmdEnd, at(time.Second))
 	rows := r.snapshot()
-	rows = append(rows, removedRows(r.RemoveEnded(), at(2*time.Second))...)
+	cleared := r.RemoveEnded()
+	for _, id := range cleared {
+		rows = append(rows, Persisted{ID: id, Removed: true, UpdatedAt: at(2 * time.Second)})
+	}
 
 	dst := NewRegistry(lease, 97)
 	dst.Restore(rows, at(3*time.Second))
