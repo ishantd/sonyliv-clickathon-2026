@@ -46,7 +46,13 @@ func run() error {
 	envPath := fs.String("env", "", "path to .env")
 
 	// volume and shape — the knobs the demo is driven with
-	concurrency := fs.Int("concurrency", 500, "steady-state number of simultaneously active sessions")
+	// NOT a database dial. This is the number of simulated viewers inside the
+	// generated event stream. The DB connection count is CLICKHOUSE_MAX_OPEN_CONNS
+	// (default 16) and is completely independent — `--concurrency 50000` asks for
+	// 50,000 fake viewers served through at most 16 sockets. Measured on
+	// 2026-08-01: peak 23 TCP connections per replica against a 4,096 limit.
+	// The startup banner prints both so the two can never be confused again.
+	concurrency := fs.Int("concurrency", 500, "SIMULATED VIEWER sessions in the generated stream (NOT database connections — see --help notes)")
 	duration := fs.Duration("duration", 0, "event-time span to generate, e.g. 10m (0 = until --max-events)")
 	maxEvents := fs.Int64("max-events", 0, "hard cap on emitted rows (0 = unlimited)")
 	rampUp := fs.Duration("ramp-up", 30*time.Second, "event-time over which concurrency climbs to target")
@@ -172,7 +178,9 @@ func run() error {
 	runID := uuid.New()
 
 	fmt.Printf("\ngenerating:\n")
-	fmt.Printf("  target concurrency : %d sessions\n", cfg.TargetConcurrency)
+	fmt.Printf("  target concurrency : %d SIMULATED VIEWER sessions (not DB connections)\n", cfg.TargetConcurrency)
+	fmt.Printf("  db connections     : %d max open, %d insert workers — this is the real client concurrency\n",
+		chCfg.MaxOpenConns, *workers)
 	fmt.Printf("  event-time window  : %s", cfg.StartTime.Format(time.RFC3339))
 	if cfg.Duration > 0 {
 		fmt.Printf(" .. %s (%s)", cfg.StartTime.Add(cfg.Duration).Format(time.RFC3339), cfg.Duration)

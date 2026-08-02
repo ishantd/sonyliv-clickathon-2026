@@ -35,6 +35,10 @@ venv/
 # Logs
 *.log
 
+# clickhouse-client, installed at the repo root by `curl https://clickhouse.com/ | sh`.
+# 664 MB — never commit it.
+/clickhouse
+
 # Local tooling state
 ruvector.db
 
@@ -55,3 +59,6 @@ deploy/librechat/images/
 deploy/librechat/uploads/
 deploy/librechat/logs/
 deploy/librechat/agent-id
+
+# Source extracts. Large, and supplied rather than authored.
+data/*.csv
