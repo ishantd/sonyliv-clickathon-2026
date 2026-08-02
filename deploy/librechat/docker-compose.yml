@@ -77,11 +77,18 @@ services:
     # No ports: reached as http://litellm:4000 on the compose network. It holds the Gemini
     # key and has a master key, and neither belongs on a listening host port.
     healthcheck:
-      test: ['CMD', 'curl', '-fsS', 'http://localhost:4000/health/liveliness']
+      # python3, not curl: neither this image nor LibreChat's ships curl, and a healthcheck
+      # that shells out to a missing binary reports `unhealthy` for a service that is
+      # serving perfectly well -- which sends you debugging the proxy instead of the check.
+      test:
+        - CMD
+        - python3
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=5)"
       interval: 30s
-      timeout: 5s
+      timeout: 10s
       retries: 5
-      start_period: 40s
+      start_period: 60s
 
 # Meilisearch is deliberately absent. LibreChat's compose ships it for conversation search,
 # it wants ~500 MB, and this box is also running sonyliv-api, sonyliv-mock and sonyliv-mcp

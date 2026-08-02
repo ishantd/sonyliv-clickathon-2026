@@ -29,6 +29,12 @@ case "${1:-}" in
     *)       echo "deploy-librechat.sh: unknown flag $1" >&2; exit 2 ;;
 esac
 
+# Every `docker compose` call here is under sudo. Not laziness: the compose CLI -- not the
+# daemon -- is what reads `env_file`, and /etc/sonyliv/librechat.env is 0600 root-owned on
+# purpose, the same convention the systemd units use. Being in the docker group is enough
+# to talk to the daemon and not enough to read that file, so an unprivileged
+# `docker compose up` fails with a bare "permission denied" naming the env file.
+#
 # ---------------------------------------------------------------------------
 # Verification. Run after every deploy, and on its own with --check.
 #
@@ -43,7 +49,7 @@ remote_check() {
         fail=0
 
         echo '== containers =='
-        docker compose ps --format 'table {{.Service}}\t{{.Status}}'
+        sudo docker compose ps --format 'table {{.Service}}\t{{.Status}}'
 
         echo '== librechat =='
         if curl -fsS --max-time 10 http://127.0.0.1:3080/health >/dev/null; then
@@ -53,8 +59,10 @@ remote_check() {
         fi
 
         echo '== litellm -> gemini =='
-        if docker compose exec -T litellm curl -fsS --max-time 10 \
-             http://localhost:4000/health/liveliness >/dev/null; then
+        # python3, not curl -- see the healthcheck note in docker-compose.yml.
+        if sudo docker compose exec -T litellm python3 -c \
+             \"import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness', timeout=8)\" \
+             >/dev/null 2>&1; then
             echo '  ok  proxy alive'
         else
             echo '  FAIL  LiteLLM is not alive; traces will not reach Langfuse'; fail=1
@@ -65,16 +73,14 @@ remote_check() {
         # host proves nothing about whether the CONTAINER can, and that gap -- host.docker
         # .internal unresolved, or the server still bound to the host loopback -- is the
         # most likely way this deployment fails.
-        eval \"\$(sudo bash -c 'grep -E \"^SONYLIV_MCP_TOKEN=\" /etc/sonyliv/mcp.env')\"
-        body='{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{},\"clientInfo\":{\"name\":\"deploy-check\",\"version\":\"1\"}}}'
-        if docker compose exec -T api curl -fsS --max-time 15 \
-             -H 'Content-Type: application/json' \
-             -H \"Authorization: Bearer \$SONYLIV_MCP_TOKEN\" \
-             -X POST http://host.docker.internal:8848/mcp -d \"\$body\" \
-             | grep -q 'NEVER SUM OR AVERAGE A PEAK'; then
-            echo '  ok  reachable, and returning its operating rules'
+        #
+        # The probe is piped in on stdin so none of its JavaScript needs escaping through
+        # ssh; it reports its own reason on failure.
+        if sudo SONYLIV_MCP_TOKEN=\"\$(sudo bash -c 'sed -n \"s/^SONYLIV_MCP_TOKEN=//p\" /etc/sonyliv/mcp.env')\" \
+             docker compose exec -T -e SONYLIV_MCP_TOKEN api node < mcp-probe.js; then
+            :
         else
-            echo '  FAIL  the api container cannot reach the MCP server'; fail=1
+            echo '  FAIL  see reason above'; fail=1
         fi
 
         echo '== nginx =='
@@ -110,7 +116,7 @@ echo "== preflight =="
 # shellcheck disable=SC2029
 ssh "$host" "set -euo pipefail
     command -v docker >/dev/null || { echo 'docker is not installed (see deploy/README.md)' >&2; exit 1; }
-    docker compose version >/dev/null || { echo 'docker compose v2 is missing' >&2; exit 1; }
+    sudo docker compose version >/dev/null || { echo 'docker compose v2 is missing' >&2; exit 1; }
     sudo bash -c 'test -r /etc/sonyliv/librechat.env' \
         || { echo '/etc/sonyliv/librechat.env is missing (see deploy/librechat/.env.example)' >&2; exit 1; }
     sudo mkdir -p '$remote_dir'
@@ -135,7 +141,7 @@ echo "  synced $remote_dir"
 
 if [[ "$mode" == sync ]]; then
     # shellcheck disable=SC2029
-    ssh "$host" "cd '$remote_dir' && docker compose up -d --force-recreate api"
+    ssh "$host" "cd '$remote_dir' && sudo docker compose up -d --force-recreate api"
     echo "  api restarted on the new prompt"
     remote_check
     exit $?
@@ -148,8 +154,8 @@ echo "== up =="
 # shellcheck disable=SC2029
 ssh "$host" "set -euo pipefail
     cd '$remote_dir'
-    docker compose pull --quiet
-    docker compose up -d
+    sudo docker compose pull --quiet
+    sudo docker compose up -d
     # LibreChat builds its client on first boot and is slow to answer until it has.
     for i in \$(seq 1 60); do
         curl -fsS --max-time 3 http://127.0.0.1:3080/health >/dev/null && break

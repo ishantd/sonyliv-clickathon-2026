@@ -195,16 +195,36 @@ a conversation that started before anyone read the prompt.
 ### One-time box setup
 
 **0. The restricted ClickHouse user, first.** Nothing below works without it, and it
-needs an admin — `sonyliv_svc` holds no `ACCESS MANAGEMENT`. See
-`ingest/cmd/sonyliv-mcp/README.md`; run `ingest/sql/009_mcp_reader.sql`, then prove it:
+needs an admin — `sonyliv_svc` holds no `ACCESS MANAGEMENT` (verified: it cannot even
+`SELECT` from `system.users`). ClickHouse Cloud has no SQL-over-API endpoint, so the
+admin path is the console, or resetting `default` through the Cloud API:
 
 ```bash
-MCP_CH_PASSWORD=… ./ingest/cmd/sonyliv-mcp/check-grants.sh
+PATCH /v1/organizations/{orgId}/services/{serviceId}/password
+     {"newPasswordHash": "<base64 sha256>", "newDoubleSha1Hash": "<hex double sha1>"}
 ```
 
-That run is the only thing that tests the grant boundary. The guard was tested with
-`--dev-unrestricted`, which bypasses the preflight, so until `check-grants.sh` passes
-the "serving layer only" claim rests on one layer, not two.
+Cloud enforces a password policy the SQL file's placeholder does not hint at: at least
+one uppercase character and one special character. A hex password is rejected with
+`BAD_ARGUMENTS`, which reads like a syntax error in the DDL rather than a policy.
+
+Then run `ingest/sql/009_mcp_reader.sql` with the placeholder substituted — one
+statement per request over the HTTP interface, since it runs one query per call — and
+prove it:
+
+```bash
+MCP_CH_PASSWORD=… ./ingest/cmd/sonyliv-mcp/check-grants.sh   # 37 passed, 0 failed
+```
+
+That run is the only thing that tests the grant boundary; the guard alone can be tested
+with `--dev-unrestricted`, which bypasses the preflight but proves nothing about grants.
+
+One thing it taught us. `system.tables` and `system.columns` are readable by
+`sonyliv_mcp` and **cannot be revoked** — ClickHouse always exposes them, filtered to
+the objects the caller is granted. There is no grant to take away; the filtering *is*
+the mechanism. So the check no longer asserts they refuse. It asserts what actually
+matters: that they reveal nothing outside the serving layer. Measured, they return
+exactly the 8 granted objects and one database.
 
 **1. Bind the MCP server where a container can reach it.** A container cannot reach the
 host's `127.0.0.1`. Add to `/etc/sonyliv/mcp.env`:
@@ -218,11 +238,15 @@ not a loosening — nothing plaintext leaves the box and 8848 is not in the secu
 group. The unit now orders itself `After=docker.service`, since the address does not
 exist until dockerd has created `docker0`.
 
-**2. Docker.**
+**2. Docker.** The box is Ubuntu 26.04 (`ubuntu@172.30.105.171`, ssh alias `sonyliv`),
+8 vCPU / 15.7 GB, on a private network with **no public IPv4** — reachable only from
+inside the VPC.
 
 ```bash
-sudo dnf install -y docker && sudo systemctl enable --now docker
-sudo usermod -aG docker ec2-user      # log out and back in
+sudo apt-get update
+sudo apt-get install -y docker.io docker-compose-v2 nginx jq rsync
+sudo systemctl enable --now docker
+sudo usermod -aG docker ubuntu       # log out and back in
 ```
 
 **3. Secrets**, root-owned `0600`, same convention as `sonyliv.env`. Template and
@@ -249,14 +273,17 @@ MOCK_TLS_ARGS=
 Then:
 
 ```bash
-sudo dnf install -y nginx
-sudo mkdir -p /etc/sonyliv/tls        # reuse the mock's existing cert, or generate one
 sudo cp deploy/nginx/sonyliv.conf /etc/nginx/conf.d/
-sudo nginx -t && sudo systemctl enable --now nginx
-sudo systemctl restart sonyliv-mock
+sudo rm -f /etc/nginx/sites-enabled/default
+sudo nginx -t && sudo systemctl restart nginx     # restart, not reload: nginx was
+sudo systemctl restart sonyliv-mock               # started by apt before this file existed
 ```
 
-Add **8443** to the security group. Reverting is those two env lines plus a restart.
+The cert is the pair the mock already served itself with,
+`/etc/sonyliv/tls/server.{crt,key}` — one self-signed cert, now on both ports.
+
+No security-group change was needed: the box has no public IP, so both listeners are
+already confined to the VPC. Reverting is those two env lines plus a restart.
 
 **5. Seed the prompt** (once, from a checkout with `.env`):
 
@@ -282,8 +309,14 @@ the one that actually proves the integration — an `initialize` call to the MCP
 Reaching the MCP server from the host proves nothing about whether the container can,
 and that gap is the most likely way this deployment fails.
 
-Register the first account, then set `ALLOW_REGISTRATION=false` and
-`docker compose up -d api`. This is internet-facing.
+Registration is left **open**, which would be wrong on an internet-facing box and is
+the right call here: there is no public IP, the whole box is VPC-only, and judges may
+need to make their own accounts. To close it anyway, set `ALLOW_REGISTRATION=false` in
+`/etc/sonyliv/librechat.env` and `sudo docker compose up -d api`.
+
+Every `docker compose` call must be **under sudo**: the compose CLI reads `env_file`
+itself, and `/etc/sonyliv/librechat.env` is 0600 root-owned by design. Docker-group
+membership talks to the daemon; it does not read that file.
 
 ### Proving it works
 
