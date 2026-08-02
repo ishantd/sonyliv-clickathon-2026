@@ -83,32 +83,39 @@ type database struct {
 
 // databases is the selector's whole surface.
 //
-// sonyliv is deliberately ABSENT. It carries the schema — PR #8's DDL reached it
-// — but its serving layer holds 0 rows, so every panel would render "no published
-// rows" and the option would look like a bug. Add it here the moment it is
-// populated; nothing else needs to change.
+// Two datasets, because those are the two this deployment actually uses:
+// sonyliv_demo is what the box is configured with and therefore the only one the
+// simulator writes into, and sonyliv is the canonical 31 Jul load it is measured
+// against. sonyliv_prod and sonyliv_unseen exist on the server but are not
+// offered — a picker entry is a promise that the option shows something.
+//
+// One asymmetry worth knowing before adding a third: /live's served path reads
+// concurrency_minute, and that table is written ONLY by the in-process sealer,
+// which writes to the server's own database. So a dataset other than
+// sonyliv_demo has no sealed rows and /live's ClickHouse line is empty for it —
+// correctly, not by failure. sonyliv's data lives in serving_concurrency_minute,
+// which is what /analytics reads, and that is where its 6.9M events are visible.
 var databases = []database{
 	{
-		Name:     "sonyliv_prod",
-		Label:    "Mock ingestion",
+		Name:     "sonyliv_demo",
+		Label:    "Live demo",
 		Writable: true,
-		Note:     "The graded July extract plus everything the generator, fleet and API have written since. Writable, and the only dataset the simulator writes into. The hot hour reproduces the canonical 2,305 / 855.578199.",
+		Note:     "What the generator, fleet and API write as you drive them. This is the server's configured database, so it is the only dataset the simulator writes into, and the only one /live can chart a served curve for — the sealer materialises concurrency_minute here and nowhere else.",
 		Windows: []window{
-			{Key: "hot", Label: "Hot hour (26 Jul)", From: "2026-07-26 10:00:00", To: "2026-07-26 11:00:00"},
-			{Key: "extract", Label: "Whole extract", From: "2026-07-14 00:00:00", To: "2026-07-27 00:00:00"},
 			{Key: "1h", Label: "Last hour", RelMinutes: 60},
 			{Key: "6h", Label: "Last 6 hours", RelMinutes: 360},
+			{Key: "24h", Label: "Last 24 hours", RelMinutes: 1440},
 		},
 	},
 	{
-		Name:     "sonyliv_unseen",
+		Name:     "sonyliv",
 		Label:    "Evaluation set — 31 Jul",
 		Writable: false,
-		Note:     "7,000,000 events for 2026-07-31, loaded through the same pipeline. Read-only here: the simulator will not write into it, so it stays exactly as it was loaded. Peak 14,506 at 11:15.",
+		Note:     "6,911,308 events for 2026-07-31, loaded through the same pipeline. Read-only here: the simulator writes into sonyliv_demo, so this stays exactly as it was loaded. Peak 14,506 at 11:15. Its published rows are in serving_concurrency_minute, so /analytics is the surface for it — /live has no sealed rows for this dataset.",
 		Windows: []window{
 			{Key: "peak", Label: "Peak hour (31 Jul)", From: "2026-07-31 11:00:00", To: "2026-07-31 12:00:00"},
 			{Key: "day", Label: "Whole day", From: "2026-07-31 00:00:00", To: "2026-08-01 00:00:00"},
-			{Key: "span", Label: "Everything loaded", From: "2026-07-26 00:00:00", To: "2026-08-04 00:00:00"},
+			{Key: "span", Label: "Everything loaded", From: "2026-07-29 00:00:00", To: "2026-08-01 00:00:00"},
 		},
 	},
 }
