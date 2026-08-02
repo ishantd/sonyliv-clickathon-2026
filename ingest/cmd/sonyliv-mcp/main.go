@@ -6,7 +6,7 @@
 //
 // It exposes ONLY the serving layer. That is enforced in two independent places:
 //
-//   - The ClickHouse user it connects as (ingest/sql/009_mcp_reader.sql) holds SELECT on
+//   - The ClickHouse user it connects as (ingest/sql/manual/009_mcp_reader.sql) holds SELECT on
 //     the serving tables and views and nothing else — no events, no session_intervals, no
 //     system tables, no write privilege of any kind.
 //   - Every statement is validated before it is sent (guard.go).

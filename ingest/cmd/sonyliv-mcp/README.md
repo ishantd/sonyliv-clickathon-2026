@@ -24,7 +24,7 @@ layer. Hence this server.
 
 Two independent layers. The order matters.
 
-**1. The grant — this is the boundary.** `ingest/sql/009_mcp_reader.sql` creates
+**1. The grant — this is the boundary.** `ingest/sql/manual/009_mcp_reader.sql` creates
 `sonyliv_mcp` with `SELECT` on eight serving objects and `dictGet` on `content_dict`.
 Nothing else. Whatever SQL arrives, ClickHouse refuses to read `events_clean` or
 `session_intervals` for this user.
@@ -60,7 +60,7 @@ to use", is the split.
 
 ```bash
 # choose a password, substitute it, and run as an admin
-sed "s/__MCP_PASSWORD__/$(openssl rand -hex 24)/" ingest/sql/009_mcp_reader.sql \
+sed "s/__MCP_PASSWORD__/$(openssl rand -hex 24)/" ingest/sql/manual/009_mcp_reader.sql \
   | clickhouse client --host <host> --secure --user <admin> --password --multiquery
 ```
 

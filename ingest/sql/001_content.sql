@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS {{db}}.content_dim
     video_type      LowCardinality(String) DEFAULT 'unknown',
     category        LowCardinality(String) DEFAULT 'unknown',
 
+    -- Added by the 2026-07-31 unseen-day catalogue (data/surprise_spec.md),
+    -- named there as a filter dimension. DEFAULT '' rather than 'unknown':
+    -- 'unknown' is a REAL value in video_type and category (1,089 titles carry
+    -- it), and reusing it here would make "the original extract had no
+    -- show_name column" indistinguishable from "this show is unclassified".
+    -- Empty means the source did not carry the column at all.
+    show_name       LowCardinality(String) DEFAULT '',
+
     source_version  UInt64 COMMENT 'Monotonic load version; highest wins',
     loaded_at       DateTime64(3, 'UTC') DEFAULT now64(3)
 )
@@ -64,6 +72,13 @@ ALTER TABLE {{db}}.content_dim
         replicated_deduplication_window = 100,
         replicated_deduplication_window_seconds = 2592000;
 
+-- show_name reaches a database that already has content_dim. CREATE TABLE IF NOT
+-- EXISTS above is a no-op there, so without this the unseen-day column would
+-- never arrive and the loader's INSERT would fail on an unknown column.
+-- Additive and safe to re-run; existing rows read the DEFAULT.
+ALTER TABLE {{db}}.content_dim
+    ADD COLUMN IF NOT EXISTS show_name LowCardinality(String) DEFAULT '' AFTER category;
+
 -- Deduplicated read view. Replacement by background merge is eventual, so the
 -- dictionary source must not assume physical replacement has happened yet.
 -- [official: insert-optimize-avoid-final — resolve with argMax, not FINAL]
@@ -75,7 +90,8 @@ SELECT
     content_id,
     argMax(title,      source_version) AS title,
     argMax(video_type, source_version) AS video_type,
-    argMax(category,   source_version) AS category
+    argMax(category,   source_version) AS category,
+    argMax(show_name,  source_version) AS show_name
 FROM {{db}}.content_dim
 GROUP BY content_id;
 
@@ -119,7 +135,8 @@ CREATE OR REPLACE DICTIONARY {{db}}.content_dict
     content_id  Int64,
     title       String            DEFAULT '',
     video_type  String            DEFAULT 'unknown',
-    category    String            DEFAULT 'unknown'
+    category    String            DEFAULT 'unknown',
+    show_name   String            DEFAULT ''
 )
 PRIMARY KEY content_id
 SOURCE(CLICKHOUSE(

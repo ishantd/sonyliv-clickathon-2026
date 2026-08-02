@@ -92,6 +92,12 @@ CREATE TABLE IF NOT EXISTS {{db}}.events_raw
     subtitle_language   LowCardinality(String),
     player_version      LowCardinality(String),
 
+    -- Added by the 2026-07-31 unseen-day export (data/surprise_spec.md), named
+    -- there as a filter dimension. DEFAULT '' because the original extract has
+    -- no such column: empty means "the source did not report one", which is a
+    -- real fact about the row and not a missing value.
+    video_resolution    LowCardinality(String) DEFAULT '',
+
     session_start_epoch DateTime64(3, 'UTC') COMMENT 'From Unix epoch millis; constant per session in the extract' CODEC(DoubleDelta, ZSTD(1)),
 
     -- ---------------------------------------------------------------------
@@ -221,6 +227,13 @@ ALTER TABLE {{db}}.events_raw
         non_replicated_deduplication_window = 1000,
         replicated_deduplication_window = 1000,
         replicated_deduplication_window_seconds = 2592000;
+
+-- Same convergence problem for the unseen-day column: CREATE TABLE IF NOT EXISTS
+-- is a no-op against an existing database, so without this the loader's INSERT
+-- would fail on an unknown column the moment the new CSV arrives. Additive,
+-- metadata-only, safe to re-run.
+ALTER TABLE {{db}}.events_raw
+    ADD COLUMN IF NOT EXISTS video_resolution LowCardinality(String) DEFAULT '' AFTER player_version;
 
 
 -- =============================================================================

@@ -85,6 +85,13 @@ CREATE TABLE IF NOT EXISTS {{db}}.events_clean
     subtitle_language   LowCardinality(String) COMMENT 'Normalized; "off" is preserved as distinct from "unknown"',
     player_version      LowCardinality(String) COMMENT 'Normalized: trimmed, empty -> unknown',
 
+    -- Unseen-day dimension. NOT normalized to 'unknown' the way the language and
+    -- player columns are: those normalize because the source uses several spellings
+    -- for absence, whereas here absence means the column did not exist. Keeping ''
+    -- distinct from a real resolution string is what lets a dashboard tell "the
+    -- extract predates this dimension" from "this playback reported no resolution".
+    video_resolution    LowCardinality(String) DEFAULT '',
+
     -- The single most valuable normalization in the whole pipeline: 47
     -- inconsistently-cased event names collapsed into the closed set the
     -- concurrency state machine actually branches on. Pause/resume exist ONLY
@@ -191,6 +198,13 @@ ORDER BY (session_key, event_ts, event_type, event)
 COMMENT 'Normalized derivation of events_raw. One row per landed row; read through events_dedup.';
 
 
+-- Converge a database that already has events_clean: CREATE TABLE IF NOT EXISTS
+-- above is a no-op there, so the unseen-day column would otherwise never arrive
+-- and the MV's INSERT would fail on an unknown destination column.
+ALTER TABLE {{db}}.events_clean
+    ADD COLUMN IF NOT EXISTS video_resolution LowCardinality(String) DEFAULT '' AFTER player_version;
+
+
 -- =============================================================================
 -- Normalization MV.
 --
@@ -238,6 +252,9 @@ SELECT
        lowerUTF8(splitByChar('-', trimBoth(subtitle_language))[1]))    AS subtitle_language,
 
     if(empty(trimBoth(player_version)), 'unknown', trimBoth(player_version)) AS player_version,
+
+    -- Trimmed but NOT defaulted to 'unknown' -- see the column comment above.
+    trimBoth(video_resolution)                                       AS video_resolution,
 
     multiIf(
         event_type = 'VideoSessionStart', 'session_start',
@@ -341,6 +358,7 @@ SELECT
     argMax(audio_language,     row_version) AS audio_language,
     argMax(subtitle_language,  row_version) AS subtitle_language,
     argMax(player_version,     row_version) AS player_version,
+    argMax(video_resolution,   row_version) AS video_resolution,
     argMax(signal,             row_version) AS signal,
     argMax(is_periodic_ping,   row_version) AS is_periodic_ping,
     argMax(ingest_batch_id,    row_version) AS ingest_batch_id,

@@ -37,15 +37,64 @@ const (
 	ReasonBadRow       = "bad_column_count"
 )
 
-// rawColumns are the columns required by the raw-event schema.
+// rawColumns are the columns REQUIRED by the raw-event schema. A file missing any
+// of these is rejected at open, because every one of them is load-bearing for
+// either identity, time or a serving dimension.
 var rawColumns = []string{
 	"video_session_id", "user_id", "content_id", "event_type", "event",
 	"event_timestamp", "platform", "app_version", "country",
 	"audio_language", "subtitle_language", "player_version", "session_start_epoch",
 }
 
-// contentColumns are the columns required by the content catalogue.
+// contentColumns are the columns REQUIRED by the content catalogue.
 var contentColumns = []string{"content_id", "title", "video_type", "category"}
+
+// Optional columns: carried when the header has them, defaulted when it does not.
+//
+// The 2026-07-31 unseen-day export adds one column to each input —
+// video_resolution to the events, show_name to the catalogue
+// (data/surprise_spec.md). Both are named as filter dimensions, so they have to
+// reach the tables rather than be tolerated and dropped.
+//
+// They are OPTIONAL rather than required on purpose. Making them required would
+// refuse the original extract, and the two files then need two loaders — which
+// is how the loader and the generator drift apart. One binary reads both, and
+// the column's absence is expressed as a default, not as a second code path.
+//
+// This is why openCSV validates only the required set and tolerates extras:
+// adding a column to the source is not, by itself, a breaking change. What was
+// broken is that an extra column was silently DISCARDED, and a missing optional
+// column would have silently read field 0 — see the `get` helpers below.
+var (
+	optionalRawColumns     = []string{"video_resolution"}
+	optionalContentColumns = []string{"show_name"}
+)
+
+// field reads a column by name, tolerating absence.
+//
+// The obvious form, rec[idx[col]], is a trap: Go returns the zero value for a
+// missing map key, so an absent column reads FIELD 0 — video_session_id — and
+// every row silently gets a session id where its resolution should be. That is
+// exactly the class of silent-wrong-answer this project keeps finding, so the
+// bounds check is not defensive style, it is the whole point of the helper.
+func field(rec []string, idx map[string]int, col string) string {
+	i, ok := idx[col]
+	if !ok || i < 0 || i >= len(rec) {
+		return ""
+	}
+	return strings.TrimSpace(rec[i])
+}
+
+// present returns the subset of want that the header actually has, in order.
+func present(idx map[string]int, want []string) []string {
+	var got []string
+	for _, c := range want {
+		if _, ok := idx[c]; ok {
+			got = append(got, c)
+		}
+	}
+	return got
+}
 
 // RowReject describes a source row that failed validation.
 type RowReject struct {
@@ -71,6 +120,12 @@ func OpenEvents(path string) (*EventReader, error) {
 	}
 	return &EventReader{f: f, r: r, idx: idx, line: 1}, nil
 }
+
+// OptionalColumns reports which optional columns this file actually carries.
+// Surfaced by the loader so a load says out loud whether the unseen-day
+// dimensions arrived, rather than leaving an all-empty column to be discovered
+// later on a dashboard.
+func (er *EventReader) OptionalColumns() []string { return present(er.idx, optionalRawColumns) }
 
 // Close releases the file.
 func (er *EventReader) Close() error { return er.f.Close() }
@@ -100,7 +155,7 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 	}
 	er.line++
 
-	get := func(col string) string { return strings.TrimSpace(rec[er.idx[col]]) }
+	get := func(col string) string { return field(rec, er.idx, col) }
 	reject := func(reason, detail string) *RowReject {
 		return &RowReject{Line: er.line, Reason: reason, Detail: detail, Raw: strings.Join(rec, ",")}
 	}
@@ -140,6 +195,7 @@ func (er *EventReader) Next() (*model.RawEvent, *RowReject, error) {
 		AudioLanguage:     get("audio_language"),
 		SubtitleLanguage:  get("subtitle_language"),
 		PlayerVersion:     get("player_version"),
+		VideoResolution:   get("video_resolution"),
 	}
 	return ev, nil, nil
 }
@@ -160,6 +216,9 @@ func OpenContent(path string) (*ContentReader, error) {
 	}
 	return &ContentReader{f: f, r: r, idx: idx, line: 1}, nil
 }
+
+// OptionalColumns reports which optional columns this catalogue file carries.
+func (cr *ContentReader) OptionalColumns() []string { return present(cr.idx, optionalContentColumns) }
 
 // Close releases the file.
 func (cr *ContentReader) Close() error { return cr.f.Close() }
@@ -188,7 +247,7 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 	}
 	cr.line++
 
-	get := func(col string) string { return strings.TrimSpace(rec[cr.idx[col]]) }
+	get := func(col string) string { return field(rec, cr.idx, col) }
 
 	contentID, err := ParseContentID(get("content_id"))
 	if err != nil {
@@ -213,6 +272,7 @@ func (cr *ContentReader) Next() (*model.Content, *RowReject, error) {
 	return &model.Content{
 		ContentID: contentID,
 		Title:     get("title"),
+		ShowName:  get("show_name"),
 		VideoType: videoType,
 		Category:  category,
 	}, nil, nil

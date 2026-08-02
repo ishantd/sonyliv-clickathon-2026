@@ -4,9 +4,21 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
+
+// writeTemp writes body to a uniquely-named file under the test's temp dir.
+func writeTemp(t *testing.T, name, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return path
+}
 
 func TestParseContentID(t *testing.T) {
 	tests := []struct {
@@ -294,5 +306,88 @@ func TestContentReaderQuarantinesBadRows(t *testing.T) {
 	}
 	if reasons[0] != ReasonBadRow || reasons[1] != ReasonBadContentID {
 		t.Errorf("reasons = %v, want [%s %s]", reasons, ReasonBadRow, ReasonBadContentID)
+	}
+}
+
+// The unseen-day export (data/surprise_spec.md) adds video_resolution to the
+// events and show_name to the catalogue. One binary must read both shapes: the
+// original extract without the columns, and the new file with them.
+//
+// The absence case is the one worth a test. rec[idx[col]] returns field 0 for a
+// missing column because Go zero-values the map lookup, so a naive reader would
+// have written video_session_id into video_resolution for every row of the
+// original extract — silently, and only visible as a nonsense dashboard filter.
+func TestOptionalColumnsPresentAndAbsent(t *testing.T) {
+	base := "video_session_id,user_id,content_id,event_type,event,event_timestamp," +
+		"platform,app_version,country,audio_language,subtitle_language,player_version,session_start_epoch"
+	sid := strings.Repeat("A", 64)
+	uid := strings.Repeat("B", 64)
+	row := sid + "," + uid + ",42,VideoPlay,play,1769424000000,IPHONE,1.0,india,en,en,p1,1769424000000"
+
+	for _, tc := range []struct {
+		name       string
+		header     string
+		line       string
+		wantRes    string
+		wantOption []string
+	}{
+		{"absent (original extract)", base, row, "", nil},
+		{"present (unseen day)", base + ",video_resolution", row + ",1080p", "1080p", []string{"video_resolution"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTemp(t, "ev.csv", tc.header+"\n"+tc.line+"\n")
+			r, err := OpenEvents(path)
+			if err != nil {
+				t.Fatalf("OpenEvents: %v", err)
+			}
+			defer r.Close()
+
+			if got := r.OptionalColumns(); !slices.Equal(got, tc.wantOption) {
+				t.Errorf("OptionalColumns() = %v, want %v", got, tc.wantOption)
+			}
+			ev, rej, err := r.Next()
+			if err != nil || rej != nil {
+				t.Fatalf("Next() err=%v reject=%+v", err, rej)
+			}
+			if ev.VideoResolution != tc.wantRes {
+				t.Errorf("VideoResolution = %q, want %q", ev.VideoResolution, tc.wantRes)
+			}
+			// The regression: absence must not alias another column.
+			if ev.VideoResolution == ev.VideoSessionID && tc.wantRes == "" {
+				t.Error("absent video_resolution read field 0 (video_session_id)")
+			}
+			// Required columns must still parse correctly in both shapes.
+			if ev.Platform != "IPHONE" || ev.ContentID != 42 {
+				t.Errorf("required columns corrupted: platform=%q content_id=%d", ev.Platform, ev.ContentID)
+			}
+		})
+	}
+}
+
+func TestContentShowNameOptional(t *testing.T) {
+	for _, tc := range []struct {
+		name, header, line, want string
+	}{
+		{"absent", "content_id,title,video_type,category", "7,T,live,sport", ""},
+		{"present", "content_id,title,video_type,category,show_name", "7,T,live,sport,My Show", "My Show"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := writeTemp(t, "c.csv", tc.header+"\n"+tc.line+"\n")
+			r, err := OpenContent(path)
+			if err != nil {
+				t.Fatalf("OpenContent: %v", err)
+			}
+			defer r.Close()
+			c, rej, err := r.Next()
+			if err != nil || rej != nil {
+				t.Fatalf("Next() err=%v reject=%+v", err, rej)
+			}
+			if c.ShowName != tc.want {
+				t.Errorf("ShowName = %q, want %q", c.ShowName, tc.want)
+			}
+			if c.Title != "T" || c.ContentID != 7 {
+				t.Errorf("required columns corrupted: title=%q id=%d", c.Title, c.ContentID)
+			}
+		})
 	}
 }

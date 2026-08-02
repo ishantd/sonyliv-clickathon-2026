@@ -101,7 +101,7 @@ clean:
         rollup rollup-live rollup-check clickstack \
         demo loadtest ch-up ch-down clean
 
-# Serving-layer MCP server. Connects as sonyliv_mcp (ingest/sql/009_mcp_reader.sql) and
+# Serving-layer MCP server. Connects as sonyliv_mcp (ingest/sql/manual/009_mcp_reader.sql) and
 # refuses to start as anything that can read per-user data.
 mcp: build
 	$(BIN)/sonyliv-mcp --transport stdio

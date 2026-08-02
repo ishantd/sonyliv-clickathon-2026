@@ -10,7 +10,7 @@ import (
 // reaches ClickHouse.
 //
 // This list is the SECOND line of defence, not the first. The first is the grant set in
-// ingest/sql/009_mcp_reader.sql: sonyliv_mcp simply cannot read events_clean or
+// ingest/sql/manual/009_mcp_reader.sql: sonyliv_mcp simply cannot read events_clean or
 // session_intervals, whatever SQL arrives. The guard exists because a clear "that table
 // is outside the serving layer" is a better answer to a model than ACCESS_DENIED, and
 // because refusing early keeps a malformed query from consuming a connection.

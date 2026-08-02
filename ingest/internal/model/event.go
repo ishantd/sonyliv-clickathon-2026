@@ -46,6 +46,12 @@ type RawEvent struct {
 	AudioLanguage    string
 	SubtitleLanguage string
 	PlayerVersion    string
+
+	// Added by the 2026-07-31 unseen-day export (data/surprise_spec.md), named
+	// there as a filter dimension. Empty for the original extract and for the
+	// generator, which is a real value meaning "the source did not report one" —
+	// not a missing field.
+	VideoResolution string
 }
 
 // InsertColumns is the column list of the raw-event INSERT, matching the field
@@ -67,6 +73,7 @@ var InsertColumns = []string{
 	"audio_language",
 	"subtitle_language",
 	"player_version",
+	"video_resolution",
 }
 
 // Values returns the row as positional arguments for a driver batch Append.
@@ -88,6 +95,7 @@ func (e *RawEvent) Values() []any {
 		e.AudioLanguage,
 		e.SubtitleLanguage,
 		e.PlayerVersion,
+		e.VideoResolution,
 	}
 }
 
@@ -97,6 +105,11 @@ type Content struct {
 	Title     string
 	VideoType string
 	Category  string
+
+	// Added by the unseen-day catalogue export, named as a filter dimension.
+	// Functionally determined by content_id like title/video_type/category, so it
+	// reaches dashboards through content_dict rather than through a rollup mask.
+	ShowName string
 }
 
 // ContentInsertColumns matches Content.Values plus the load version.
@@ -105,12 +118,13 @@ var ContentInsertColumns = []string{
 	"title",
 	"video_type",
 	"category",
+	"show_name",
 	"source_version",
 }
 
 // Values returns the catalogue row plus its load version.
 func (c *Content) Values(sourceVersion uint64) []any {
-	return []any{c.ContentID, c.Title, c.VideoType, c.Category, sourceVersion}
+	return []any{c.ContentID, c.Title, c.VideoType, c.Category, c.ShowName, sourceVersion}
 }
 
 // Reject is a row the producer refused to land, held for quarantine.
