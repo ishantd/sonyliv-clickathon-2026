@@ -331,3 +331,56 @@ Refuted on three grounds. (1) The claim's central premise — "benchmark queries
 Every empirical number in the claim reproduces exactly on the real data (hot window 09:00–11:30 UTC, 60s ticks): 127,046 session-rebuilds (claimed 127,047), 200,467 at 30s ticks (claimed 200,469), peak tick 2,948 dirty sessions, 93,115/127,046 = 73.3% of rebuilds contain no Start/End/bg/fg event (pure heartbeat tail-extension), and total groupUniqArray state re-read = 1,443,974 minute-entries (claimed 1.45M) = 3.7× E20's ~386K brute-force materialization — actually 11.4× the tighter 126K distinct qualifying (session,minute) pairs in the window. I also verified the churn mechanism: 127,033 of 127,046 rebuilds advance the session's last-activity minute, so under the design's diff-against-memo logic each one moves the provisional close edge and emits a 2-row correction pair (~254K rows at 60s / ~400K at 30s vs ~60K at-rest), confirming ~4–7× churn. The design as written cannot escape this: §3.5's serving query reads only concurrency_deltas and §3.7 says the live curve builds "from the same tables", so open sessions' provisional intervals MUST be in the deltas, and every 40s heartbeat re-dirties every active session each tick. Refutation attempts that failed: (1) "The design doesn't emit provisional edges" — then the per-minute curve would miss all open sessions mid-replay, contradicting §3.5/§3.7. (2) "SummingMergeTree annihilates compensating pairs" — true, +1/−1 at the same (dims,minute) key sum to 0 and SummingMergeTree deletes all-zero rows on merge, so AT-REST storage does converge to ~2×intervals — but the design's claims under attack are about what queries read and delta volume during ingest; mid-replay (exactly when judges query the unseen day) unmerged parts carry the churn, and write volume is bounded by active-session-ticks (∝ session-minutes), not "bounded by sessions" as §3.5 states. This mitigates severity, not the finding. (3) "3.7× vs one brute-force pass is the wrong baseline" — partially valid: the honest alternative to a 60s-refresh compactor is brute force per refresh (~150×386K ≈ 58M pairs), against which the compactor is ~40× cheaper, so the rhetorical 'does MORE work than the rebuild it avoids' overstates. But the core finding stands: 73.3% of compactor work and ~7× of the delta writes carry zero information, and §3.4's 'No rebuild, ever' / §3.5's 'deltas/day ≈ 2×intervals, bounded by sessions' are falsifiable by a judge mid-replay. Severity stays major: correctness and latency survive (reviewer's own <10ms measurement, plus merge-time annihilation), but two judged criteria — 'what queries read' and 'trade-off defense' — rest on quantitative claims the design gets wrong by ~7× at exactly the moment the unseen day flows through.
 
 **Improved fix:** Adopt the proposed closed-edge split, with two corrections. (1) Emit OPEN edges immediately, not only fully-closed intervals: when the compactor first observes an interval start (Start/fg/first qualifying event after a gap), emit its +1 once — open edges never move, so this is stable knowledge; defer only the −1 close edge until it is definitive (bg observed, End observed, or last_activity < now − T − slack). This keeps the day-anchored cumsum correct for ALL historical minutes covered by long-running open sessions; otherwise the proposed 'live tail = last ≤120s from session_state' UNION undercounts a 2-hour-old still-open session for its entire span. The only residual error is ≤1 tick of overcount after a silent death, before the compactor emits the close — state this as the freshness trade-off. (2) Track per-session 'last emitted edge' in the memo so a heartbeat tail-extension is a no-op (no dirty processing beyond a last_activity_ts max-update): rebuild interval geometry only when a real edge event (Start/End/bg/fg) arrives or the T+slack close-out fires — this cuts rebuilds from 127K to ~34K and re-reads of groupUniqArray state by ~4×. Finally, fix the design text either way: scope §3.5's 'deltas ≈ 2×intervals' claim to at-rest post-merge state (citing SummingMergeTree zero-row annihilation of compensating pairs), and replace §3.4's 'No rebuild, ever' with 'no serving-layer rebuild; per-session recompute only on real edges' — judges can and will falsify the current wording with one mid-replay query.
+
+
+---
+
+## Post-review finding, 2026-08-02: the interval builder drops every session with no `VideoSessionStart`
+
+*Not from the adversarial lenses above. Found by loading the unseen day into a
+brand-new single-node ClickHouse via `docker compose up` and comparing the result
+against both the Cloud deployment and the sibling delta pipeline.*
+
+### [CRITICAL] 25,403 of 108,486 sessions never reach `session_intervals`, and the unseen-day peak is ~27% low
+
+**Measurement.** The two pipelines agree exactly on the tuning extract (2,305 at
+`2026-07-26 10:55`) and agree on the unseen day's peak *minute* (`11:15`), but not its
+magnitude:
+
+| Pipeline | Database | Peak | Sessions with intervals |
+|---|---|---|---|
+| Interval-array (`session_intervals`) | `sonyliv_unseen` | 14,506 | 83,083 of 108,486 |
+| Delta / checkpoint (`concurrency_deltas`) | `sonyliv` | 19,882 | 96,844 of 108,486 |
+
+**The rule, and it is total.** Presence of an interval row is perfectly predicted by
+presence of a `session_start` signal:
+
+| | has `session_start` | no `session_start` |
+|---|---|---|
+| Sessions **with** an interval row | 83,083 | 0 |
+| Sessions **with no** interval row | 0 | 25,403 |
+
+**These are not empty sessions.** The 25,403 average **103.88 events each** and carry
+`liveness`, `pause`, `resume`, `background` and `foreground`. They are sessions already
+in flight when the extract's window opens — the boundary case the sibling pipeline
+handles with an explicit `allow_boundary_sessions` parameter, and that this one does not
+handle at all. (Note that 9,506 sessions *do* get a row with an empty interval array, so
+the builder is not simply declining to emit zero-interval rows; it never sees these
+sessions at all.)
+
+**Why this was initially misread as an unfinished build.** `dirty_sessions` still held
+all 108,486 keys, which looks exactly like a queue that has not drained. It is not:
+loading the same 7,000,000 events into a fresh ClickHouse with an empty volume
+reproduces 83,083 interval rows, 123,732 intervals and a peak of 14,506 at 11:15 — bit
+for bit, in one full pass. **A deterministic result on fresh infrastructure is a rule,
+not a stalled queue.** This is the general lesson: "the numbers are low" and "the build
+did not finish" are indistinguishable from inside one deployment, and separating them
+took a second, independent one.
+
+**Proposed fix.** Open the first interval at `session_start_epoch` — which the source
+carries on every row — or, failing that, at the first foreground-qualifying signal, when
+no `VideoSessionStart` is present in the window. Emit a row either way. Then add a
+reference-free assertion to `090_validate_serving.sql`: every session in `events_clean`
+must have a row in `session_intervals`, with the count of missing ones as the verdict.
+That check would have failed the moment this shipped, and it needs no knowledge of the
+right answer — which is the only kind of check worth anything on an unseen day.
