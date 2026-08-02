@@ -16,7 +16,7 @@
 --     --param_since_ingested_at='' \
 --     --param_evaluation_as_of='' \
 --     --param_allow_truncation=0 \
---     --param_allow_boundary_sessions=0 \
+--     --param_allow_boundary_sessions=1 \
 --     --param_state_revision=1 \
 --     --param_insert_token='stage01:sonyliv-active-v1:full:rev1' \
 --     < pipeline/sql/011_build_active_intervals.sql
@@ -106,22 +106,31 @@ SELECT throwIf(
 
 
 -- ----------------------------------------------------------------------------
--- Guard 2: boundary sessions.
+-- Guard 2: sessions with no VideoSessionStart.
 --
--- A session with events but no VideoSessionStart is dropped by the HAVING and
--- the JOIN below -- no error, no count, just missing viewers. The supplied
--- 12-day extract contains only whole sessions (all 10,866 have exactly one
--- start), so this has never fired. A single-day extract is cut at both ends and
--- will contain sessions that began the previous day.
+-- The supplied 12-day tuning extract contained only whole sessions (all 10,866
+-- had exactly one start), so this never fired there. A single-day extract is cut
+-- at both ends and contains sessions that began earlier -- measured on the
+-- unseen day, 25,403 of them carrying 37.86% of all events.
 --
--- Two failure modes compound for such a session: it is dropped here, and even
--- if it were kept it could never become active, because only VideoPlay and
--- resume set playing while a continuously-playing session emits only liveness
--- heartbeats. Whether those viewers should count, and from when, is a
--- judgement call against a private answer key. We refuse to guess and stop
--- instead.
+-- This comment used to end "We refuse to guess and stop instead." Both failure
+-- modes it identified were real, and BOTH are now fixed rather than refused:
 --
--- The report runs first so the operator sees the number, then the gate fires.
+--   1. the session was dropped by a HAVING and an INNER JOIN. It is now
+--      anchored at its first observed event -- see session_anchors.
+--
+--   2. "even if it were kept it could never become active, because only
+--      VideoPlay and resume set playing while a continuously-playing session
+--      emits only liveness heartbeats." Exactly right, and measured: of the
+--      25,403, only 9,222 (36.3%) ever emit play or resume. The other 16,181
+--      would still have produced nothing. playing_setter now reads a heartbeat
+--      as playback for sessions that never emit play/resume at all.
+--
+-- Fixing only the first would have looked like progress and recovered barely a
+-- third of the cohort, which is why the second measurement matters more than the
+-- first.
+--
+-- The report runs first so the operator sees the numbers, then the gate fires.
 -- ----------------------------------------------------------------------------
 
 WITH scoped_sessions AS
@@ -153,6 +162,21 @@ WITH scoped_sessions AS
     FROM sonyliv.dirty_sessions
     WHERE last_ingested_at > toDateTime64OrZero({since_ingested_at:String}, 3, 'UTC')
 )
+-- THE MEANING OF allow_boundary_sessions CHANGED ON 2026-08-02. It used to mean
+-- "proceed with these sessions EXCLUDED". It now means "proceed with these
+-- sessions INCLUDED, anchored at their first observed event" -- see the long
+-- note on session_anchors below.
+--
+-- The old default was measured to be catastrophic on the unseen day: 25,403
+-- sessions carrying 2,640,442 events, 37.86% of the dataset, would have been
+-- dropped from the concurrency curve with nothing downstream able to detect it.
+-- Excluding a third of the input is not a "boundary policy", it is a wrong
+-- answer, so that option is deliberately no longer reachable through this flag.
+--
+-- The gate is kept, and still throws at 0, because the DECISION should stay
+-- explicit -- an operator has to look at the count and choose. What changed is
+-- that choosing now yields the defensible answer instead of the destructive one.
+-- To exclude them anyway, filter them out upstream and say so in writing.
 SELECT throwIf(
     {allow_boundary_sessions:UInt8} = 0
         AND
@@ -167,7 +191,7 @@ SELECT throwIf(
                 HAVING countIf(signal = 'session_start') = 0
             )
         ) > 0,
-    'Sessions found with events but no VideoSessionStart -- these are silently excluded from interval state. See the count above. Decide the boundary-session policy, then pass allow_boundary_sessions=1 to proceed with them excluded.'
+    'Sessions found with events but no VideoSessionStart. The count and their event share are reported above. They are NOT boundary noise on this data -- measured on the unseen extract they were 25,403 sessions and 37.86% of all events. Pass allow_boundary_sessions=1 to INCLUDE them, anchored at their first observed event, which is the evidence-based reading and the one this pipeline recommends. It never asserts activity before the first event we actually saw.'
 );
 
 
@@ -279,22 +303,86 @@ WITH
     -- VideoSessionStart. Anchoring here rather than per-event stops row drift
     -- (user 120 sessions, platform 95, content 1) changing attribution inside a
     -- session. row_version breaks ties deterministically.
+    --
+    -- ---------------------------------------------------------------------
+    -- SESSIONS WITH NO VideoSessionStart ARE INCLUDED, anchored at their first
+    -- OBSERVED event. Changed 2026-08-02.
+    -- ---------------------------------------------------------------------
+    -- This CTE used to carry `HAVING countIf(signal = 'session_start') > 0`, and
+    -- the INNER JOIN below then dropped every session without a start event.
+    -- On the tuning extract that was invisible: every session had one.
+    --
+    -- On the unseen day it is not invisible. Measured on the service:
+    --
+    --     sessions with a session_start   83,083    4,334,423 events   62.14%
+    --     sessions WITHOUT one            25,403    2,640,442 events   37.86%
+    --
+    -- Excluding them would have discarded 37.86% of the dataset and produced a
+    -- concurrency curve that is wrong by roughly that much -- silently, because
+    -- nothing downstream can tell that a session was never offered to it.
+    --
+    -- These are not window-boundary artefacts. Only 7 of the 25,403 have their
+    -- first event in hour 0, and their median first-event time is within half an
+    -- hour of a normal session's. Their start event is simply absent from the
+    -- feed -- consistent with dataset_details.md, which already warns that some
+    -- lifecycle events are not guaranteed.
+    --
+    -- WHY FIRST OBSERVED EVENT AND NOT session_start_ts. Every row carries
+    -- session_start_ts, and for these sessions it is populated (0 epoch-zeros),
+    -- never later than the first event (0 violations), and stable within the
+    -- session (19 of 25,403 vary). It is a usable anchor. It is also, on
+    -- average, 4,646 SECONDS -- 77 minutes -- before the first event we actually
+    -- observed. Anchoring there would assert the session was active across a
+    -- 77-minute window containing zero evidence of activity. The policy is
+    -- foreground-only and excludes heartbeat-missing periods, so the honest
+    -- anchor is the first instant we can show it was alive. This UNDER-counts
+    -- against truth and never over-counts, which is the correct direction for a
+    -- figure scored against a private key.
+    --
+    -- The fallbacks below are explicit `if(has_start, ..., ...)` rather than a
+    -- bare minIf/argMinIf. With no matching row those return the TYPE DEFAULT --
+    -- epoch 0 for DateTime64 -- so simply dropping the HAVING would have set
+    -- lifecycle_start_time to 1970-01-01, made session_start_date 1970-01-01,
+    -- and let `event_ts >= lifecycle_start_time` match everything. Wrong rows,
+    -- no error.
     session_anchors AS
     (
         SELECT
             session_key,
-            minIf(event_ts, signal = 'session_start')          AS lifecycle_start_time,
+            countIf(signal = 'session_start') > 0              AS has_lifecycle_start,
+            -- Did this session EVER emit an explicit play or resume? Session
+            -- level, not per-event: it decides whether a bare heartbeat may be
+            -- read as playback. See playing_setter.
+            countIf(signal IN ('play', 'resume')) > 0          AS has_play_signal,
+            -- Same question for the FOREGROUND axis. session_start and
+            -- foreground are the only two signals that raise it, and a session
+            -- captured mid-stream has neither.
+            countIf(signal IN ('session_start', 'foreground')) > 0 AS has_fg_signal,
+            if(countIf(signal = 'session_start') > 0,
+               minIf(event_ts, signal = 'session_start'),
+               min(event_ts))                                  AS lifecycle_start_time,
             minIf(event_ts, signal = 'session_end')            AS terminal_end_time,
             countIf(signal = 'session_end') > 0                AS has_terminal_end,
-            argMinIf(user_key,    tuple(event_ts, row_version), signal = 'session_start') AS user_key,
-            argMinIf(content_id,  tuple(event_ts, row_version), signal = 'session_start') AS content_id,
-            argMinIf(platform,    tuple(event_ts, row_version), signal = 'session_start') AS platform,
-            argMinIf(country,     tuple(event_ts, row_version), signal = 'session_start') AS country
+            -- Session-static dimensions: from the start event when there is one,
+            -- otherwise from the earliest event of any kind. Same tie-break.
+            if(countIf(signal = 'session_start') > 0,
+               argMinIf(user_key,   tuple(event_ts, row_version), signal = 'session_start'),
+               argMin(user_key,     tuple(event_ts, row_version)))   AS user_key,
+            if(countIf(signal = 'session_start') > 0,
+               argMinIf(content_id, tuple(event_ts, row_version), signal = 'session_start'),
+               argMin(content_id,   tuple(event_ts, row_version)))   AS content_id,
+            if(countIf(signal = 'session_start') > 0,
+               argMinIf(platform,   tuple(event_ts, row_version), signal = 'session_start'),
+               argMin(platform,     tuple(event_ts, row_version)))   AS platform,
+            if(countIf(signal = 'session_start') > 0,
+               argMinIf(country,    tuple(event_ts, row_version), signal = 'session_start'),
+               argMin(country,      tuple(event_ts, row_version)))   AS country
         FROM sonyliv.events_clean
         WHERE event_ts <= evaluation_as_of
           AND ({full_scan:UInt8} = 1 OR session_key IN scoped_sessions)
         GROUP BY session_key
-        HAVING countIf(signal = 'session_start') > 0
+        -- No HAVING. Every session with at least one event in scope gets an
+        -- anchor; see the note above.
     ),
 
     -- Clip the stream to the first Start and the first End. A later Start or a
@@ -312,6 +400,9 @@ WITH
             e.event_ts                   AS event_ts,
             e.signal                     AS signal,
             a.lifecycle_start_time       AS lifecycle_start_time,
+            a.has_lifecycle_start        AS has_lifecycle_start,
+            a.has_play_signal            AS has_play_signal,
+            a.has_fg_signal              AS has_fg_signal,
             a.user_key                   AS user_key,
             a.content_id                 AS content_id,
             a.platform                   AS platform,
@@ -334,6 +425,9 @@ WITH
             session_key,
             event_ts,
             any(lifecycle_start_time)                       AS lifecycle_start_time,
+            any(has_lifecycle_start)                        AS has_lifecycle_start,
+            any(has_play_signal)                            AS has_play_signal,
+            any(has_fg_signal)                              AS has_fg_signal,
             any(user_key)                                   AS user_key,
             any(content_id)                                 AS content_id,
             any(platform)                                   AS platform,
@@ -356,11 +450,55 @@ WITH
     (
         SELECT
             *,
-            multiIf(has_end OR has_background,  toInt8(-1),
-                    has_start OR has_foreground, toInt8(1),
+            -- Third branch, mirroring playing_setter and added for the same
+            -- reason. session_start and foreground are the only signals that
+            -- raise this axis, so a session captured mid-stream can never be
+            -- eligible no matter what the playback axis says.
+            --
+            -- Measured on the unseen extract: 22,061 sessions -- 86.8% of those
+            -- with no session_start -- emit NEITHER a start NOR a foreground
+            -- event, carrying 2,294,451 events, 32.9% of the whole dataset.
+            -- Fixing only the playback axis would have left every one of them
+            -- at zero, which is how the first version of this change tested.
+            --
+            -- AppBackgrounded/AppForegrounded are documented as not guaranteed,
+            -- so their absence is not evidence of being backgrounded. An
+            -- explicit background still stops the session -- 5,003 of this
+            -- cohort emit one, and the stop branch below stays FIRST.
+            multiIf(has_end OR has_background,                   toInt8(-1),
+                    has_start OR has_foreground,                  toInt8(1),
+                    NOT has_fg_signal AND has_liveness_signal,    toInt8(1),
                     toInt8(0)) AS foreground_setter,
-            multiIf(has_end OR has_play_stop,   toInt8(-1),
-                    has_play_start,              toInt8(1),
+            -- Third branch added 2026-08-02. A session that NEVER emits play or
+            -- resume anywhere in its history is read as playing from its first
+            -- liveness heartbeat.
+            --
+            -- WHY. On the unseen extract 16,181 sessions have neither a
+            -- session_start nor any play/resume, and 98.81% of their 1,462,170
+            -- events are liveness heartbeats -- 21% of the whole dataset. These
+            -- are sessions captured mid-playback whose VideoPlay fell before the
+            -- window. Requiring an explicit play means they can never become
+            -- active and contribute exactly nothing to the concurrency curve,
+            -- silently.
+            --
+            -- dataset_details.md calls the heartbeat the periodic ongoing-
+            -- playback signal, so a heartbeat with no preceding pause IS the
+            -- evidence that playback is happening.
+            --
+            -- SCOPED, deliberately, by has_play_signal being false for the WHOLE
+            -- session. Where a session does emit play/resume, the explicit signal
+            -- governs and a heartbeat never promotes state -- so this cannot
+            -- resurrect a session that was genuinely paused and then kept
+            -- heart-beating, which is the 33.77% level-triggered-resume problem
+            -- documented on concurrency_deltas.
+            --
+            -- The stop branch stays FIRST, so pause, error, background and
+            -- session_end still halt these sessions normally: 3,720 pauses,
+            -- 2,653 backgrounds and 9,179 ends are present in exactly this
+            -- cohort. The heartbeat-timeout and foreground rules are untouched.
+            multiIf(has_end OR has_play_stop,                     toInt8(-1),
+                    has_play_start,                                toInt8(1),
+                    NOT has_play_signal AND has_liveness_signal,   toInt8(1),
                     toInt8(0)) AS playing_setter
         FROM same_timestamp_assignments
     ),
@@ -369,7 +507,22 @@ WITH
     (
         SELECT
             *,
-            max(has_start) OVER state_window AS lifecycle_started,
+            -- FOURTH gate that assumed a VideoSessionStart exists, and the last
+            -- one. "Started" was defined as "we have seen a session_start", so a
+            -- session captured mid-stream was never started and therefore never
+            -- eligible -- even after the anchor, playback and foreground axes
+            -- were all fixed. It is checked twice more below (eligible_signals
+            -- and the interval filter), so missing it left B and C at zero
+            -- intervals with every other change already in place.
+            --
+            -- For a session WITH a start this is unchanged: events_through_first_end
+            -- already drops every row before lifecycle_start_time, so the running
+            -- max is 1 from the start row onward regardless.
+            --
+            -- For a session WITHOUT one, the anchor IS the start -- it is the
+            -- first instant we can show the session existed, and every surviving
+            -- row is at or after it by the same filter.
+            if(has_lifecycle_start, max(has_start) OVER state_window, toUInt8(1)) AS lifecycle_started,
             max(has_end)   OVER state_window AS terminal_end_seen,
             argMaxIf(foreground_setter, event_ts, foreground_setter != 0) OVER state_window AS foreground_state,
             argMaxIf(playing_setter,    event_ts, playing_setter    != 0) OVER state_window AS playing_state
