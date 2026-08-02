@@ -17,9 +17,11 @@
 #     provisioned out of band, so no CH secret passes through the deploy path.
 #     See deploy/README.md for the one-time box setup.
 #
-#   * Restarts the service only if its unit is installed. Until sonyliv-api
-#     exists this script is still useful: it installs the CLI binaries and skips
-#     the restart.
+#   * Restarts EVERY unit in DEPLOY_SERVICES, skipping any that is not installed.
+#     Both long-running services share the binaries, so restarting only one left
+#     the other running last deploy's code — silently, because it stayed healthy.
+#     Order matters and the default order is the right one: sonyliv-mock produces
+#     through sonyliv-api, so the API restarts first.
 #
 # Exit codes: 0 ok, 1 usage/preflight, 2 build failed, 3 transfer/verify failed,
 #             4 service failed to come up (binaries rolled back).
@@ -38,9 +40,23 @@ DEPLOY_HOST="${DEPLOY_HOST:-}"
 DEPLOY_USER="${DEPLOY_USER:-}"
 DEPLOY_KEY="${DEPLOY_KEY:-}"
 DEPLOY_PORT="${DEPLOY_PORT:-}"
-DEPLOY_SERVICE="${DEPLOY_SERVICE:-sonyliv-api}"
+# Space-separated, restarted in this order. DEPLOY_SERVICE (singular) is still
+# honoured so existing invocations keep working.
+DEPLOY_SERVICES="${DEPLOY_SERVICES:-${DEPLOY_SERVICE:-sonyliv-api sonyliv-mock}}"
 DEPLOY_PREFIX="${DEPLOY_PREFIX:-/usr/local/bin}"
-DEPLOY_HEALTH_URL="${DEPLOY_HEALTH_URL:-http://127.0.0.1:8080/healthz}"
+
+# unit=url pairs. Per-unit rather than one URL, because the two services do not
+# listen the same way: the API is plaintext on loopback:8080 and the dashboard is
+# TLS on :443. A single shared URL could only ever check one of them, which is how
+# a stale mock passed a green deploy.
+#
+# These defaults match the deployed configuration, so `DEPLOY_HOST=sonyliv
+# ./deploy/deploy.sh` needs no environment at all. A legacy DEPLOY_HEALTH_URL is
+# applied to the first unit only, since that is what it used to mean.
+if [[ -n "${DEPLOY_HEALTH_URL:-}" ]]; then
+    DEPLOY_HEALTH="${DEPLOY_HEALTH:-${DEPLOY_SERVICES%% *}=${DEPLOY_HEALTH_URL}}"
+fi
+DEPLOY_HEALTH="${DEPLOY_HEALTH:-sonyliv-api=http://127.0.0.1:8080/healthz sonyliv-mock=https://127.0.0.1/healthz}"
 
 DRY_RUN=0
 SKIP_CHECKS=0
@@ -58,7 +74,7 @@ usage() {
 Flags:
   --dry-run        Print the build and remote plan, change nothing
   --skip-checks    Skip `make check` (tests, vet, gofmt)
-  --no-restart     Install binaries but do not touch the service
+  --no-restart     Install binaries but do not touch any service
   --only NAME      Build and ship only this binary (repeatable)
   -h, --help       This text
 
@@ -67,10 +83,15 @@ Environment:
   DEPLOY_USER        SSH user                  [from ssh_config]
   DEPLOY_KEY         private key path          [from ssh_config / agent]
   DEPLOY_PORT        SSH port                  [from ssh_config, else 22]
-  DEPLOY_SERVICE     systemd unit to restart   [sonyliv-api]
+  DEPLOY_SERVICES    units to restart, in order, space-separated
+                     [sonyliv-api sonyliv-mock]
   DEPLOY_PREFIX      install directory         [/usr/local/bin]
-  DEPLOY_HEALTH_URL  polled ON the box; empty disables the check
-                     [http://127.0.0.1:8080/healthz]
+  DEPLOY_HEALTH      unit=url pairs, polled ON the box with -k (loopback, so
+                     cert verification proves nothing). A unit with no pair is
+                     restarted but not health-checked; DEPLOY_HEALTH="" disables
+                     the checks entirely.
+                     [sonyliv-api=http://127.0.0.1:8080/healthz
+                      sonyliv-mock=https://127.0.0.1/healthz]
 USAGE
 }
 
@@ -185,14 +206,15 @@ log "host      ${TARGET}${DEPLOY_PORT:+:$DEPLOY_PORT}"
 log "version   ${VERSION}"
 log "binaries  ${CMDS[*]}"
 log "install   ${DEPLOY_PREFIX}"
+log "services  ${DEPLOY_SERVICES}"
 
 if [[ "$DRY_RUN" == 1 ]]; then
     log "dry run: would build ${CMDS[*]} for linux/amd64, stage in ${STAGE},"
     log "         verify sha256, install atomically into ${DEPLOY_PREFIX},"
     if [[ "$NO_RESTART" == 1 ]]; then
-        log "         and leave ${DEPLOY_SERVICE} untouched (--no-restart)"
+        log "         and leave ${DEPLOY_SERVICES} untouched (--no-restart)"
     else
-        log "         then restart ${DEPLOY_SERVICE} if its unit is installed"
+        log "         then restart each of ${DEPLOY_SERVICES} whose unit is installed"
     fi
     exit 0
 fi
@@ -250,16 +272,29 @@ done
 # ---------------------------------------------------------------------------
 log "installing and restarting"
 set +e
-ssh_run "sudo bash -s -- '$STAGE' '$DEPLOY_PREFIX' '$DEPLOY_SERVICE' '$VERSION' \
-         '$NO_RESTART' '$DEPLOY_HEALTH_URL' ${CMDS[*]}" <<'REMOTE'
+ssh_run "sudo bash -s -- '$STAGE' '$DEPLOY_PREFIX' '$DEPLOY_SERVICES' '$DEPLOY_HEALTH' \
+         '$VERSION' '$NO_RESTART' ${CMDS[*]}" <<'REMOTE'
 set -uo pipefail
 
-STAGE="$1";   PREFIX="$2"; SERVICE="$3"
-VERSION="$4"; NO_RESTART="$5"; HEALTH_URL="$6"
+STAGE="$1";  PREFIX="$2"; SERVICES_RAW="$3"; HEALTH_RAW="$4"
+VERSION="$5"; NO_RESTART="$6"
 shift 6
 CMDS=("$@")
 
+read -ra SERVICES <<< "$SERVICES_RAW"
+
 say() { printf '    [remote] %s\n' "$*"; }
+
+# health_for prints the URL configured for a unit, or nothing.
+health_for() {
+    local unit="$1" pair
+    for pair in $HEALTH_RAW; do
+        if [[ "$pair" == "$unit="* ]]; then
+            printf '%s' "${pair#*=}"
+            return
+        fi
+    done
+}
 
 # Atomic install. A running binary cannot be overwritten in place (ETXTBSY), so
 # write alongside and mv -- which is atomic within one filesystem, so the path is
@@ -276,6 +311,9 @@ done
 printf '%s\n' "$VERSION" > "$PREFIX/.sonyliv-deployed-version"
 rm -rf "$STAGE"
 
+# Rollback restores every binary and restarts every unit that was present, not
+# just the one that failed. The binaries are shared, so a unit that restarted
+# happily is now running code that has just been withdrawn.
 rollback() {
     say "ROLLING BACK"
     for cmd in "${CMDS[@]}"; do
@@ -286,60 +324,75 @@ rollback() {
             say "no previous $cmd to restore (first deploy)"
         fi
     done
-    if [[ -n "${UNIT_PRESENT:-}" ]]; then
-        systemctl restart "$SERVICE" 2>/dev/null || true
-    fi
+    local unit
+    for unit in "${PRESENT[@]:-}"; do
+        [[ -n "$unit" ]] && systemctl restart "$unit" 2>/dev/null || true
+    done
 }
 
 if [[ "$NO_RESTART" == "1" ]]; then
-    say "--no-restart: leaving $SERVICE untouched"
+    say "--no-restart: leaving ${SERVICES[*]} untouched"
     exit 0
 fi
 
-# Only restart what actually exists. Until sonyliv-api ships, this is the
-# expected path rather than an error.
-if ! systemctl list-unit-files "$SERVICE.service" --no-legend 2>/dev/null | grep -q .; then
-    say "unit $SERVICE.service is not installed; skipping restart"
-    say "install it from deploy/$SERVICE.service when the service exists"
+# Only restart what actually exists. A missing unit is the expected path on a box
+# that runs a subset of the services, not an error.
+PRESENT=()
+for unit in "${SERVICES[@]}"; do
+    if systemctl list-unit-files "$unit.service" --no-legend 2>/dev/null | grep -q .; then
+        PRESENT+=("$unit")
+    else
+        say "unit $unit.service is not installed; skipping"
+    fi
+done
+if [[ ${#PRESENT[@]} -eq 0 ]]; then
+    say "no units installed; binaries in place, nothing restarted"
     exit 0
 fi
-UNIT_PRESENT=1
 
 systemctl daemon-reload
-systemctl restart "$SERVICE" || { say "restart failed"; rollback; exit 4; }
 
-# Wait for the unit to settle. Restart=always means a crash-looping service can
-# report active briefly, so require it to hold.
-for _ in $(seq 1 15); do
-    sleep 1
-    systemctl is-active --quiet "$SERVICE" || continue
-    break
-done
-if ! systemctl is-active --quiet "$SERVICE"; then
-    say "$SERVICE did not stay active"
-    systemctl --no-pager --lines=20 status "$SERVICE" || true
-    rollback
-    exit 4
-fi
-say "$SERVICE active"
+for unit in "${PRESENT[@]}"; do
+    systemctl restart "$unit" || { say "$unit restart failed"; rollback; exit 4; }
 
-# Health check from ON the box, so no security-group change is needed and we are
-# not testing the load balancer by accident.
-if [[ -z "$HEALTH_URL" ]]; then
-    say "health check disabled"
-    exit 0
-fi
-for i in $(seq 1 30); do
-    if curl -fsS --max-time 2 "$HEALTH_URL" >/dev/null 2>&1; then
-        say "health ok after ${i}s"
-        exit 0
+    # Wait for the unit to settle. Restart=always means a crash-looping service
+    # can report active briefly, so require it to hold.
+    for _ in $(seq 1 15); do
+        sleep 1
+        systemctl is-active --quiet "$unit" || continue
+        break
+    done
+    if ! systemctl is-active --quiet "$unit"; then
+        say "$unit did not stay active"
+        systemctl --no-pager --lines=20 status "$unit" || true
+        rollback
+        exit 4
     fi
-    sleep 1
+    say "$unit active"
+
+    # Health check from ON the box, so no security-group change is needed and we
+    # are not testing a load balancer by accident.
+    url="$(health_for "$unit")"
+    if [[ -z "$url" ]]; then
+        say "$unit: no health url configured, skipping check"
+        continue
+    fi
+    ok=0
+    for i in $(seq 1 30); do
+        if curl -fsSk --max-time 2 "$url" >/dev/null 2>&1; then
+            say "$unit health ok after ${i}s"
+            ok=1
+            break
+        fi
+        sleep 1
+    done
+    if [[ "$ok" != "1" ]]; then
+        say "$unit health check failed: $url"
+        journalctl -u "$unit" --no-pager --lines=30 || true
+        rollback
+        exit 4
+    fi
 done
-say "health check failed: $HEALTH_URL"
-journalctl -u "$SERVICE" --no-pager --lines=30 || true
-rollback
-exit 4
 REMOTE
 rc=$?
 set -e

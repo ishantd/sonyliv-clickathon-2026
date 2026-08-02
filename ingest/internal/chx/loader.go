@@ -22,6 +22,12 @@ import (
 // merely repeatable.
 var batchNamespace = uuid.MustParse("6f1b0a2e-6a9f-4f1a-9a2b-3c4d5e6f7a80")
 
+// AsyncInsertRowThreshold is the chunk size below which a write is routed
+// through ClickHouse's server-side async buffer instead of becoming its own
+// part. It matches the 1,000-row floor that --batch-size already refuses to go
+// below; the difference is that a timer flush cannot bypass this one.
+const AsyncInsertRowThreshold = 1000
+
 // Chunk is one INSERT's worth of rows.
 //
 // Chunks are cut by the *reader*, at fixed row counts and in source order, not
@@ -249,18 +255,7 @@ func (l *Loader) sendChunk(ctx context.Context, chunk *Chunk) error {
 		}
 	}
 
-	settings := clickhouse.Settings{
-		"insert_deduplication_token": token,
-		// A retry must not double-append to the dirty-session queue either.
-		// The MV output is set-like (its identity is derived from session +
-		// batch + row sequence), so deduplicating dependent views is safe here
-		// and closes the retry hole end to end.
-		"deduplicate_blocks_in_dependent_materialized_views": 1,
-	}
-	if l.opts.AsyncInsert {
-		settings["async_insert"] = 1
-		settings["wait_for_async_insert"] = 1
-	}
+	settings := insertSettings(token, len(chunk.Rows), l.opts.AsyncInsert)
 
 	stmt := insertStatement(l.client.Database, "events_raw", model.InsertColumns)
 
@@ -290,6 +285,21 @@ func (l *Loader) sendChunk(ctx context.Context, chunk *Chunk) error {
 			return nil
 		}
 		lastErr = err
+		// A cancelled Send is NOT a failed write, and must not be audited as
+		// one. clickhouse-go's contextWatchdog closes the socket on cancel and
+		// returns ctx.Err(), discarding whatever the server replied — so the
+		// block may well have committed. Measured on all three occurrences of
+		// the 2026-08-01 run: every row of every batch recorded 'failed' was
+		// present in events_raw (3/3, 24/24, 51/51). Calling that 'failed'
+		// makes the audit ledger under-report, which is precisely the
+		// silent-wrong-answer class this repo exists to avoid.
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			l.writeAudit(chunk, batchID, token, uint8(attempt), firstEvent, lastEvent, started,
+				"unknown", err.Error())
+			return fmt.Errorf("batch %d (%d rows) interrupted, commit state unknown "+
+				"(reconcile _ingest_batch_id %s against events_raw): %w",
+				chunk.Ordinal, len(chunk.Rows), batchID, err)
+		}
 		if !IsRetryable(err) {
 			l.writeAudit(chunk, batchID, token, uint8(attempt), firstEvent, lastEvent, started,
 				"failed", err.Error())
@@ -302,6 +312,51 @@ func (l *Loader) sendChunk(ctx context.Context, chunk *Chunk) error {
 		"failed", lastErr.Error())
 	return fmt.Errorf("batch %d (%d rows) after %d attempts: %w",
 		chunk.Ordinal, len(chunk.Rows), l.opts.MaxRetries+1, lastErr)
+}
+
+// insertSettings decides, per chunk, whether this write goes straight to a part
+// or through ClickHouse's server-side async buffer.
+//
+// Why per chunk and not once per run. Measured on the 2026-08-01 load test:
+// 22,314 batches averaging 55 rows (generator) and 144 rows (api), against a
+// configured --batch-size of 50,000. The generator's one-wall-second timer
+// flush emits whatever is buffered, which routes around the 1,000-row floor
+// that --batch-size validation exists to enforce. Every one of those became its
+// own part, plus one more per dependent materialized view.
+//
+// Client-side batching cannot fix that without giving up live streaming, so
+// sub-floor writes go through the server-side buffer and let ClickHouse
+// coalesce them into properly sized parts. Large chunks still go straight
+// through: pushing an already-correct 50K-row native block through the buffer
+// only adds a copy and a flush delay.
+// [official: insert-async-small-batches, insert-batch-size]
+func insertSettings(token string, rows int, forceAsync bool) clickhouse.Settings {
+	settings := clickhouse.Settings{"insert_deduplication_token": token}
+
+	if forceAsync || rows < AsyncInsertRowThreshold {
+		settings["async_insert"] = 1
+		settings["wait_for_async_insert"] = 1
+		// Without this the token above is INERT on the async path and a retry
+		// duplicates silently. Measured on the service 2026-08-02:
+		// async_insert_deduplicate value=0 default=0 changed=0.
+		settings["async_insert_deduplicate"] = 1
+		// deduplicate_blocks_in_dependent_materialized_views is deliberately
+		// NOT set here: the async-inserts guide says it should not be enabled
+		// where dependent materialized views exist, and events_raw has two. The
+		// setting that used to make the pairing throw is obsolete in 26.2, so
+		// it would now proceed silently rather than warn.
+		return settings
+	}
+
+	// Cloud defaults async_insert to 1 in 26.2 (measured: value=1, default=1,
+	// changed=0), so a large block must opt out explicitly.
+	settings["async_insert"] = 0
+	// A retry must not double-append to the dirty-session queue either. The MV
+	// output is set-like (its identity is derived from session + batch + row
+	// sequence), so deduplicating dependent views is safe here and closes the
+	// retry hole end to end.
+	settings["deduplicate_blocks_in_dependent_materialized_views"] = 1
+	return settings
 }
 
 // sendOnce performs a single PrepareBatch/Append/Send cycle.
