@@ -362,19 +362,60 @@ python3 pipeline/tools/validate_040_041.py
 cd ingest && make check
 ```
 
-## Blocker not in this review, and it outranks everything here
+## The unseen dataset's two new columns — DONE, and one correction
 
-`data/surprise_spec.md` landed in `6d732e5`. The unseen dataset **changes both
-schemas**:
+`data/surprise_spec.md` landed in `6d732e5`. The unseen dataset adds
+`video_resolution` to the raw events and `show_name` to the catalogue.
 
-- raw events add `video_resolution`
-- content adds `show_name`
+**Correction to an earlier draft of this document**, which said the load "fails on
+column count". It does not, and the mechanism is worth being right about:
+`csvsrc.openCSV` resolves columns by header **name**, requires only that its
+`required` list is present, and sets `FieldsPerRecord` from the *actual* header. So
+a 14-column CSV loads fine — and both new columns were **silently dropped**. That
+is a completeness gap, not a hard failure, and the difference matters because a
+hard failure would at least have announced itself.
 
-Nothing in `ingest/sql`, `ingest/internal/csvsrc` or `scripts/bootstrap.sh` knows
-about either column, so **the unseen-day CSV load fails on column count before any
-of the above matters**. That needs: additive `ALTER` on `events_raw`, `events_clean`
-and `content_dim`; `ALTER TABLE events_raw_to_clean_mv MODIFY QUERY` to carry
-`video_resolution` through; `show_name` in `content_current` and `content_dict`;
-and the Go CSV parser's column map. It is deliberately **not** in this commit —
-it is a larger, separate change than the review response, and it should not be
-mixed into a correctness fix.
+Both are now read **optionally** rather than added to `required`, so the 13-column
+original extract and the 14-column surprise extract load through one code path.
+Requiring them would have made the original unloadable.
+
+The lookup is `getOpt`, not `get`, and that is load-bearing: `er.idx` is a map, so
+a missing key yields `0` and `get` would return `rec[0]`. `content_id` is column 0
+in the real surprise header, so `video_resolution` would have read as `"21311522"`
+on every row — a wrong value, not an error.
+
+`video_resolution` is normalised once, in `events_raw_to_clean_mv`, following the
+`audio_language` precedent. The inconsistency is not cosmetic — over 800,000
+surprise rows:
+
+| raw spelling | share |
+|---|---:|
+| `1920*1080` | 18.32% |
+| `1920 * 1080` | 7.90% |
+
+Same resolution, spaces around the star, so a dashboard filtering one spelling
+silently misses a quarter of its rows. Normalising whitespace and case collapses
+477 raw spellings to 415; verified in chdb against a real 8,000-row sample, 1,783 +
+614 merge into one bucket of 2,391.
+
+The quality-ladder prefix is deliberately **kept**: `Auto-1280*720` (214,424 rows)
+is a different playback mode from `1280*720`, not a dirty spelling of it. `NA` and
+`Auto-Auto` fold to `unknown`, since they name the absence of a resolution.
+
+`show_name` defaults to `''` and **not** `'unknown'`, unlike `video_type` and
+`category`. Those two have a documented empty-means-unclassified case in the
+source; `show_name` does not, and mapping absent to `'unknown'` would make "this
+catalogue has no show names at all" — the original extract — indistinguishable
+from "this title has none".
+
+## Daily partitions
+
+`events_raw`, `ingest_batches`, `ingest_rejects` and `concurrency_minute_versions`
+moved from `toYYYYMM` to `toYYYYMMDD`. `events_clean` and `session_live_now` were
+already daily.
+
+`PARTITION BY` is **immutable**, so unlike the new columns this reaches a *new*
+table only — an existing one keeps monthly partitions and no `ALTER` fixes it. It
+was free here because the database was being recreated anyway. The one caveat to
+carry forward: daily partitioning is right for a single-day extract, and at long
+retention the partition count is what to watch against the 100–1,000 guidance.
