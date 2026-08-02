@@ -131,6 +131,79 @@ ALTER TABLE sonyliv.active_intervals
 
 
 -- ----------------------------------------------------------------------------
+-- proj_session_revision -- kills the full scan inside active_intervals_current
+--
+-- MEASURED PROBLEM. The view below resolves the winning revision with an
+-- `IN (SELECT ... GROUP BY ...)` subquery. A normal view is inlined, so the
+-- caller's predicate pushes into the OUTER scan -- but there is no mechanism
+-- that pushes it into the IN-subquery, which therefore scans the WHOLE table on
+-- every read. Measured on the service, the canonical read
+-- (policy_version + clip_variant pinned, returning 31,947 intervals):
+--
+--     via active_intervals_current   96,662 rows / 2,264,336 bytes
+--     prefix-bounded floor           32,768 rows / 1,114,178 bytes
+--                                    ------------------------------
+--                                    2.95x rows, 2.03x bytes overhead
+--
+-- 96,662 = 63,894 (unprunable inner GROUP BY) + 32,768 (pruned outer). This is
+-- the mandatory read path for every downstream stage, and the overhead is
+-- structural: it grows with the table and no predicate reduces it.
+--
+-- WHY A PROJECTION AND NOT A REWRITE. Two rewrites were measured and rejected:
+--
+--   * Single-pass window -- replacing the IN-subquery with
+--     `max(state_revision) OVER (PARTITION BY policy_version, clip_variant,
+--     session_key)` reads 63,894 instead of 96,662, but NOT the 32,768 floor.
+--     ClickHouse 26.2 does not push a filter through a Window step even when
+--     every predicate column is in the PARTITION BY. Verified with
+--     EXPLAIN indexes = 1: `Condition: true`, `Granules: 8/8`, and the Filter
+--     node sits above the Window. It also adds a full Sorting step.
+--
+--   * Parameterized view -- reaches the floor, but changes the call syntax to
+--     active_intervals_current(policy_version = ...), which breaks every
+--     existing caller and docs/TABLE-CONTRACT.md along with them.
+--
+-- An aggregate projection whose body is EXACTLY the inner subquery is served
+-- instead of the base table, is additive, and needs no caller to change.
+--
+-- ELIGIBILITY. active_intervals is a plain (Shared)MergeTree -- "classic" in the
+-- sense deduplicate_merge_projection_mode means. That setting is `throw` on both
+-- replicas (default, unchanged), which blocks ADD PROJECTION on the
+-- Replacing/Summing/Aggregating tables in this schema but NOT on this one. Of
+-- the 13 MergeTree tables in `sonyliv`, 6 are eligible (active_intervals,
+-- concurrency_minute_versions, events_raw, dirty_sessions, ingest_batches,
+-- ingest_rejects) and 7 are blocked.
+--
+-- PROVEN, not assumed. Against the real DDL and row shape (63,894 rows /
+-- 10,866 sessions x 2 variants), the isolated inner subquery goes from
+--     ReadFromMergeTree (active_intervals)      Granules 8/8
+-- to
+--     ReadFromMergeTree (proj_session_revision) Granules 3/8
+-- and `force_optimize_projection = 1` accepts it. Control: an unrelated
+-- aggregate under the same setting throws PROJECTION_NOT_USED, so the signal
+-- discriminates rather than passing everything. Projection size 85.11 KiB
+-- against a 915 KiB table -- it holds one row per (policy, variant, session),
+-- so it grows with SESSIONS, not with intervals.
+--
+-- Engine eligibility on SharedMergeTree specifically can only be confirmed by
+-- running the ALTER; V-checks in 041 assert it landed rather than assuming.
+-- ----------------------------------------------------------------------------
+
+ALTER TABLE sonyliv.active_intervals
+    ADD PROJECTION IF NOT EXISTS proj_session_revision
+    (
+        SELECT policy_version, clip_variant, session_key, max(state_revision)
+        GROUP BY policy_version, clip_variant, session_key
+    );
+
+-- Existing parts do not carry a newly added projection until materialized. This
+-- is a mutation: it is idempotent but not free, so it is safe to re-run and
+-- wasteful to re-run needlessly.
+ALTER TABLE sonyliv.active_intervals
+    MATERIALIZE PROJECTION proj_session_revision;
+
+
+-- ----------------------------------------------------------------------------
 -- active_intervals_current
 --
 -- READ THIS, NOT active_intervals.
@@ -145,6 +218,10 @@ ALTER TABLE sonyliv.active_intervals
 -- A late pause that removes an interval leaves an orphan row at a start_time
 -- the new revision never writes, so nothing replaces it. Only whole-set
 -- resolution by revision is correct here.
+--
+-- The IN-subquery below is written to match proj_session_revision above
+-- EXACTLY. If you change its GROUP BY keys or its aggregate, the projection
+-- silently stops matching and this view goes back to a full scan with no error.
 -- ----------------------------------------------------------------------------
 
 CREATE OR REPLACE VIEW sonyliv.active_intervals_current AS
