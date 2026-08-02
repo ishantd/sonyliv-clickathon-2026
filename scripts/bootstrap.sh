@@ -59,6 +59,12 @@ HEARTBEAT_TIMEOUT_MS="${HEARTBEAT_TIMEOUT_MS:-120000}"
 # should stop the script, not be served.
 MINUTE_GENERATION="${MINUTE_GENERATION:-1}"
 
+# Interval-build revision, used by BOTH 011 (which writes active_intervals at
+# this revision) and 022 (which resolves to it). One variable, because if the two
+# ever disagree, active_intervals_current resolves to a revision 022 is not
+# reading and the serving layer silently sees zero intervals.
+STATE_REVISION="${STATE_REVISION:-1}"
+
 # A real UUID per run, so a row can be traced to the run that produced it.
 # uuidgen exists on macOS and on most Linux images; fall back to the kernel, then
 # to a fixed nil UUID rather than failing the whole bootstrap over lineage metadata.
@@ -278,6 +284,18 @@ fi
 if [[ $DO_BUILD -eq 1 ]]; then
   step "Stage 3b — build the interval, serving and minute tiers"
   if [[ $DRY_RUN -eq 0 ]]; then
+    # allow_boundary_sessions=1 means INCLUDE sessions that have no
+    # VideoSessionStart, anchored at their first observed event. On the unseen
+    # extract that is 25,403 sessions and 2,640,442 events -- 37.86% of the
+    # dataset -- so excluding them would silently drop a third of the answer.
+    # See the note on session_anchors in 011.
+    #
+    # NOTE TO FUTURE EDITORS: do NOT put a comment between the backslash-
+    # continued --param lines below. A `#` line inside a line continuation ends
+    # the command silently -- every argument after it is dropped, and `bash -n`
+    # still reports the file as valid because it IS valid, just not what you
+    # meant. That exact mistake shipped here and cost a full 7M-row rebuild:
+    # 011 failed with "Substitution `allow_boundary_sessions` is not set".
     ch "$REPO_ROOT/pipeline/sql/011_build_active_intervals.sql" \
        --rewrite-db sonyliv \
        --param "policy_version=$POLICY_VERSION" \
@@ -286,19 +304,17 @@ if [[ $DO_BUILD -eq 1 ]]; then
        --param "since_ingested_at=" \
        --param "evaluation_as_of=" \
        --param "allow_truncation=0" \
-       # 1 = INCLUDE sessions that have no VideoSessionStart, anchored at their
-       # first observed event. On the unseen extract that is 25,403 sessions and
-       # 37.86% of all events; excluding them would silently drop a third of the
-       # answer. See the note on session_anchors in 011.
-       --param "allow_boundary_sessions=1"
+       --param "allow_boundary_sessions=1" \
+       --param "state_revision=$STATE_REVISION" \
+       --param "insert_token=stage01:$POLICY_VERSION:full:rev$STATE_REVISION"
 
     ch "$REPO_ROOT/pipeline/sql/022_populate_serving.sql" \
        --rewrite-db sonyliv \
        --param "policy_version=$POLICY_VERSION" \
        --param "clip_variant=unclipped" \
-       --param "state_revision=1" \
+       --param "state_revision=$STATE_REVISION" \
        --param "allow_append=$FORCE" \
-       --param "insert_token=stage02:$POLICY_VERSION:full:rev1"
+       --param "insert_token=stage02:$POLICY_VERSION:full:rev$STATE_REVISION"
 
     # 040 runs HERE, not in stage 2, because it reads active_intervals and
     # concurrency_deltas and both are only populated by the two steps above.
