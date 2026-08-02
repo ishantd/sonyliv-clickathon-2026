@@ -4,13 +4,20 @@ import { useMemo, useState } from "react";
 import useSWR from "swr";
 import { ChartLegend, ConcurrencyLine, RankedBar } from "@/components/Charts";
 import { FilterBar } from "@/components/FilterBar";
+import { GrainNote, GrainPicker } from "@/components/GrainPicker";
+import { CUSTOM, RangePicker } from "@/components/RangePicker";
+import { LiveSessionsPanel } from "@/components/LiveSessions";
 import { PanelFrame } from "@/components/PanelFrame";
 import { ErrorNote } from "@/components/ui";
 import {
   asNum,
   asStr,
+  bucketLabel,
+  bucketsInWindow,
   col,
+  grainPlural,
   panelQuery,
+  resolveGrain,
   useDimensionValues,
   usePanel,
   windowParams,
@@ -20,7 +27,7 @@ import {
 } from "@/lib/analytics";
 import { fetcher } from "@/lib/api";
 import { useDataset } from "@/lib/dataset";
-import { clock, count, decimal, stamp } from "@/lib/format";
+import { count, decimal, stamp } from "@/lib/format";
 
 /**
  * Concurrency analytics: the answer, its slices, and its working.
@@ -85,7 +92,19 @@ export default function AnalyticsPage() {
   // previous one — the single bug this feature must not have.
   const dbName = useDataset();
   const [winKey, setWinKey] = useState<string | null>(null);
+  // The typed range, in API form. Null means "follow the preset", which is the
+  // state the page opens in and returns to whenever a preset is chosen — so the
+  // two controls are one range rather than two competing sources of truth.
+  const [custom, setCustom] = useState<{ from: string; to: string } | null>(null);
+  const [grainKey, setGrainKey] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>({});
+
+  // Defaults to minute — the grain the serving tier publishes at, and the one
+  // every figure quoted in the README and the deck is measured on. Falling back
+  // to the first grain offered rather than hard-failing, so the picker still
+  // works if the server ever reorders or renames the list.
+  const grains = meta?.grains ?? [];
+  const grain = resolveGrain(grains, grainKey, "minute");
 
   const db =
     meta?.databases.find((d) => d.name === dbName) ??
@@ -103,26 +122,69 @@ export default function AnalyticsPage() {
   // silently narrowing another. Keyed on the name rather than run in an effect, so
   // it happens during render and no frame is painted with the previous dataset's
   // selection.
+  //
+  // The GRAIN is deliberately not cleared with them. A window belongs to a
+  // dataset — each one declares its own — and a filter can select a value the
+  // next dataset has never seen, so both have to go. Minute/hour/day is a
+  // property of time itself and means the same thing everywhere, so resetting it
+  // would just undo the reader's choice for no reason.
   const [seenDb, setSeenDb] = useState<string | null>(null);
   if (db && db.name !== seenDb) {
     setSeenDb(db.name);
     if (winKey !== null) setWinKey(null);
+    // Cleared with the window, and for the same reason: a range typed against
+    // 26 July finds nothing in a dataset whose only traffic is on the 31st, and
+    // an empty chart is indistinguishable from a broken one.
+    if (custom !== null) setCustom(null);
     if (Object.keys(filter).length) setFilter({});
   }
 
   // Recomputed only when the window or the filter changes, so a relative window
   // does not produce a new URL on every render and re-fetch forever.
-  const bounds = useMemo(() => (win ? windowParams(win) : null), [win]);
+  const presetBounds = useMemo(() => (win ? windowParams(win) : null), [win]);
+
+  // The typed range wins when it is set AND valid. An inverted range is held
+  // back rather than sent: the server rejects from >= to outright, so forwarding
+  // it would replace every panel with an error while someone is mid-edit — the
+  // half-typed state of a datetime field is not a question anyone asked.
+  const bounds = useMemo(() => {
+    if (!custom) return presetBounds;
+    const ms = (s: string) => Date.parse(`${s.replace(" ", "T")}Z`);
+    const ok =
+      custom.from !== "" &&
+      custom.to !== "" &&
+      Number.isFinite(ms(custom.from)) &&
+      Number.isFinite(ms(custom.to)) &&
+      ms(custom.from) < ms(custom.to);
+    return ok ? custom : presetBounds;
+  }, [custom, presetBounds]);
   const q = useMemo(() => {
     if (!db || !bounds) return null;
+    // Every panel carries the grain, not just the curve. The breakdowns are
+    // window-totals and do not bucket, so it changes nothing for them today —
+    // but a panel that silently ignored a parameter the URL claims to carry
+    // would make the shown API call a lie, and that call is on screen under
+    // each card.
     return (cap: number) =>
-      panelQuery({ db: db.name, from: bounds.from, to: bounds.to, cap, filter });
-  }, [db, bounds, filter]);
+      panelQuery({
+        db: db.name,
+        from: bounds.from,
+        to: bounds.to,
+        cap,
+        filter,
+        grain: grain?.key,
+      });
+  }, [db, bounds, filter, grain]);
 
   // The filter's own options follow the window, so a filter never offers a value
-  // that would produce an empty chart. Unfiltered, deliberately: the values are
-  // what you could narrow TO, and narrowing them by the current selection would
-  // make a filter impossible to change once set.
+  // that never appears in it. Unfiltered, deliberately: the values are what you
+  // could narrow TO, and narrowing them by the current selection would make a
+  // filter impossible to change once set.
+  //
+  // No grain here, and that is not an oversight: which values EXIST in a window
+  // does not depend on how the window is bucketed. Sending it would put the
+  // grain in this request's cache key and re-fetch every dimension's values on
+  // every grain change, for an identical answer.
   const dimQuery = useMemo(
     () =>
       db && bounds
@@ -144,22 +206,42 @@ export default function AnalyticsPage() {
   const appver = usePanel("app_version_peak", barQ);
   const titles = usePanel("top_titles", titleQ);
   const fresh = usePanel("freshness", barQ);
+  const live = usePanel("live_sessions", barQ);
+
+  // The grain the ROWS ON SCREEN were bucketed at, which is not always the one
+  // the picker holds: `keepPreviousData` keeps the last result visible while the
+  // next request is in flight, so for one round trip the control says "Day" over
+  // a chart of minutes. Everything that describes the plotted rows — the axis
+  // format, the bucket count, the readout labels — is driven from the server's
+  // echo, and only the pending-window note is driven from the control.
+  const shownGrain = resolveGrain(grains, curve.data?.grain, grain?.key);
+  // The singular noun for one x-axis bucket, for the legend and the tooltip.
+  // Falls back to "minute" rather than to the picker: before meta resolves there
+  // is no grain to read, and minute is what the server defaults to, so the two
+  // agree during the first frame instead of disagreeing.
+  const bucketNoun = (shownGrain?.label ?? "Minute").toLowerCase();
 
   const curveData = useMemo(() => {
     const d = curve.data;
     if (!d || d.error || !d.rows.length) return null;
+    // Still `minute`, at every grain — the server keeps the bucket column's name
+    // fixed on purpose so this lookup does not have to guess at it, and reports
+    // the grain in its own field instead.
     const iM = col(d, "minute");
     const iP = col(d, "peak");
     const iA = col(d, "average");
+    const secs = shownGrain?.seconds ?? 60;
     return {
-      // Time only on the axis: the date is in the window selector, and repeating
-      // it on every tick leaves no room for the ticks themselves.
-      labels: d.rows.map((r) => clock(asStr(r[iM]))),
+      // The label format follows the grain. Time-only is right at minute grain —
+      // the date is in the window selector, and repeating it on every tick
+      // leaves no room for the ticks themselves — and wrong the moment a bucket
+      // is a whole day, when every tick would read 00:00. See bucketLabel.
+      labels: d.rows.map((r) => bucketLabel(asStr(r[iM]), secs)),
       stamps: d.rows.map((r) => asStr(r[iM])),
       peak: d.rows.map((r) => asNum(r[iP])),
       average: d.rows.map((r) => asNum(r[iA]) ?? 0),
     };
-  }, [curve.data]);
+  }, [curve.data, shownGrain]);
 
   const headline = useMemo(() => {
     if (!curveData) return null;
@@ -171,15 +253,30 @@ export default function AnalyticsPage() {
         peakAt = curveData.stamps[i];
       }
     });
-    // Mean of the per-minute time-weighted averages, which for equal-length
-    // minutes IS the window's time-weighted average. Not a mean of peaks, which
+    // Mean of the per-bucket time-weighted averages, which for equal-length
+    // buckets IS the window's time-weighted average. Not a mean of peaks, which
     // would be meaningless.
+    //
+    // Coarsening the grain does not change this figure's meaning, because each
+    // bucket's average is time-weighted within itself: an hour's average is the
+    // mean of its minutes' averages. It does soften one edge — a window that
+    // starts or ends mid-bucket contributes a short bucket weighted as a whole
+    // one, which is negligible over 761 minutes and visible over two days. The
+    // per-bucket figures the server computed are exact either way; this is the
+    // one number on the page the browser reduces, and the reduction is a mean.
     const avg =
       curveData.average.reduce((a, b) => a + b, 0) / curveData.average.length;
-    return { peak: peak as number | null, peakAt, avg, minutes: curveData.peak.length };
+    return { peak: peak as number | null, peakAt, avg, buckets: curveData.peak.length };
   }, [curveData]);
 
   const exactPeak = curve.data?.mask?.exact_peak ?? true;
+
+  // Predicted from the resolved window and the SELECTED grain, so the note lands
+  // with the click rather than after the response it is warning about.
+  const pendingBuckets = bucketsInWindow(bounds, grain?.seconds);
+
+  // Singular of whatever the server called the grain: "minute", "hour", "day".
+  const unit = (shownGrain?.label ?? "Minute").toLowerCase();
 
   return (
     <>
@@ -200,34 +297,60 @@ export default function AnalyticsPage() {
             {db.note}
           </p>
 
-          {/* The dataset itself is picked in the nav, because it applies to every
-              page. The window is picked here, because it does not. */}
-          <div
-            className="flex flex-wrap items-center gap-2"
-            role="group"
-            aria-label="Time window"
-          >
-            <span className="eyebrow text-ink-3">Window</span>
-            {db.windows.map((w) => (
-              <button
-                key={w.key}
-                onClick={() => setWinKey(w.key)}
-                aria-pressed={w.key === win?.key}
-                className={`rounded border px-2.5 py-1 text-[0.8125rem] transition-colors duration-150 ${
-                  w.key === win?.key
-                    ? "border-accent-dim bg-accent-wash text-accent"
-                    : "border-line text-ink-2 hover:border-ink-3 hover:text-ink"
-                }`}
-              >
-                {w.label}
-              </button>
-            ))}
+          {/* Window, range and interval on one row.
+
+              These were two rows of pill buttons — three windows above, three
+              grains below — which came to eight boxes in the page's own accent
+              styling before the reader reached the curve. The dataset picker in
+              the nav is already a select, so three different treatments were
+              competing to look like the primary control and the actual answer
+              was pushed down the page.
+
+              The dataset is picked in the nav because it applies to every page.
+              These are picked here because they do not. */}
+          <RangePicker
+            windows={db.windows}
+            presetKey={custom ? CUSTOM : (win?.key ?? "")}
+            from={bounds?.from ?? ""}
+            to={bounds?.to ?? ""}
+            onPreset={(k) => {
+              // Choosing a preset drops the typed range entirely rather than
+              // copying the preset's instants into it. A relative window like
+              // "last hour" has to stay relative — frozen into two absolute
+              // fields it would stop tracking the clock the moment it was
+              // selected, which is the one thing that window is for.
+              setCustom(null);
+              setWinKey(k);
+            }}
+            onFrom={(v) =>
+              setCustom({ from: v, to: custom?.to ?? bounds?.to ?? "" })
+            }
+            onTo={(v) =>
+              setCustom({ from: custom?.from ?? bounds?.from ?? "", to: v })
+            }
+          />
+
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <GrainPicker
+              grains={grains}
+              value={grain?.key ?? null}
+              onChange={setGrainKey}
+            />
+
+            {/* The resolved bounds, right-aligned. This is the row's evidence:
+                a relative window like "last hour" is only checkable against the
+                absolute instants it turned into, and a typed range is only
+                checkable against the seconds the fields do not show. */}
             {bounds ? (
               <span className="tnum ml-auto font-mono text-[0.6875rem] text-ink-3">
                 {bounds.from} → {bounds.to} UTC
               </span>
             ) : null}
           </div>
+
+          {/* Its own line: it is a sentence, and wrapping a sentence around a
+              timestamp reads badly. */}
+          <GrainNote buckets={pendingBuckets} />
         </div>
       ) : null}
 
@@ -270,20 +393,26 @@ export default function AnalyticsPage() {
                   tone="accent"
                   hint={
                     exactPeak && headline.peak != null
-                      ? `Exact maximum inside a single minute, at ${stamp(headline.peakAt)} UTC.`
+                      ? // The invariance is worth stating rather than leaving to
+                        // be discovered: coarsening the grain does not move this
+                        // number, because the peak of an hour is the maximum of
+                        // its minutes' peaks. Only the average rescales, and a
+                        // reader who expects both to move will distrust the one
+                        // that does not.
+                        `Exact maximum inside a single ${unit}, at ${stamp(headline.peakAt)} UTC. Unchanged by the grain — a coarser bucket takes the maximum of the finer ones.`
                       : curve.data?.mask?.why
                   }
                 />
                 <Readout
                   label="Time-weighted avg"
                   value={decimal(headline.avg)}
-                  hint="Mean of the per-minute time-weighted averages over this window."
+                  hint={`Mean of the per-${unit} time-weighted averages over this window.`}
                 />
                 <Readout
-                  label="Minutes"
-                  value={count(headline.minutes)}
+                  label={grainPlural(shownGrain)}
+                  value={count(headline.buckets)}
                   tone="muted"
-                  hint="Minutes the serving tier has published in this window."
+                  hint={`Buckets the serving tier has published in this window, at ${unit} grain.`}
                 />
                 <Readout
                   label="Dataset"
@@ -297,11 +426,19 @@ export default function AnalyticsPage() {
         >
           {curveData ? (
             <>
-              <ChartLegend withheldPeak={!exactPeak} />
+              {/* shownGrain, not the picker: with keepPreviousData the control
+                  leads the rows by one round trip, and a key that renames the
+                  accent line to "peak in day" while it is still drawing minute
+                  buckets is actively misleading about a number people quote. */}
+              <ChartLegend
+                withheldPeak={!exactPeak}
+                bucket={bucketNoun}
+              />
               <ConcurrencyLine
                 labels={curveData.labels}
                 peak={curveData.peak}
                 average={curveData.average}
+                bucket={bucketNoun}
               />
             </>
           ) : null}
@@ -376,7 +513,14 @@ export default function AnalyticsPage() {
             {fresh.data?.rows.length ? <Freshness panel={fresh.data} /> : null}
           </PanelFrame>
         </div>
+
+        {/* Current state, below the history. Everything above this point is a
+            window — a span with a from and a to — and this is the one panel that
+            reports an instant, so it sits after them rather than among them. It
+            owns its own frame; see the component for why. */}
+        <LiveSessionsPanel state={live} query={barQ} />
       </div>
+
     </>
   );
 }

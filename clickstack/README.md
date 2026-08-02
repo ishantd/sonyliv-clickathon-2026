@@ -89,6 +89,26 @@ last run is committed as `TILE-VERIFICATION.md`. It checks that a query is valid
 what it returns — not that the chart looks right; `make rollup-check` is what asserts
 the numbers.
 
+> **The deployed sources read `sonyliv_demo`, not `sonyliv_prod`** (moved 2026-08-02).
+> The simulator writes only to `sonyliv_demo`, so it is the only database whose live
+> tiers move while someone is watching — which is what the live dashboards are for.
+>
+> Switching is one command, and it does not break a single link:
+>
+> ```bash
+> CLICKHOUSE_DATABASE=sonyliv_demo ./clickstack/apply.sh
+> ```
+>
+> `apply.sh` is idempotent by NAME and PUTs each source in place, so the source ids
+> survive — and because tiles reference sources by id, every dashboard URL that was
+> bookmarked before the move still resolves after it. Verified: all five sources
+> updated in place, all six dashboard ids unchanged.
+>
+> The sweep above ran against `sonyliv_prod` and has not been re-run since. That is
+> not a gap in coverage — every tile is `{{db}}`-substituted from the same JSON, so
+> the SQL is database-agnostic and a re-run would be testing whether `sonyliv_demo`
+> is populated, not whether the queries are valid.
+
 Reading the returned *values* rather than just pass/fail is what caught a number tile
 emitting a unix epoch, an empty window rendering `-0`, and `argMax` over zero rows
 leaking a fake `1970-01-01` row.

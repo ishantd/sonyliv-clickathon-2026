@@ -170,7 +170,7 @@ LIMIT {cap:UInt32}`, db)
 //
 // It returns the statement only. The caller binds from/to/cap and the filter's
 // values as named parameters — see analyticsFilter.predicates.
-func buildSQL(db string, p panel, m maskChoice, f analyticsFilter) string {
+func buildSQL(db string, p panel, m maskChoice, f analyticsFilter, g grain) string {
 	if p.shape == shapeStatic {
 		return p.static(db)
 	}
@@ -187,17 +187,29 @@ func buildSQL(db string, p panel, m maskChoice, f analyticsFilter) string {
 	}
 
 	if p.shape == shapeSeries {
+		// The column stays named `minute` at every grain, and that is deliberate
+		// rather than lazy. It is the series' time axis; renaming it to `hour` on
+		// one setting would make the client match on the grain to find its own
+		// x-values, which is exactly the coupling `col(d, "minute")` exists to
+		// avoid. The grain is reported as its own field in the response.
+		//
+		// The average's divisor comes from the grain, not from a literal 60000.
+		// sum(active_ms) over an hour of minute rows is milliseconds of viewing
+		// inside that hour, so the time-weighted mean concurrency is that over the
+		// hour's own length. Leaving the minute divisor in place would multiply
+		// the hour series by 60 while leaving its shape untouched — a wrong
+		// answer that looks entirely plausible next to a correct peak.
 		return fmt.Sprintf(`SELECT
-    toString(minute_start)              AS minute,
+    toString(%[4]s)                     AS minute,
     %[2]s                               AS peak,
-    round(sum(active_ms) / 60000.0, 3)  AS average
+    round(sum(active_ms) / %[5]d.0, 3)  AS average
 FROM %[1]s.serving_minute_current
 WHERE grouping = {grouping:String}
   AND minute_start >= toDateTime({from:String}, 'UTC')
   AND minute_start <  toDateTime({to:String},   'UTC')%[3]s
-GROUP BY minute_start
-ORDER BY minute_start
-LIMIT {cap:UInt32}`, db, peakExpr, where)
+GROUP BY %[4]s
+ORDER BY %[4]s
+LIMIT {cap:UInt32}`, db, peakExpr, where, g.bucketExpr(), g.Seconds*1000)
 	}
 
 	// shapeBreakdown.

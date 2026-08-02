@@ -1,14 +1,24 @@
 "use client";
 
 import { useSyncExternalStore } from "react";
+import useSWR from "swr";
+import { fetcher } from "./api";
+import type { Database, Meta } from "./analytics";
 
 /**
- * The selected ClickHouse dataset, shared by every page.
+ * The selected ClickHouse dataset that Analytics READS.
+ *
+ * It used to be described as shared by every page, and it no longer is: Pusher
+ * only ever touches the server's writable database, so the picker is rendered on
+ * Analytics alone and useWriteDataset below is what Pusher displays instead. The
+ * store still outlives a route change, because Analytics itself is two addresses
+ * (/ and /analytics) and losing the choice between them would be the same bug
+ * described next.
  *
  * WHY A STORE AND NOT PAGE STATE. The picker lives in the nav, which persists
  * across route changes, while the pages that consume it mount and unmount. Page
  * state would reset the choice on every navigation — you would pick the evaluation
- * set, click Live, and silently be back on the default without being told.
+ * set, navigate, and silently be back on the default without being told.
  *
  * localStorage rather than a URL parameter, deliberately: the nav is shared by
  * pages that do not all take the same query string, and threading one parameter
@@ -59,4 +69,36 @@ function subscribe(onChange: () => void) {
  */
 export function useDataset(): string | null {
   return useSyncExternalStore(subscribe, getDataset, () => null);
+}
+
+/**
+ * The one dataset the simulator writes into — the server's own database.
+ *
+ * The counterpart to useDataset, and deliberately not a choice: every write path
+ * in the service (fleet INSERT, the stepper, /api/events, the sealer) uses the
+ * connection's configured database and reads no `db` parameter at all. Pusher
+ * therefore has nothing to pick between, and states this instead of offering a
+ * control that could not act.
+ *
+ * WHY `writable` AND NOT `default`. They are different databases and the
+ * difference is the whole reason both fields exist. `default` is the dataset
+ * Analytics OPENS ON — `sonyliv`, the submission's own database, which the
+ * README, the deck and the benchmark all quote and which nothing here writes to.
+ * The write target is `sonyliv_demo`, and the server marks it by setting
+ * `writable`, documented in analytics.go as existing precisely so the UI can say
+ * which dataset the simulator writes into. Reading `default` here would name the
+ * read-only extract on a page whose every button appends rows somewhere else.
+ *
+ * Null until the list loads, and null if the server advertises no writable
+ * dataset at all. Not defaulted: naming the wrong database with confidence is
+ * strictly worse than naming none, and a caller that needs a `db` parameter must
+ * hold rather than send one that resolves somewhere else.
+ */
+export function useWriteDataset(): Database | null {
+  // Same SWR key as the nav and /analytics, so this shares their cache entry and
+  // costs no extra request wherever it is used.
+  const { data } = useSWR<Meta>("/api/analytics", fetcher, {
+    revalidateOnFocus: false,
+  });
+  return data?.databases.find((d) => d.writable) ?? null;
 }
