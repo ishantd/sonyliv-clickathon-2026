@@ -36,6 +36,90 @@ import (
 // so a number rendered here and a number rendered there come from one definition.
 // None of them touch events_clean, session_intervals or any per-user table.
 
+// A window worth opening on, per database.
+type window struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+	// RelMinutes, when non-zero, means "the last N minutes" and From/To are ignored.
+	// Resolved in the browser rather than here so it follows the viewer's clock.
+	RelMinutes int `json:"rel_minutes,omitempty"`
+}
+
+// A selectable ClickHouse database.
+//
+// HARDCODED, AND THAT IS THE SECURITY BOUNDARY. The chosen name is interpolated
+// into panel SQL as a schema identifier, and a schema name cannot be a bound
+// query parameter -- so if the request's `db` were passed through, this endpoint
+// would be a SQL injection point reachable with the browser's bearer token. The
+// request selects an INDEX INTO THIS LIST; it never supplies a name. Anything
+// unrecognised is rejected, not defaulted, so a typo fails loudly instead of
+// silently charting the wrong dataset.
+//
+// One connection serves all of them. The panel SQL fully qualifies every table
+// (`db.table`), and sonyliv_svc holds grants on each, so switching databases
+// needs no second client and no reconnect.
+type database struct {
+	Name    string   `json:"name"`
+	Label   string   `json:"label"`
+	Note    string   `json:"note"`
+	Windows []window `json:"windows"`
+}
+
+// databases is the selector's whole surface.
+//
+// sonyliv is deliberately ABSENT. It carries the schema — PR #8's DDL reached it
+// — but its serving layer holds 0 rows, so every panel would render "no published
+// rows" and the option would look like a bug. Add it here the moment it is
+// populated; nothing else needs to change.
+var databases = []database{
+	{
+		Name:  "sonyliv_prod",
+		Label: "Mock ingestion (live)",
+		Note:  "Carries the graded July extract plus everything the generator, fleet and API have written since. The hot hour reproduces the canonical 2,305 / 855.578199.",
+		Windows: []window{
+			{Key: "hot", Label: "Hot hour (26 Jul)", From: "2026-07-26 10:00:00", To: "2026-07-26 11:00:00"},
+			{Key: "extract", Label: "Whole extract", From: "2026-07-14 00:00:00", To: "2026-07-27 00:00:00"},
+			{Key: "1h", Label: "Last hour", RelMinutes: 60},
+			{Key: "6h", Label: "Last 6 hours", RelMinutes: 360},
+		},
+	},
+	{
+		Name:  "sonyliv_unseen",
+		Label: "Unseen day (31 Jul)",
+		Note:  "The sealed evaluation dataset: 7,000,000 events for 2026-07-31, loaded through the same pipeline. Peak 14,506 at 11:15.",
+		Windows: []window{
+			{Key: "peak", Label: "Peak hour (31 Jul)", From: "2026-07-31 11:00:00", To: "2026-07-31 12:00:00"},
+			{Key: "day", Label: "Whole day", From: "2026-07-31 00:00:00", To: "2026-08-01 00:00:00"},
+			{Key: "span", Label: "Everything loaded", From: "2026-07-26 00:00:00", To: "2026-08-04 00:00:00"},
+		},
+	},
+}
+
+// resolveDatabase maps the request's `db` to an allowlisted name.
+//
+// Empty means the server's configured default, which keeps every existing caller
+// working. An unrecognised value is an error rather than a fallback: silently
+// charting a different dataset than the one asked for is the failure this whole
+// selector exists to make impossible.
+func resolveDatabase(requested, fallback string) (string, error) {
+	if requested == "" {
+		return fallback, nil
+	}
+	for _, d := range databases {
+		if d.Name == requested {
+			return d.Name, nil
+		}
+	}
+	names := make([]string, 0, len(databases))
+	for _, d := range databases {
+		names = append(names, d.Name)
+	}
+	return "", fmt.Errorf("unknown database %q; selectable: %s",
+		requested, strings.Join(names, ", "))
+}
+
 // panel is one chart's query.
 type panel struct {
 	// title and unit are returned to the client so the labelling lives with the
@@ -227,7 +311,14 @@ func (s *Server) handleAnalyticsList(w http.ResponseWriter, _ *http.Request) {
 		p := panels[n]
 		out = append(out, entry{Name: n, Title: p.title, Unit: p.unit})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"panels": out})
+	// The databases ship with the panels so the UI has one source of truth. A
+	// selector hardcoded in the browser would be a second list to keep in step,
+	// and the one that drifts is always the one you cannot see from the server.
+	writeJSON(w, http.StatusOK, map[string]any{
+		"panels":    out,
+		"databases": databases,
+		"default":   s.client.Database,
+	})
 }
 
 // handleAnalytics runs one named panel.
@@ -247,6 +338,12 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 			"error": fmt.Sprintf("unknown panel %q", name),
 			"known": panelNames(),
 		})
+		return
+	}
+
+	db, err := resolveDatabase(r.URL.Query().Get("db"), s.client.Database)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 
@@ -277,22 +374,25 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	cols, rows, err := runPanel(ctx, s.client, p, from, to, cap32)
+	cols, rows, err := runPanel(ctx, s.client, db, p, from, to, cap32)
 	if err != nil {
 		// 200 with an error field, not 5xx. Each panel is fetched independently and
 		// the page renders the ones that worked; a status code would make SWR retry
 		// a query that is going to fail again the same way, and the message is what
 		// tells you which object is missing.
 		writeJSON(w, http.StatusOK, map[string]any{
-			"panel": name, "title": p.title, "unit": p.unit,
+			"panel": name, "title": p.title, "unit": p.unit, "database": db,
 			"from": from, "to": to,
 			"columns": []string{}, "rows": [][]any{},
 			"error": err.Error(),
 		})
 		return
 	}
+	// database is echoed back deliberately: with a selector in front of these
+	// panels, a chart that does not say which dataset it came from is a chart that
+	// can be screenshotted and attributed to the wrong one.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"panel": name, "title": p.title, "unit": p.unit,
+		"panel": name, "title": p.title, "unit": p.unit, "database": db,
 		"from": from, "to": to,
 		"columns": cols, "rows": rows,
 	})
@@ -303,11 +403,13 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 // Generic rather than one struct per panel: the shapes differ per chart and the
 // client renders from columns anyway, so a struct per panel would be six types
 // that exist only to be marshalled straight back to JSON.
-func runPanel(ctx context.Context, c *chx.Client, p panel,
+func runPanel(ctx context.Context, c *chx.Client, db string, p panel,
 	from, to time.Time, cap32 uint32) ([]string, [][]any, error) {
 
 	const layout = "2006-01-02 15:04:05"
-	rows, err := c.Conn.Query(ctx, p.sql(c.Database),
+	// db comes from resolveDatabase, so it is one of the allowlisted literals and
+	// never request text. See the comment on `database`.
+	rows, err := c.Conn.Query(ctx, p.sql(db),
 		chx.Named("from", from.UTC().Format(layout)),
 		chx.Named("to", to.UTC().Format(layout)),
 		chx.Named("cap", cap32),

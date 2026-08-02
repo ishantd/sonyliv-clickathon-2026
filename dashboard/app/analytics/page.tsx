@@ -26,6 +26,7 @@ type PanelResponse = {
   panel: string;
   title: string;
   unit: string;
+  database: string;
   from: string;
   to: string;
   columns: string[];
@@ -33,29 +34,41 @@ type PanelResponse = {
   error?: string;
 };
 
-/*
- * Windows.
- *
- * "Hot hour" is a fixed date, and that is the point: it is the hour the extract
- * is about, the hour every published figure in this repo is measured over, and it
- * is what makes this page checkable against them. The live windows are relative
- * and show generator traffic.
- *
- * The default is deliberately the hot hour rather than "last hour". A dashboard
- * whose first render is empty because nothing happened in the last sixty minutes
- * reads as broken, and on a frozen extract that is the normal case.
- */
-const WINDOWS = [
-  { key: "hot", label: "Hot hour (26 Jul)", from: "2026-07-26 10:00:00", to: "2026-07-26 11:00:00" },
-  { key: "extract", label: "Whole extract", from: "2026-07-14 00:00:00", to: "2026-07-27 00:00:00" },
-  { key: "1h", label: "Last hour", relMinutes: 60 },
-  { key: "6h", label: "Last 6 hours", relMinutes: 360 },
-] as const;
+type Window = {
+  key: string;
+  label: string;
+  from: string;
+  to: string;
+  rel_minutes?: number;
+};
 
-function windowParams(w: (typeof WINDOWS)[number]): string {
-  if ("relMinutes" in w) {
+type Database = {
+  name: string;
+  label: string;
+  note: string;
+  windows: Window[];
+};
+
+type Meta = { databases: Database[]; default: string };
+
+/*
+ * Databases and their windows come from the server, not from here.
+ *
+ * The list is hardcoded — in Go, in analytics.go, where it is also the security
+ * boundary: the chosen name is interpolated into panel SQL as a schema identifier,
+ * which cannot be a bound parameter, so only an allowlist makes it safe. Restating
+ * the options in the browser would be a second copy of a security-relevant list,
+ * and the copy that drifts is the one nobody can see from the server.
+ *
+ * Windows are per-database for a reason worth keeping: they are not cosmetic. The
+ * extract's interesting hour is 26 July; the unseen day's is 31 July. Carrying one
+ * shared window list across a database switch would leave the chart empty and read
+ * as broken, when in fact the data is simply somewhere else on the timeline.
+ */
+function windowParams(w: Window): string {
+  if (w.rel_minutes) {
     const to = new Date();
-    const from = new Date(to.getTime() - w.relMinutes * 60_000);
+    const from = new Date(to.getTime() - w.rel_minutes * 60_000);
     const fmt = (d: Date) => d.toISOString().slice(0, 19).replace("T", " ");
     return `from=${encodeURIComponent(fmt(from))}&to=${encodeURIComponent(fmt(to))}`;
   }
@@ -72,12 +85,15 @@ const num = (v: unknown) => (typeof v === "number" ? v : Number(v) || 0);
 const str = (v: unknown) => (v == null ? "" : String(v));
 
 /** One panel's fetch + its loading/error/empty states, so no chart renders a lie. */
-function usePanel(name: string, params: string, cap = 500) {
-  const { data, error, isLoading } = useSWR<PanelResponse>(
-    `/api/analytics/${name}?${params}&cap=${cap}`,
-    fetcher,
-    { keepPreviousData: true, revalidateOnFocus: false },
-  );
+function usePanel(name: string, db: string | null, params: string | null, cap = 500) {
+  // Null key holds the request until the database and window are known. Fetching
+  // without a db would render the server's default and then swap under the reader
+  // — briefly showing one dataset's numbers under another's label.
+  const key = db && params ? `/api/analytics/${name}?db=${db}&${params}&cap=${cap}` : null;
+  const { data, error, isLoading } = useSWR<PanelResponse>(key, fetcher, {
+    keepPreviousData: true,
+    revalidateOnFocus: false,
+  });
   return {
     data,
     // Two failure modes, kept apart: the request failed (no data at all) versus the
@@ -132,17 +148,38 @@ function PanelCard({
 }
 
 export default function AnalyticsPage() {
-  const [win, setWin] = useState<(typeof WINDOWS)[number]>(WINDOWS[0]);
+  const { data: meta, error: metaError } = useSWR<Meta>("/api/analytics", fetcher, {
+    revalidateOnFocus: false,
+  });
+
+  // Both selections are stored as KEYS, not objects, and resolved against the
+  // server's list on every render. Storing the object would pin a stale window
+  // across a database switch — the one bug this selector must not have.
+  const [dbName, setDbName] = useState<string | null>(null);
+  const [winKey, setWinKey] = useState<string | null>(null);
+
+  const db =
+    meta?.databases.find((d) => d.name === dbName) ??
+    meta?.databases.find((d) => d.name === meta.default) ??
+    meta?.databases[0] ??
+    null;
+
+  // Falls back to the database's FIRST window rather than to a shared default, so
+  // switching to a dataset whose data lives elsewhere on the timeline still lands
+  // on something populated.
+  const win = db?.windows.find((w) => w.key === winKey) ?? db?.windows[0] ?? null;
+
   // Recomputed only when the window changes, so a relative window does not produce
   // a new URL on every render and re-fetch forever.
-  const params = useMemo(() => windowParams(win), [win]);
+  const params = useMemo(() => (win ? windowParams(win) : null), [win]);
+  const dbKey = db?.name ?? null;
 
-  const curve = usePanel("concurrency", params, 5000);
-  const platform = usePanel("platform_peak", params, 12);
-  const vtype = usePanel("video_type_hours", params, 8);
-  const category = usePanel("category_hours", params, 12);
-  const titles = usePanel("top_titles", params, 15);
-  const fresh = usePanel("freshness", params, 8);
+  const curve = usePanel("concurrency", dbKey, params, 5000);
+  const platform = usePanel("platform_peak", dbKey, params, 12);
+  const vtype = usePanel("video_type_hours", dbKey, params, 8);
+  const category = usePanel("category_hours", dbKey, params, 12);
+  const titles = usePanel("top_titles", dbKey, params, 15);
+  const fresh = usePanel("freshness", dbKey, params, 8);
 
   const curveData = useMemo(() => {
     const d = curve.data;
@@ -179,25 +216,75 @@ export default function AnalyticsPage() {
         </p>
       </header>
 
-      <div className="mb-5 flex flex-wrap gap-1.5">
-        {WINDOWS.map((w) => (
-          <button
-            key={w.key}
-            onClick={() => setWin(w)}
-            aria-current={w.key === win.key ? "true" : undefined}
-            className={`rounded border px-2.5 py-1 text-[0.8125rem] transition-colors ${
-              w.key === win.key
-                ? "border-accent-dim bg-accent-wash text-accent"
-                : "border-line text-ink-2 hover:text-ink"
-            }`}
-          >
-            {w.label}
-          </button>
-        ))}
-      </div>
+      <ErrorNote error={metaError} />
+
+      {meta && db ? (
+        <div className="mb-5 flex flex-col gap-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[0.6875rem] tracking-wide text-ink-3 uppercase">
+              Dataset
+            </span>
+            {meta.databases.map((d) => (
+              <button
+                key={d.name}
+                onClick={() => {
+                  setDbName(d.name);
+                  // Clearing the window is the point: the next render resolves it
+                  // against the NEW database's list and lands on its first entry.
+                  setWinKey(null);
+                }}
+                aria-current={d.name === db.name ? "true" : undefined}
+                title={d.note}
+                className={`rounded border px-2.5 py-1 text-[0.8125rem] transition-colors ${
+                  d.name === db.name
+                    ? "border-accent-dim bg-accent-wash text-accent"
+                    : "border-line text-ink-2 hover:text-ink"
+                }`}
+              >
+                {d.label}
+                <span className="ml-1.5 font-mono text-[0.6875rem] text-ink-3">
+                  {d.name}
+                </span>
+              </button>
+            ))}
+          </div>
+
+          <p className="max-w-[62rem] text-[0.75rem] leading-relaxed text-ink-3">
+            {db.note}
+          </p>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[0.6875rem] tracking-wide text-ink-3 uppercase">
+              Window
+            </span>
+            {db.windows.map((w) => (
+              <button
+                key={w.key}
+                onClick={() => setWinKey(w.key)}
+                aria-current={w.key === win?.key ? "true" : undefined}
+                className={`rounded border px-2.5 py-1 text-[0.8125rem] transition-colors ${
+                  w.key === win?.key
+                    ? "border-accent-dim bg-accent-wash text-accent"
+                    : "border-line text-ink-2 hover:text-ink"
+                }`}
+              >
+                {w.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       {headline ? (
         <StatGrid>
+          {/* Sourced from the RESPONSE, not from the selector. If the two ever
+              disagree the numbers on screen came from somewhere the reader did not
+              choose, and a chart that cannot be attributed is worse than no chart. */}
+          <Stat
+            label="Dataset"
+            value={<span className="font-mono text-[0.8125rem]">{curve.data?.database ?? "—"}</span>}
+            tone="muted"
+          />
           <Stat label="Exact peak concurrency" value={headline.peak.toLocaleString()} tone="live" />
           <Stat
             label="Time-weighted average"
