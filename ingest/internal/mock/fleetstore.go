@@ -131,24 +131,19 @@ func (s *fleetStore) save(ctx context.Context, rows []fleet.Persisted) error {
 // the operator clears them, and dropping them here would make a restart look like
 // the clear button had been pressed.
 func (s *fleetStore) Load(ctx context.Context) ([]fleet.Persisted, error) {
-	// "Ever tombstoned" excludes, rather than "the newest row says removed".
+	// Cleared ids come from their own table, not from a flag on these rows.
 	//
-	// Version ordering is not enough here and the difference is not academic: a
-	// process that restores a session and re-persists it writes a live row with a
-	// newer version than the tombstone, so a cleared session comes back and then
-	// stays back. Chasing that with timestamps means every future writer has to
-	// keep the ordering invariant, and a restart is exactly when it breaks.
-	//
-	// Terminal is the honest semantics. Session ids are 64 random hex characters
-	// and are never reused, so "this id was cleared once" can only ever mean the
-	// operator cleared it — no ordering required, and no way for a later write to
-	// undo it by accident.
+	// The in-band version of this did not survive a merge: a tombstone written into
+	// fleet_sessions loses to any later live row and the merge then deletes it, so
+	// the marker vanishes and the session returns. The separate table has no other
+	// writer, so nothing can collapse it.
 	q := fmt.Sprintf(`
 		SELECT %s
 		FROM %%[1]s.fleet_sessions FINAL
-		WHERE video_session_id NOT IN (
-		    SELECT video_session_id FROM %%[1]s.fleet_sessions WHERE removed
-		)
+		WHERE NOT removed
+		  AND video_session_id NOT IN (
+		      SELECT video_session_id FROM %%[1]s.fleet_sessions_cleared
+		  )
 		ORDER BY start_epoch, video_session_id`, joinCols(fleetColumns))
 	q = fmt.Sprintf(q, s.client.Database)
 
@@ -212,3 +207,34 @@ func unzero(t time.Time) time.Time {
 }
 
 func joinCols(cols []string) string { return strings.Join(cols, ", ") }
+
+// Clear records ids as terminally gone.
+//
+// Its own table, and chunked like every other write here. Synchronous, because
+// the caller reports failure to the operator rather than logging it — a marker
+// that did not land means the sessions come back on the next restart.
+func (s *fleetStore) Clear(ctx context.Context, ids []string) error {
+	now := time.Now().UTC()
+	for len(ids) > 0 {
+		n := saveChunk
+		if n > len(ids) {
+			n = len(ids)
+		}
+		batch, err := s.client.Conn.PrepareBatch(ctx,
+			fmt.Sprintf("INSERT INTO %s.fleet_sessions_cleared (video_session_id, cleared_at)",
+				s.client.Database))
+		if err != nil {
+			return fmt.Errorf("prepare cleared batch: %w", err)
+		}
+		for _, id := range ids[:n] {
+			if err := batch.Append(id, now); err != nil {
+				return fmt.Errorf("append cleared %s: %w", id, err)
+			}
+		}
+		if err := batch.Send(); err != nil {
+			return fmt.Errorf("send cleared batch: %w", err)
+		}
+		ids = ids[n:]
+	}
+	return nil
+}

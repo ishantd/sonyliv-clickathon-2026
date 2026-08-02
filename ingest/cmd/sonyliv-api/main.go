@@ -45,10 +45,10 @@ func run() error {
 	retries := fs.Int("retries", 3, "retry attempts per chunk (same dedup token)")
 	drain := fs.Duration("drain-timeout", api.DefaultDrainTimeout, "how long to let in-flight requests finish on SIGTERM")
 	// Serve TLS when both are given. Needed where the only inbound port a
-	// security group allows is 443, which is the common case on a box in a
-	// private subnet. A self-signed pair is fine there: the bearer token is the
-	// authentication, TLS is only transport encryption, and callers reach the
-	// host over a private path already. Clients then need --insecure/-k.
+	// security group allows is 443, which is the common case on a deployed box.
+	// A self-signed pair is fine there: the bearer token is the authentication,
+	// TLS is only transport encryption, and the port the API listens on is not
+	// one the security group admits. Clients then need --insecure/-k.
 	tlsCert := fs.String("tls-cert", "", "PEM certificate; enables TLS when set with -tls-key")
 	tlsKey := fs.String("tls-key", "", "PEM private key; enables TLS when set with -tls-cert")
 	allowOpen := fs.Bool("allow-unauthenticated", false,
