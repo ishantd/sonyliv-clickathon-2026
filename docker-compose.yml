@@ -1,0 +1,226 @@
+# The whole stack, from an empty machine.
+#
+#   cp .env.example .env
+#   docker compose up
+#
+# That brings up ClickHouse, creates the database, applies the schema, loads the
+# extracts if you have put them in ./data, starts the ingest API, the rollup loop
+# and the dashboard, and prints a URL. Nothing else to install.
+#
+# WHY THIS EXISTS ALONGSIDE deploy/deploy.sh. They are not alternatives, they are
+# two audiences. deploy.sh ships binaries to the EC2 box that fronts the hosted
+# demo and points them at ClickHouse Cloud — that is the deployment being judged
+# on latency, and it is a managed multi-replica service that a compose file
+# cannot reproduce. This file is for someone who has just cloned the repo and
+# wants the thing running in one command, against a ClickHouse they own.
+#
+# The Cloud-specific behaviours documented in CLAUDE.md — per-replica dictionary
+# loads, SharedMergeTree substitution, projections blocked on Replacing tables —
+# are invisible here by construction. A single-node MergeTree cannot show you a
+# per-replica cache disagreeing with itself. Treat what runs here as correct, not
+# as evidence about how it behaves in Cloud.
+
+name: sonyliv
+
+services:
+  # ---------------------------------------------------------------------------
+  # ClickHouse
+  # ---------------------------------------------------------------------------
+  clickhouse:
+    image: ${CH_IMAGE:-clickhouse/clickhouse-server:26.2}
+    environment:
+      CLICKHOUSE_USER: ${CH_USER:-sonyliv}
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD:-hackathon}
+      # The user needs to CREATE DATABASE, CREATE DICTIONARY and reload it. An
+      # XML-defined user gets that without any GRANT; this flag additionally lets
+      # it manage access, which sql/manual/009_mcp_reader.sql needs if you ever
+      # run that here.
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      # Bound to loopback, not 0.0.0.0. This is a database with a password out of
+      # a committed example file; publishing it on every interface of a laptop on
+      # conference wifi is not a default anyone should have to notice and undo.
+      - "127.0.0.1:${CH_NATIVE_PORT:-9000}:9000"
+      - "127.0.0.1:${CH_HTTP_PORT:-8123}:8123"
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    ulimits:
+      # ClickHouse opens a file per column per part. The container default of
+      # 1024 is exceeded during the first large merge, and the error it produces
+      # ("Too many open files") surfaces as a failed background merge rather than
+      # a failed query, so it is easy to miss.
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--user", "${CH_USER:-sonyliv}", "--password", "${CH_PASSWORD:-hackathon}", "--query", "SELECT 1"]
+      # clickhouse-client rather than curl /ping, deliberately: /ping answers
+      # before the access-control files finish loading, so a curl-based check can
+      # go green while every authenticated query still fails.
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # One-shot: database, schema, data, dictionary
+  # ---------------------------------------------------------------------------
+  init:
+    build: &build
+      context: .
+      dockerfile: Dockerfile
+    command: ["sonyliv-init"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment: &ch-env
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: 9000
+      CLICKHOUSE_SECURE: "false"
+      CLICKHOUSE_USER: ${CH_USER:-sonyliv}
+      CLICKHOUSE_PASSWORD: ${CH_PASSWORD:-hackathon}
+      CLICKHOUSE_DATABASE: ${CH_DATABASE:-sonyliv_demo}
+      # Explicit, and NOT inherited from a .env file. The repo root already holds
+      # a .env pointing at ClickHouse Cloud; if these came from there, `docker
+      # compose up` would silently load seven million rows into the graded
+      # service. `environment:` outranks `env_file:` in compose, but the safer
+      # arrangement is not to read that file at all.
+      CLICKHOUSE_HTTP_PORT: 8123
+      FORCE_LOAD: ${FORCE_LOAD:-0}
+    volumes:
+      # Read-only. The loader parses these; nothing should ever write back.
+      - ${DATA_DIR:-./data}:/data:ro
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # The ingest API — the only writer
+  # ---------------------------------------------------------------------------
+  api:
+    build: *build
+    command:
+      - sonyliv-api
+      - --listen=0.0.0.0:8080
+      # No token, and no host port. The API is reachable only from this compose
+      # network, so the network is the boundary — the same argument the systemd
+      # unit makes for the EC2 box, where the security group plays that role.
+      # Set API_TOKEN in .env to require one anyway.
+      - --allow-unauthenticated
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment:
+      <<: *ch-env
+      SONYLIV_API_TOKEN: ${API_TOKEN:-}
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # The rollup loop — intervals and the serving layer
+  # ---------------------------------------------------------------------------
+  rollup:
+    build: *build
+    # --layer all, one process: the live and minute layers share a watermark, and
+    # splitting them across containers would let one advance past the other.
+    command: ["sonyliv-ingest", "concurrency", "--layer", "all", "--loop", "10s"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment: *ch-env
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # The dashboard and simulator — the thing you open
+  # ---------------------------------------------------------------------------
+  dashboard:
+    build: *build
+    command:
+      - sonyliv-mock
+      - --listen=0.0.0.0:8088
+      # Writes go through the API rather than straight into events_raw, so the
+      # simulator exercises the real validation, dedup token and reject capture
+      # instead of a second write path that only exists in demos.
+      - --api-url=http://api:8080/v1/events
+      - --allow-unauthenticated
+    depends_on:
+      api:
+        condition: service_healthy
+    environment:
+      <<: *ch-env
+      SONYLIV_API_TOKEN: ${API_TOKEN:-}
+    ports:
+      - "${DASHBOARD_PORT:-8088}:8088"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8088/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Optional: the serving-layer MCP server, for a conversational layer
+  # ---------------------------------------------------------------------------
+  #   docker compose --profile mcp up
+  #
+  # Connects as the SAME user as everything else here, which is the one thing
+  # this container does NOT reproduce faithfully: on the real deployment it
+  # connects as sonyliv_mcp, an account granted SELECT on eight aggregate
+  # objects and nothing carrying user_id, and the server refuses to start if it
+  # can reach events_clean or session_intervals. That refusal is the security
+  # property, and it is enforced by the grant.
+  #
+  # To reproduce it here, run sql/manual/009_mcp_reader.sql against this
+  # ClickHouse first (rewriting sonyliv_prod to your CH_DATABASE) and point this
+  # service at the resulting account. Until you do, treat this as a functional
+  # demo of the tools, not of the boundary.
+  mcp:
+    profiles: ["mcp"]
+    build: *build
+    command: ["sonyliv-mcp", "--transport", "http", "--addr", "0.0.0.0:8848"]
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    environment:
+      <<: *ch-env
+      # Required, not optional: the HTTP transport hands out SQL access, so the
+      # server refuses to start with an empty token rather than listening open.
+      # Compose supplies a default so the profile works out of the box; set
+      # MCP_TOKEN in .env before exposing this beyond loopback.
+      SONYLIV_MCP_TOKEN: ${MCP_TOKEN:-local-mcp-token}
+    ports:
+      - "127.0.0.1:${MCP_PORT:-8848}:8848"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Optional: put traffic on the curve immediately
+  # ---------------------------------------------------------------------------
+  #   docker compose --profile traffic up
+  #
+  # For the case where you have no CSVs and want the dashboard to show something
+  # within a minute of `up` rather than after you have clicked through the create
+  # form. It starts one autonomous fleet and exits; the sessions outlive it.
+  traffic:
+    profiles: ["traffic"]
+    image: curlimages/curl:8.11.1
+    depends_on:
+      dashboard:
+        condition: service_healthy
+    command:
+      - -sS
+      - -X
+      - POST
+      - http://dashboard:8088/api/sim/start
+      - -H
+      - "content-type: application/json"
+      - -d
+      - '{"concurrency":${TRAFFIC_SESSIONS:-250},"ramp_up_seconds":60,"duration_minutes":${TRAFFIC_MINUTES:-30}}'
+    restart: "no"
+
+volumes:
+  clickhouse-data:

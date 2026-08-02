@@ -1,0 +1,77 @@
+# systemd unit for the concurrency rollup loop.
+#
+# Install once, as root:
+#   sudo cp deploy/sonyliv-rollup.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sonyliv-rollup
+#
+# WHY THIS EXISTS. Until now the rollup was run by hand — `make rollup-live` in a
+# terminal — which was survivable while the demo database was sonyliv_prod, because
+# that one was already populated and the charts had something to show whether or not
+# the loop happened to be running.
+#
+# sonyliv_demo is created empty. Its entire content is what the simulator produces, so
+# with no rollup running the events land in events_raw, the compactor never drains
+# dirty_sessions, and every chart stays empty forever. The failure looks exactly like
+# "the pipeline is broken" during a demo, and the actual cause is a terminal nobody
+# opened. A demo database that fills itself needs the drain to be a service.
+#
+# It reads /etc/sonyliv/sonyliv.env, so it follows CLICKHOUSE_DATABASE along with the
+# API and the dashboard — one variable moves all three, and they cannot disagree about
+# which database the demo is.
+
+[Unit]
+Description=SonyLIV concurrency rollup loop
+Documentation=https://github.com/ishantd/sonyliv-clickathon-2026
+Wants=network-online.target
+After=network-online.target
+# Ordering only. The rollup reads events_raw and writes the serving layer; it does not
+# call the API, and it should keep draining a backlog even while the API is restarting.
+After=sonyliv-api.service
+
+[Service]
+Type=simple
+User=sonyliv
+Group=sonyliv
+
+EnvironmentFile=/etc/sonyliv/sonyliv.env
+
+# --loop 10s drives the live layer every ten seconds; the minute layer publishes on its
+# own slower cadence (--minute-every, default 1m) behind a deliberate lag, because a
+# minute cannot be finalised until it is over.
+#
+# --layer all rather than two units: the two layers share a watermark, and splitting
+# them into separate processes would let one advance past the other.
+ExecStart=/usr/local/bin/sonyliv-ingest concurrency --layer all --loop 10s
+
+Restart=always
+RestartSec=5
+# A rollup that dies five times in a minute is misconfigured, not unlucky. Let it stop
+# so the failure is visible in `systemctl status` instead of scrolling past in the log.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+KillSignal=SIGTERM
+# A pass mid-publish should finish rather than leave the staging table torn.
+TimeoutStopSec=60
+
+# --- hardening -------------------------------------------------------------
+# Outbound TCP to ClickHouse and nothing else. No listening socket, so unlike the API
+# and the dashboard this one needs no CAP_NET_BIND_SERVICE at all.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target

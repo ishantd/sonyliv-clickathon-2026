@@ -141,6 +141,17 @@ func run() error {
 		fmt.Printf("restored %d fleet sessions from fleet_sessions\n", n)
 	}
 
+	// Narrow the dataset picker to the databases this server can actually reach.
+	//
+	// The allowlist names the Cloud deployment's three databases; against the
+	// single-node ClickHouse that docker-compose.yml brings up, only one of them
+	// exists and the other two would render as options that return "Unknown
+	// database". Survived rather than fatal, for the same reason as the reconcile
+	// above: an unfiltered picker is a worse dashboard, not an outage.
+	if err := srv.ResolveDatasets(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: dataset discovery: %v\n", err)
+	}
+
 	// The fleet ticks whether or not a browser is attached, so it runs for the
 	// lifetime of the process rather than being driven by requests.
 	//

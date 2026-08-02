@@ -37,6 +37,14 @@ type Server struct {
 	token      string
 	corsOrigin string
 	timeoutMS  int64
+
+	// datasets is the selectable subset of the `databases` allowlist: the
+	// entries that actually exist on the connected server, plus the server's own
+	// configured database. Narrowed once at startup by ResolveDatasets.
+	//
+	// It can only ever be a SUBSET of the allowlist plus one name that came from
+	// this process's own config, so nothing here widens what a request can reach.
+	datasets []database
 }
 
 // NewServer wires the dashboards over one ClickHouse client.
@@ -58,6 +66,12 @@ func NewServer(client *chx.Client, token, corsOrigin, selfURL string, timeoutMS 
 		token:      token,
 		corsOrigin: corsOrigin,
 		timeoutMS:  timeoutMS,
+		// The full allowlist until ResolveDatasets narrows it. Starting wide and
+		// narrowing, rather than starting empty and filling, means a server that
+		// never calls ResolveDatasets behaves exactly as it did before this
+		// existed — the filter is an improvement on the default, not a
+		// precondition for the thing working.
+		datasets: databases,
 	}
 	// The fleet evaluates the same lease the stepper and the pipeline do. Passing
 	// timeoutMS rather than a constant is what keeps its graph comparable to
@@ -261,7 +275,7 @@ func (s *Server) handleSimStatus(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleCurve(w http.ResponseWriter, r *http.Request) {
 	minutes, _ := strconv.Atoi(r.URL.Query().Get("minutes"))
-	db, err := resolveDatabase(r.URL.Query().Get("db"), s.client.Database)
+	db, err := s.resolveDatabase(r.URL.Query().Get("db"))
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
