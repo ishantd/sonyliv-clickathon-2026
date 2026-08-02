@@ -1,0 +1,25 @@
+# Daily trigger for the cert renewal check.
+#
+# Daily sounds aggressive for a 90-day cert, and it would be if the timer itself did
+# the renewing. It does not: tls-renew.sh checks the expiry before touching anything
+# and exits immediately for the ~60 days the cert is young. Checking often is how you
+# get many chances to recover from a failed renewal instead of one.
+
+[Unit]
+Description=Daily renewal check for the fastandfurious.live TLS certificate
+Documentation=https://github.com/ishantd/sonyliv-clickathon-2026
+
+[Timer]
+OnCalendar=daily
+
+# Spreads the actual run across four hours after midnight. Two reasons: Let's Encrypt
+# asks clients not to pile onto the top of the hour, and if a renewal does happen it
+# lands at an unpredictable quiet time rather than a predictable one.
+RandomizedDelaySec=4h
+
+# The box is not on 24/7. Without this, a timer whose window passed while the instance
+# was stopped simply never fires, and the cert quietly expires.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
