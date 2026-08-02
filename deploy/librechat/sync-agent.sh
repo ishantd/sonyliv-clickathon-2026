@@ -61,11 +61,37 @@ n="$(jq 'length' <<<"$tools")"
 [[ "$n" -gt 0 ]] || { echo "sync-agent: $mcp_server exposed no tools — is sonyliv-mcp up?" >&2; exit 1; }
 echo "  $n tools"
 
+# execute_code — the LibreChat Code Interpreter — is added ONLY when a key is configured.
+#
+# It cannot be self-hosted on this box. The open-source service (ClickHouse's
+# code-interpreter) runs its sandboxes under KVM, and this instance has no /dev/kvm and no
+# vmx/svm CPU flags: it is an ordinary EC2 guest, not a metal one. So the sandbox-runner
+# cannot start, and the other five components have nothing to run code in.
+#
+# That leaves LibreChat's hosted API, which is a key and nothing else. Set
+# LIBRECHAT_CODE_API_KEY in /etc/sonyliv/librechat.env and re-run this script; the tool
+# appears and the agent can render matplotlib PNGs instead of Recharts components.
+#
+# Adding it WITHOUT a key would be worse than leaving it off: the tool shows up, the model
+# reaches for it, and every call fails at the API — which looks like a broken agent rather
+# than an unconfigured one.
+if [[ -n "${LIBRECHAT_CODE_API_KEY:-}" ]]; then
+    tools="$(jq -c '. + ["execute_code"]' <<<"$tools")"
+    echo "  + execute_code (code interpreter key is set)"
+else
+    echo "  no LIBRECHAT_CODE_API_KEY — charts render as artifacts, not executed code"
+fi
+
+# artifacts: "default" is what turns "give me a graph" into an actual graph. Without it the
+# model answers a charting question with a markdown table, because a table is the best it
+# can render. With it, it emits a Recharts component and LibreChat renders an interactive
+# chart beside the conversation -- no code execution and no sandbox involved.
 body="$(jq -n --arg name 'SonyLIV Concurrency Analyst' \
     --arg desc 'Answers viewing-trend questions from the ClickHouse serving layer.' \
     --rawfile instr "$instructions_file" --argjson tools "$tools" \
     '{name:$name, description:$desc, instructions:$instr,
       provider:"SonyLIV", model:"gemini-2.5-flash", tools:$tools,
+      artifacts:"default",
       model_parameters:{temperature:0, maxOutputTokens:8192}}')"
 
 agent_id="$(cat "$id_file" 2>/dev/null || true)"

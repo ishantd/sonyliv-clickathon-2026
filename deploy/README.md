@@ -396,6 +396,31 @@ open-ended question a person opens the chat and types that dies.
 LibreChat drops its answers. A picker entry that returns empty bubbles is worse than a
 short picker.
 
+### Charts, and why code interpreter is not enabled
+
+Asked to plot something, the agent emits a **Recharts component as a LibreChat artifact**
+and the UI renders it as an interactive chart beside the conversation. That is
+`artifacts: "default"` on the agent, set by `sync-agent.sh`. Without it the same question
+returns a markdown table, because a table is the best it can render.
+
+**Code interpreter cannot be self-hosted on this box.** The open-source service
+(ClickHouse's `code-interpreter`) is six components built from source, and its
+sandbox-runner requires KVM. This instance has no `/dev/kvm` and no `vmx`/`svm` CPU flags
+— an ordinary EC2 guest, not a `.metal` one — so the sandbox cannot start and the rest
+has nothing to run code in.
+
+That leaves LibreChat's hosted Code Interpreter API, which is a key and nothing else. Set
+`LIBRECHAT_CODE_API_KEY` in `/etc/sonyliv/librechat.env` and re-run the deploy;
+`sync-agent.sh` adds the `execute_code` tool only when that key is present, and the agent
+gains executed Python — matplotlib PNGs, file in and out.
+
+It is deliberately **not** added without a key. A tool that is present but unconfigured
+fails on every call, which reads as a broken agent rather than an unconfigured one.
+
+Worth being clear about what it would buy: charts already work. Code interpreter buys
+*executed code* — statistics the serving layer does not compute, exports, image files —
+not charting.
+
 ### If the MCP dropdown does not appear
 
 Gemini tool-calling through the chat area is the light-touch path — everything stays in

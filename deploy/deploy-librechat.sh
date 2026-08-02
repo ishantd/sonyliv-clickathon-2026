@@ -180,7 +180,7 @@ ssh "$host" "set -euo pipefail
 echo "== agent =="
 # shellcheck disable=SC2029
 if ssh "$host" "cd '$remote_dir'
-    eval \"\$(sudo bash -c 'grep -E \"^LIBRECHAT_(EMAIL|PASSWORD)=\" /etc/sonyliv/librechat.env' | sed 's/^/export /')\"
+    eval \"\$(sudo bash -c 'grep -E \"^LIBRECHAT_(EMAIL|PASSWORD|CODE_API_KEY)=\" /etc/sonyliv/librechat.env' | sed 's/^/export /')\"
     if [ -z \"\${LIBRECHAT_EMAIL:-}\" ]; then
         echo '  skipped: set LIBRECHAT_EMAIL/LIBRECHAT_PASSWORD in /etc/sonyliv/librechat.env' >&2
         exit 1
