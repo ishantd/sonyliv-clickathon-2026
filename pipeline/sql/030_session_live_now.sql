@@ -89,9 +89,10 @@ PARTITION BY session_start_date
 ORDER BY (session_start_date, session_key)
 TTL toDateTime(session_start_date) + INTERVAL 3 DAY
 SETTINGS index_granularity = 8192
-COMMENT 'LIVE path. One row per session, best-effort. The MV in this file is the ONLY writer. '
-        'Not to be confused with session_live_state, which the analytics compactor owns. '
-        'Definition: solution/policy.yaml. 3-day TTL exceeds the 43.6h longest observed session.';
+-- One string literal, deliberately. ClickHouse has no C-style implicit
+-- concatenation, so 'part one' 'part two' is a syntax error, not a joined
+-- string. The same split broke 040 on its first real run.
+COMMENT 'LIVE path. One row per session, best-effort. The MV in this file is the ONLY writer. Not to be confused with session_live_state, which the analytics compactor owns. Definition: solution/policy.yaml. 3-day TTL exceeds the 43.6h longest observed session.';
 
 -- Both non-aggregate columns (session_start_date, session_key) are in the
 -- ORDER BY, so the AggregatingMergeTree "column outside the sorting key

@@ -92,8 +92,11 @@ SETTINGS index_granularity = 8192,
          non_replicated_deduplication_window = 1000,
          replicated_deduplication_window = 1000,
          replicated_deduplication_window_seconds = 2592000
-COMMENT 'Flat minute serving tier. Read with max()/sum() over a range -- never a cumsum. '
-        'Additive: does not replace deltas/bucket_net/day_anchor. Definition: solution/policy.yaml.';
+-- One string literal, deliberately. ClickHouse has no C-style implicit
+-- concatenation, so 'part one' 'part two' is a syntax error, not a joined
+-- string. Splitting this across lines is what made the first real run of this
+-- file fail at line 96 before a single statement executed.
+COMMENT 'Flat minute serving tier. Read with max()/sum() over a range -- never a cumsum. Additive: does not replace deltas/bucket_net/day_anchor. Definition: solution/policy.yaml.';
 
 ALTER TABLE sonyliv.concurrency_minute_versions
   MODIFY SETTING non_replicated_deduplication_window = 1000,
@@ -271,7 +274,13 @@ SELECT
     toUInt16(13)                                     AS rollup_mask,
     service_date, minute_start,
     platform, country,
-    dictGetOrDefault(sonyliv.content_dict, 'video_type', tuple(content_id), 'unknown') AS video_type,
+    -- Default is '__unknown__' (policy.yaml: unknown_string), NOT 'unknown'.
+    -- 'unknown' is a REAL catalogue value: 1,089 titles carry it, 141 of them
+    -- played, covering 863 intervals. Using it as the fallback would make a
+    -- cold-replica dictionary miss indistinguishable from real data -- the
+    -- exact silent fallback CLAUDE.md says must stay assertable. With
+    -- '__unknown__', `countIf(video_type = '__unknown__') > 0` is a valid alarm.
+    dictGetOrDefault(sonyliv.content_dict, 'video_type', tuple(content_id), '__unknown__') AS video_type,
     content_id,
     minute_peak, active_entity_ms, ending_concurrency, source_boundary_points
 FROM sonyliv.concurrency_minute_versions
