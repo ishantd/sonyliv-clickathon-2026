@@ -286,7 +286,11 @@ if [[ $DO_BUILD -eq 1 ]]; then
        --param "since_ingested_at=" \
        --param "evaluation_as_of=" \
        --param "allow_truncation=0" \
-       --param "allow_boundary_sessions=0"
+       # 1 = INCLUDE sessions that have no VideoSessionStart, anchored at their
+       # first observed event. On the unseen extract that is 25,403 sessions and
+       # 37.86% of all events; excluding them would silently drop a third of the
+       # answer. See the note on session_anchors in 011.
+       --param "allow_boundary_sessions=1"
 
     ch "$REPO_ROOT/pipeline/sql/022_populate_serving.sql" \
        --rewrite-db sonyliv \
