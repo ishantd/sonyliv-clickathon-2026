@@ -336,8 +336,29 @@ SELECT
     platform,
     country,
     app_version,
-    video_type,
-    category,
+    -- video_type and category are FUNCTIONALLY DETERMINED by content_id — the catalogue
+    -- maps each content_id to exactly one of each — so wherever a row carries a
+    -- content_id they can be resolved from the dictionary even when the row's mask did
+    -- not select them. Without this, masks 4 and 5 render both columns blank and a
+    -- filter on either silently returns zero rows against 31,537 content rows that
+    -- could have answered it. serving_live_content already resolves all three; this
+    -- brings the minute layer in line.
+    --
+    -- Fill-only-when-blank, never overwrite: at masks 8/9/32/63 the value is stored on
+    -- the row and is authoritative, so it is passed through untouched. The dictionary is
+    -- consulted only where the mask left a placeholder AND a content_id is present.
+    --
+    -- This does NOT make a filtered peak correct at every grouping. minute_peak is exact
+    -- only at the row's own mask: filter mask 4 by category and max(minute_peak) gives
+    -- the busiest single TITLE in that category (measured 14), not the category's peak
+    -- (measured 46). For a category peak, read grouping = 'category'. The average is
+    -- safe either way — active_ms is additive, and both paths give 11.012060.
+    if(empty(video_type) AND content_id != 0,
+       dictGetOrDefault({{db}}.content_dict, 'video_type', tuple(content_id), ''),
+       video_type) AS video_type,
+    if(empty(category) AND content_id != 0,
+       dictGetOrDefault({{db}}.content_dict, 'category', tuple(content_id), ''),
+       category) AS category,
     minute_peak,
     ending_concurrency,
     active_ms,
