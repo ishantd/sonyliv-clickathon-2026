@@ -154,6 +154,12 @@ func (s *Server) Handler() http.Handler {
 	api.HandleFunc("GET /api/fleet/dimensions", s.handleFleetDimensions)
 	api.HandleFunc("GET /api/fleet/curve", s.handleFleetCurve)
 
+	// Analytics panels: the ClickStack dashboards, served from this box against the
+	// same serving-layer views. Named panels only -- see analytics.go for why a
+	// ?sql= parameter is not offered.
+	api.HandleFunc("GET /api/analytics", s.handleAnalyticsList)
+	api.HandleFunc("GET /api/analytics/{panel}", s.handleAnalytics)
+
 	mux.Handle("/api/", s.cors(s.auth(api)))
 	return mux
 }

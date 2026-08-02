@@ -90,6 +90,9 @@ const routes: { href: string; label: string; also?: string[] }[] = [
   // here — otherwise opening a session lights up no tab at all.
   { href: "/fleet", label: "Sessions", also: ["/fleet/session"] },
   { href: "/live", label: "Live" },
+  // The ClickStack dashboards, reproduced here rather than linked: managed
+  // ClickStack has no stable deep link, so an external tab would land on a login.
+  { href: "/analytics", label: "Analytics" },
   { href: "/", label: "Load test" },
   { href: "/manual", label: "Stepper" },
 ];
@@ -102,10 +105,15 @@ const routes: { href: string; label: string; also?: string[] }[] = [
  * So its href is a bare "/" — the one link here that must NOT be rebased, which is
  * why the nav renders these as plain anchors.
  *
- * ClickStack and Langfuse are off-box SaaS. They are not proxied through nginx on
- * purpose: both are cookie-authenticated on their own origins, and reverse-proxying
- * a session-bearing third-party app breaks its auth in ways that look like the app
- * being broken. Links are the honest integration.
+ * There is deliberately NO ClickStack link. ClickStack is queries over the same
+ * ClickHouse this app already reads, and managed ClickStack has no stable deep link
+ * — console -> service -> ClickStack -> Launch, through an authenticated redirect —
+ * so a tab would land on a login page. The panels are reproduced at /analytics
+ * instead, against the same serving-layer views.
+ *
+ * Langfuse stays a link rather than a proxy: it is cookie-authenticated on its own
+ * origin, and reverse-proxying a session-bearing third-party app breaks its auth in
+ * ways that look like the app being broken.
  *
  * Empty means absent, not broken — an unconfigured tab is not rendered at all.
  */
@@ -120,12 +128,6 @@ const externals: {
     label: "Analyst",
     title: "LibreChat over the serving-layer MCP server",
     newTab: false,
-  },
-  {
-    href: process.env.NEXT_PUBLIC_CLICKSTACK_URL ?? "",
-    label: "Dashboards",
-    title: "The six ClickStack dashboards over the concurrency serving layer",
-    newTab: true,
   },
   {
     href: process.env.NEXT_PUBLIC_LANGFUSE_URL ?? "",
