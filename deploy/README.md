@@ -365,6 +365,37 @@ A third, less subtle: if `SONYLIV_MCP_TOKEN` differs between `/etc/sonyliv/mcp.e
 `/etc/sonyliv/librechat.env`, every tool call 401s and the model reports that it *has no
 data* rather than that it is unauthorised.
 
+### The empty-bubble failure, and why there are two causes
+
+The first real demo of this deployment produced **empty assistant messages** — no text,
+no error, nothing in the container logs. Two independent causes, and fixing either alone
+leaves it broken.
+
+**1. No tools were attached.** A `custom` endpoint requires the person to pick the MCP
+server from the chat-area dropdown, per conversation. Nobody does. And the analyst prompt
+says to answer only from a tool call, so with no tools the model has no legal move: it
+either invents a plausible answer or returns nothing. Measured — same prompt, same
+question: without tools, `completion_tokens: 0`; with tools, a correct `viewing_trend`
+call. Fixed by binding the tools to an **Agent** (`sync-agent.sh`) and making it the
+default `modelSpec`, so there is no state a user can forget to set.
+
+**2. LibreChat drops responses that carry `reasoning_content`.** Gemini 2.5 streams its
+chain of thought in that field. Through the proxy directly the answer arrives intact
+(144 chars of content); through LibreChat's custom endpoint the stored message is the
+empty string, beside a fully populated `reasoning_content` in the trace. Fixed with
+`reasoning_effort: disable` in `litellm-config.yaml`.
+
+Underneath (2) there is a narrower one worth knowing: with Gemini's **dynamic** thinking
+budget and 8 tool schemas attached, a vague question returns a candidate with zero output
+parts — HTTP 200, `finish_reason: stop`, `completion_tokens: 0`, six runs out of six.
+Specific questions survive because the model commits to a tool quickly. It is exactly the
+open-ended question a person opens the chat and types that dies.
+
+`gemini-2.5-pro` is therefore **not offered**. It refuses a zero thinking budget outright
+(`Budget 0 is invalid. This model only works in thinking mode.`), and with thinking on
+LibreChat drops its answers. A picker entry that returns empty bubbles is worse than a
+short picker.
+
 ### If the MCP dropdown does not appear
 
 Gemini tool-calling through the chat area is the light-touch path — everything stays in

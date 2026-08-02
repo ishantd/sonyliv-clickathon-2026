@@ -54,3 +54,4 @@ deploy/librechat/data-node/
 deploy/librechat/images/
 deploy/librechat/uploads/
 deploy/librechat/logs/
+deploy/librechat/agent-id

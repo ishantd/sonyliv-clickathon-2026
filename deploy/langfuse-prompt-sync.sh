@@ -83,13 +83,27 @@ prompt_yaml="$(jq -Rs . <<<"$stamped")"
 tmp="$(mktemp "${TMPDIR:-/tmp}/librechat.yaml.XXXXXX")"
 trap 'rm -f "$tmp"' EXIT
 
-LANGFUSE_PROMPT_YAML="$prompt_yaml" awk '
+# The agent id, written by sync-agent.sh on the box. Absent on a first deploy -- the agent
+# cannot exist before LibreChat is running to create it -- so fall back to a placeholder
+# that still parses as YAML. LibreChat then falls back to the model picker, which is
+# degraded but not broken, and the next deploy fills it in.
+agent_id="$(cat "$out_dir/agent-id" 2>/dev/null || true)"
+if [[ -z "$agent_id" ]]; then
+    agent_id='AGENT_NOT_YET_CREATED'
+    echo "  note: no agent-id yet; run sync-agent.sh on the box, then re-sync"
+fi
+
+LANGFUSE_PROMPT_YAML="$prompt_yaml" AGENT_ID="$agent_id" awk '
     {
-        i = index($0, "<<LANGFUSE_PROMPT>>")
+        line = $0
+        i = index(line, "<<LANGFUSE_PROMPT>>")
         if (i > 0) {
-            print substr($0, 1, i - 1) ENVIRON["LANGFUSE_PROMPT_YAML"] substr($0, i + length("<<LANGFUSE_PROMPT>>"))
+            line = substr(line, 1, i - 1) ENVIRON["LANGFUSE_PROMPT_YAML"] substr(line, i + length("<<LANGFUSE_PROMPT>>"))
             found = 1
-        } else print
+        }
+        j = index(line, "<<AGENT_ID>>")
+        if (j > 0) line = substr(line, 1, j - 1) ENVIRON["AGENT_ID"] substr(line, j + length("<<AGENT_ID>>"))
+        print line
     }
     END { if (!found) exit 3 }
 ' "$TEMPLATE" >"$tmp" || {

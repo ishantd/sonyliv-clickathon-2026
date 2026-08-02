@@ -160,7 +160,45 @@ ssh "$host" "set -euo pipefail
     for i in \$(seq 1 60); do
         curl -fsS --max-time 3 http://127.0.0.1:3080/health >/dev/null && break
         sleep 3
+    done
+    # And wait out LiteLLM's health start_period. Without this the check below runs
+    # against a container that is still starting and reports a failure that resolves
+    # itself thirty seconds later -- the most annoying kind of red.
+    for i in \$(seq 1 40); do
+        sudo docker compose ps --format '{{.Service}} {{.Status}}' | grep -q 'litellm.*healthy' && break
+        sleep 3
     done"
+
+# ---------------------------------------------------------------------------
+# 5. The agent. Must come AFTER `up -d`, because it is created through LibreChat's own
+#    API, which needs LibreChat running -- and librechat.yaml's default modelSpec needs
+#    the resulting agent id. That circularity is why this is two passes rather than one.
+#
+#    Skipped, with a warning rather than a failure, if no owner account is configured:
+#    a first deploy has no account yet, and the stack is still usable via the picker.
+# ---------------------------------------------------------------------------
+echo "== agent =="
+# shellcheck disable=SC2029
+if ssh "$host" "cd '$remote_dir'
+    eval \"\$(sudo bash -c 'grep -E \"^LIBRECHAT_(EMAIL|PASSWORD)=\" /etc/sonyliv/librechat.env' | sed 's/^/export /')\"
+    if [ -z \"\${LIBRECHAT_EMAIL:-}\" ]; then
+        echo '  skipped: set LIBRECHAT_EMAIL/LIBRECHAT_PASSWORD in /etc/sonyliv/librechat.env' >&2
+        exit 1
+    fi
+    ./sync-agent.sh"; then
+    # Pull the id back and re-render, so the default modelSpec points at the agent that
+    # actually exists rather than at whatever this checkout last saw.
+    scp -q "$host:$remote_dir/agent-id" "$repo/deploy/librechat/agent-id" 2>/dev/null || true
+    "$repo/deploy/langfuse-prompt-sync.sh" >/dev/null
+    scp -q "$repo/deploy/librechat/librechat.yaml" "$host:$remote_dir/librechat.yaml"
+    # shellcheck disable=SC2029
+    ssh "$host" "cd '$remote_dir' && sudo docker compose up -d --force-recreate api >/dev/null 2>&1
+        until curl -fsS --max-time 3 http://127.0.0.1:3080/health >/dev/null 2>&1; do sleep 2; done"
+    echo "  agent bound, librechat.yaml re-rendered against it"
+else
+    echo "  WARNING: no agent. Tools will need attaching from the chat-area dropdown," >&2
+    echo "  which nobody remembers to do -- and the failure is an empty reply." >&2
+fi
 
 echo
 remote_check

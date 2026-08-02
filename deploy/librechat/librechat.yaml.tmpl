@@ -72,9 +72,12 @@ endpoints:
       apiKey: '${LITELLM_MASTER_KEY}'
       baseURL: 'http://litellm:4000/v1'
       models:
-        default: ['gemini-2.5-flash', 'gemini-2.5-pro']
-        # Off deliberately: fetch would list whatever LiteLLM knows about, and the model
-        # picker should offer the two that were configured here on purpose.
+        # One model, deliberately. gemini-2.5-pro cannot run with thinking disabled, and
+        # with thinking on LibreChat drops its answers -- see litellm-config.yaml. An
+        # entry in the picker that returns empty bubbles is worse than a short picker.
+        default: ['gemini-2.5-flash']
+        # Off deliberately: fetch would list whatever LiteLLM knows about, and the picker
+        # should offer only what was configured here on purpose.
         fetch: false
       titleConvo: true
       titleModel: 'gemini-2.5-flash'
@@ -82,8 +85,8 @@ endpoints:
       modelDisplayLabel: 'SonyLIV'
 
 modelSpecs:
-  # enforce: false so the model picker still works for a side-by-side against pro; the
-  # spec supplies the default and the prompt.
+  # enforce: false leaves the picker usable rather than locking the UI to this spec; the
+  # spec still supplies the default, which is what matters.
   enforce: false
   prioritize: true
   list:
@@ -93,12 +96,24 @@ modelSpecs:
       default: true
       iconURL: https://raw.githubusercontent.com/ClickHouse/clickhouse-docs/main/static/img/favicon.ico
       preset:
-        endpoint: 'SonyLIV'
+        # The AGENTS endpoint, not the custom one, and this is the whole point.
+        #
+        # A custom endpoint requires the person to attach the MCP server from the
+        # chat-area dropdown, once per conversation. Nobody does, and the failure is
+        # silent: the prompt tells the model to answer only from a tool call, so with no
+        # tools it either invents an answer or returns an empty bubble. That is what the
+        # first real demo of this deployment hit.
+        #
+        # The agent binds all 8 tools permanently. agent-id is written by sync-agent.sh
+        # and substituted here by langfuse-prompt-sync.sh; the agent's instructions are
+        # the same Langfuse prompt, version stamp and all.
+        endpoint: agents
+        agent_id: <<AGENT_ID>>
         model: 'gemini-2.5-flash'
-        # Flash, not pro: this is a many-small-turns tool loop and latency is what the
-        # conversation feels. Pro stays one click away in the picker.
         maxOutputTokens: 8192
-        temperature: 0
         # Zero temperature on purpose. Every answer here is a number read from a tool, and
         # sampling variety in a number is not a feature.
+        temperature: 0
+        # Kept so the prompt is visible in this file and in the trace even on the agent
+        # path, where the agent's own instructions are what the model actually receives.
         promptPrefix: <<LANGFUSE_PROMPT>>
