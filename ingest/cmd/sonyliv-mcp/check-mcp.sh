@@ -60,7 +60,7 @@ echo "== reference figures (the numbers the whole project is graded on) =="
 hot='{"from":"2026-07-26 10:00:00","to":"2026-07-26 11:00:00","grouping":"total"}'
 r="$(call peak_and_average "$hot")"
 expect "hot hour exact peak = 2305"          '2305'       "$r"
-expect "hot hour average = 855.603469"       '855.603469' "$r"
+expect "hot hour average = 855.578199"       '855.578199' "$r"
 expect "hot hour reads only 60 rows"         '60'         "$r"
 
 echo

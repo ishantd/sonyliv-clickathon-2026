@@ -23,7 +23,7 @@ Two rules govern every correct answer here:
 
  2. ALWAYS FILTER ON grouping. The minute layer holds eleven overlapping aggregations of
     the same traffic. Querying without pinning grouping sums them: measured 9,411.64
-    average concurrency where the truth was 855.60. Pick the narrowest grouping that
+    average concurrency where the truth was 855.58. Pick the narrowest grouping that
     answers the question — 'total' is 60 rows per hour, 'all dimensions' is 41,845.
 
 Timestamps are UTC and windows are half-open. The minute layer publishes on a ~5 minute
@@ -85,7 +85,7 @@ Procedure:
  4. If the window touches the present, call data_freshness first. The minute layer runs
     ~5 minutes behind; unpublished minutes are absent, not zero.
  5. Sanity-check against the reference: hot hour 2026-07-26 10:00-11:00Z at
-    grouping='total' is peak 2305, average 855.603469.
+    grouping='total' is peak 2305, average 855.578199.
 
 Report the measure, the grouping, and the window in UTC, so the number can be reproduced.
 Never sum or average a peak.`,

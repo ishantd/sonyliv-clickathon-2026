@@ -59,7 +59,7 @@ func (s *server) registerTools() {
 		Description: "The two headline figures for a window: exact peak concurrency, and " +
 			"time-weighted average concurrency, plus viewer-hours and when the peak occurred. " +
 			"A peak is read from a pre-aggregated row, never summed. Reference: the hot hour " +
-			"2026-07-26 10:00-11:00Z at grouping='total' is peak 2305, average 855.603469.",
+			"2026-07-26 10:00-11:00Z at grouping='total' is peak 2305, average 855.578199.",
 		InputSchema: obj(map[string]any{
 			"from":      strProp("Window start, UTC."),
 			"to":        strProp("Window end, UTC, exclusive."),

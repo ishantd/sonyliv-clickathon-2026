@@ -38,7 +38,7 @@ Viewer-hours is the same quantity in different units: `sum(active_ms) / 3600000`
 one per `grouping` value. They all describe the same viewers at different resolutions, so
 a query that does not pin `grouping` sums every slice and overstates reality several
 times over. Measured: blending all eleven reports average concurrency of **9,411.64**
-where the truth is **855.60**.
+where the truth is **855.58**.
 
 > Every query against `serving_minute_current` or `serving_concurrency_minute` must
 > contain either `grouping = '<one value>'` or `GROUP BY grouping`.
@@ -112,16 +112,16 @@ overstated the average by **4.3%**.
 Hot hour `2026-07-26 10:00:00Z` to `11:00:00Z`, `grouping = 'total'`:
 
 - exact peak concurrency **2,305**
-- time-weighted average **855.603469**
-- viewer-hours **855.603**
+- time-weighted average **855.578199**
+- viewer-hours **855.578**
 - peaked at **10:55:00Z**, reading **60 rows**
 
-A note on that average, because two numbers circulate. The graded extract alone averages
-**855.578199**. The serving layer holds every producer that has ever written to this
-service — the CSV extract plus synthetic load — and has no `_source_file` dimension to
-separate them, so through this server the correct answer is **855.603469**. The gap is one
-synthetic session. Quote 855.603469 here; 855.578199 belongs to the extract-scoped
-validation query, which reads the event tables this connection cannot see.
+There is only one number now, which was not true before 2026-08-02. This server used to
+report **855.603469** while the graded extract averaged **855.578199**, and the guide told
+you to quote the former. The gap was a single synthetic session written during API testing
+that carried a July timestamp and so landed inside the extract window — 90,972 ms of active
+time, and 90,972 / 3,600,000 = 0.025270, exactly the difference. It has been removed, so the
+serving layer now reproduces the graded figure to the digit. Quote **855.578199**.
 
 If a rewrite of an existing query disagrees with these, the rewrite is wrong.
 

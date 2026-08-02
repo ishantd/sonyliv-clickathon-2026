@@ -124,7 +124,7 @@ SQL MCP at the database:
 - **`viewing-trends`** and **`investigate-drop`** prompts — ordered procedures.
 
 Every rule in the guide is one that has already been got wrong on this data: summing a
-peak, blending the eleven groupings (measured 9,411.64 against a true 855.60), reading an
+peak, blending the eleven groupings (measured 9,411.64 against a true 855.58), reading an
 unpublished minute as zero viewers, an inclusive right edge adding 4.3%.
 
 ## Verification
