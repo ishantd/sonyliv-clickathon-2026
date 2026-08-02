@@ -16,7 +16,7 @@
 #   CLICKHOUSE_HOST=<service>.clickhouse.cloud
 #   CLICKHOUSE_PORT=9440
 #   CLICKHOUSE_SECURE=true
-#   CLICKHOUSE_DATABASE=sonyliv_prod
+#   CLICKHOUSE_DATABASE=sonyliv        <- the canonical database, NOT sonyliv_prod
 #   CLICKHOUSE_USER=sonyliv_mcp
 #   CLICKHOUSE_PASSWORD=<the password from 009_mcp_reader.sql>
 #   SONYLIV_MCP_TOKEN=<openssl rand -hex 32>
