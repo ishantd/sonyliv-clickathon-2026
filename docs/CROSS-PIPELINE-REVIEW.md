@@ -424,16 +424,35 @@ ambiguous between "this mask does not carry that dimension" and "the dictionary 
 - **raw events → `video_resolution`**, named as a filter dimension
 - **content → `show_name`**, named as a filter dimension
 
-Both are additive schema changes, but they are not free in either pipeline, and for the same
-reason: a new *filterable* dimension is only exactly answerable for peaks at a mask that
-carries it, and peaks cannot be re-derived from a finer mask. `show_name` is functionally
-determined by `content_id`, so it behaves like `category` — free for averages and for filtering
-via the dictionary (§4/§10), needing a real mask only for exact per-show peaks.
-`video_resolution` is a per-event attribute like `app_version` and needs a mask bit, which for
-`concurrency_deltas` means the SummingMergeTree rebuild that keeps getting deferred.
+Both are additive schema changes, but they are not free in either pipeline. `show_name` is
+functionally determined by `content_id`, so it behaves like `category` — free for averages and
+for filtering via the dictionary (§4/§10), needing a real mask only for exact per-show peaks.
 
-Flagging it here because the mask set is in the sort key of both our tables and cannot change
-after rows exist. Worth deciding before loading the unseen day, not after.
+**`video_resolution` is the one to be careful with, and we had it wrong first time.** An
+earlier draft of this section called it "a per-event attribute like `app_version`". That
+comparison is backwards in the way that matters: `app_version` is session-**static** — measured
+0 violations across 10,866 sessions — which is exactly why it is safe as a mask. The spec
+defines `video_resolution` as *"resolution **during video playback**"*, and adaptive bitrate
+changes resolution mid-session by design, so the honest comparison is to `audio_language`
+(8,796 sessions change it), `subtitle_language` (2,980) and `player_version` (1,600) — the three
+`policy.yaml` deliberately excludes from serving masks.
+
+The exclusion is not fastidiousness. A session that changes value does not belong to exactly
+one slice, so `ending_concurrency` stops being additive across that dimension and a per-slice
+peak stops being well-defined. Materialising the mask anyway yields a wrong peak with every
+balance invariant still passing — the same silent shape as the doubled Summing curve.
+
+**This constrains your sort key as much as ours, which is why it is here rather than only in
+our own notes.** Neither of us can change a mask set after rows exist, and the unseen day is
+the moment rows exist.
+
+We are not guessing it either way. `ingest/concurrency/sql/090_validate_serving.sql` now
+carries `d_resolution_static`, which counts sessions holding more than one `video_resolution`
+and reports the verdict in words. It never fails — a non-zero count is information, not a
+defect. Today it reads *"no video_resolution data yet; unseen day not loaded"*; the moment that
+CSV lands it prints ELIGIBLE or NOT eligible. The equivalent for you is one query against
+`events_clean` grouped by `session_key`. Worth running it before deciding, and it costs a
+minute.
 
 ---
 
