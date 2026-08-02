@@ -90,7 +90,7 @@ body="$(jq -n --arg name 'SonyLIV Concurrency Analyst' \
     --arg desc 'Answers viewing-trend questions from the ClickHouse serving layer.' \
     --rawfile instr "$instructions_file" --argjson tools "$tools" \
     '{name:$name, description:$desc, instructions:$instr,
-      provider:"SonyLIV", model:"gemini-2.5-flash", tools:$tools,
+      provider:"SonyLIV", model:"gemini-3.1-pro", tools:$tools,
       artifacts:"default",
       model_parameters:{temperature:0, maxOutputTokens:8192}}')"
 

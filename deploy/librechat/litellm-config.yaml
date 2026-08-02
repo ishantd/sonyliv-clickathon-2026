@@ -29,10 +29,17 @@
 # Bounding the budget (`low`) fixes that one but not the reasoning_content one, so the
 # budget has to go to zero regardless.
 #
-# WHY THERE IS NO gemini-2.5-pro HERE. It cannot: `Budget 0 is invalid. This model only
-# works in thinking mode.` With thinking on, LibreChat drops its answers. So pro is not a
-# slower-but-better option on this path, it is a broken one, and a broken entry in the
-# model picker is worse than a short picker.
+# WHY PRO IS BACK, when this file used to say it could not work.
+#
+# The old note was true of gemini-2.5-pro: `Budget 0 is invalid. This model only works in
+# thinking mode`, and with thinking on LibreChat dropped the answers. That was a 2.5-era
+# response shape, not a permanent property, and it was re-tested rather than assumed.
+#
+# Measured on gemini-3.1-pro-preview with thinkingLevel=high: finishReason STOP, one
+# content part, ZERO thought-parts, visible text intact, 106 thinking tokens spent. The
+# reasoning is internal and does not come back as parts the client has to filter, which is
+# exactly what 2.5-pro got wrong. gemini-3.6-flash behaves the same way (90 thinking
+# tokens), so the choice between them is latency versus depth, not broken versus working.
 # ---------------------------------------------------------------------------
 
 model_list:
@@ -69,7 +76,23 @@ model_list:
       model: openrouter/anthropic/claude-opus-5
       api_key: os.environ/OPENROUTER_API_KEY
 
-  # Gemini is what the specs currently point at, and therefore what actually answers.
+  # What the specs point at, and therefore what actually answers.
+  #
+  # reasoning_effort: high is the whole point of choosing Pro. LiteLLM maps it to Gemini's
+  # thinking budget; `disable` is what the flash entry below uses, and on a model that
+  # REQUIRES thinking that setting is the error the old comment above records.
+  #
+  # The trade being accepted: this is a preview model and Pro is slower than Flash, on a
+  # path that is many small tool-calling turns. That is the cost of depth on a question
+  # like "why did viewers drop", where the model has to chain freshness -> detect -> slice.
+  - model_name: gemini-3.1-pro
+    litellm_params:
+      model: gemini/gemini-3.1-pro-preview
+      api_key: os.environ/GEMINI_API_KEY
+      reasoning_effort: high
+
+  # Kept as the fast fallback. One line in librechat.yaml.tmpl switches back to it if Pro
+  # is too slow in front of an audience.
   - model_name: gemini-2.5-flash
     litellm_params:
       model: gemini/gemini-2.5-flash
