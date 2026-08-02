@@ -33,6 +33,125 @@ having to start at the beginning of time.
 
 ---
 
+## 0.5 DEMO / DASHBOARD — start here
+
+**If you are building the product UI, the demo, or a text-to-SQL layer, read this
+section and stop. You do not need the rollup-mask scheme in §4.**
+
+`pipeline/sql/050_dashboard_views.sql` exists so nothing downstream has to know
+how concurrency is modelled. It is applied by `scripts/bootstrap.sh` at the end
+of the build stage.
+
+### What the track requires, and which view answers it
+
+[`SONYLIV_SUBMISSION_GUIDELINES.md`](https://github.com/sidagarwal04/click-a-thon-26-submissions/blob/main/SONYLIV_SUBMISSION_GUIDELINES.md)
+makes two things mandatory:
+
+| requirement | view |
+|---|---|
+| **1. Concurrency curve** — concurrent sessions over time, peaks and ramps visible | `dash_concurrency_curve` |
+| **2. Dataset filters** — applying to the curve *and* every other view | every view takes the same filter params |
+
+Supporting views: `dash_kpi` (headline numbers), `dash_filter_options`
+(dropdowns), `dash_content` / `dash_top_content` (title leaderboard, enriched),
+`dash_filter_support` (which filter combinations are answerable),
+`dash_health` (is the surface trustworthy right now).
+
+### The curve, copy-pasteable
+
+```sql
+SELECT minute_start, peak_concurrency
+FROM sonyliv.dash_concurrency_curve(
+    win_from = '2026-07-31 00:00:00',
+    win_to   = '2026-08-01 00:00:00',
+    platform = '', country = '', video_type = '', content_id = 0,
+    clip_variant = 'unclipped', entity = 'session')
+ORDER BY minute_start;
+```
+
+Pass `''` (or `0` for `content_id`) for any dimension you are **not** filtering
+on. That is not a convention — a row at mask 1 literally stores `''` in every
+dimension it does not carry, so "unfiltered" and "empty string" are the same
+predicate.
+
+Filter it by setting any combination:
+`platform = 'JIO_ANDROID_TV'`, `video_type = 'vod'`, `content_id = 2078157818`.
+
+### Which dataset column backs which filter
+
+The guidelines require this mapping to be documented.
+
+| filter | dataset column | how it is carried |
+|---|---|---|
+| `platform` | raw CSV `platform` | rollup bit 1, materialised |
+| `country` | raw CSV `country` | rollup bit 2, materialised |
+| `content_id` | raw CSV `content_id` | rollup bit 4, materialised |
+| `video_type` | catalogue `video_type` | rollup bit 8, materialised |
+| title | catalogue `title` | `content_dict` on `content_id` |
+| category | catalogue `category` | `content_dict` on `content_id` |
+| show_name | catalogue `show_name` | `content_dict` on `content_id` |
+
+**NOT filterable on the curve, and say so rather than fake it:** `app_version`,
+`audio_language`, `subtitle_language`, `player_version`, `video_resolution`.
+They exist in `events_clean` but were never given a rollup bit — the mask is four
+bits wide by `policy.yaml`, and widening it means rebuilding
+`concurrency_deltas`, a SummingMergeTree, which is the doubling hazard this
+project has already been bitten by. Query them at the event layer instead.
+
+### Three measures, and they are different things
+
+| column | meaning |
+|---|---|
+| `peak_concurrency` | max **instantaneous** level inside the minute. **Plot this. Quote this as "peak".** |
+| `ending_concurrency` | level at the minute's closing edge. Always ≤ peak |
+| `avg_concurrency` | time-weighted mean from `active_ms`. The only one that is **additive** across minutes |
+
+On the tuning extract those were 2,305 and 2,285 for the same minute. They are
+both correct and they are not interchangeable.
+
+### Verified values on the unseen day (2026-07-31)
+
+Measured on the service after the build, `entity = 'session'`,
+`clip_variant = 'unclipped'`:
+
+| slice | peak |
+|---|---:|
+| all traffic | **19,882** at `2026-07-31 11:15` |
+| `platform = 'JIO_ANDROID_TV'` | 5,928 |
+| `platform = 'ANDROID_PHONE'` | 5,519 |
+| `video_type = 'vod'` | 10,617 |
+| `video_type = 'live'` | 9,428 |
+| busiest single title | 8,219 |
+
+`video_type` values are `vod`, `live`, `unknown` — **not** `movie`/`show`.
+
+### The one way to get a silently wrong number here
+
+Do not pass `rollup_mask` yourself, and do not filter a finer mask by fewer
+dimensions. Filtering mask 15 by `platform = 'JIO_ANDROID_TV'` returns the
+busiest single *(platform, country, video_type, content)* cell — measured
+**1,982** — against that platform's actual peak of **5,928**. That is a **66.6%
+under-report with no error and no empty result**. The
+views derive the mask from which filters are set precisely so this cannot
+happen; that is the reason they exist.
+
+Five combinations are not materialised — masks 6, 7, 10, 11, 14, all of them
+`country` combined with `content` or `video_type`. `dash_filter_support` lists
+them, and the curve returns nothing rather than a wrong grain. A peak **cannot**
+be re-derived from a finer mask: two dimension values peak at different minutes.
+
+### Before you trust a chart
+
+```sql
+SELECT * FROM sonyliv.dash_health;
+```
+
+`dictionary_cold_replicas` must be `0`. An empty dictionary still reports
+`status = 'LOADED'`, so `element_count` is the only honest signal — and on a cold
+replica every title, category and show name silently becomes `__unknown__`.
+
+---
+
 ## 1. Which table answers which metric
 
 | Metric | Read this | Do **not** read |

@@ -11,172 +11,166 @@ import (
 	"github.com/sonyliv-clickathon/ingest/internal/fleet"
 )
 
-// FleetCurve computes per-minute concurrency for a set of sessions the way the
-// pipeline does — by inferring it from the event stream.
+// CurveSource says how a curve was produced, so a reader is never left guessing
+// whether they are looking at the served answer or a recomputation of it.
+type CurveSource string
+
+const (
+	// SourceServed reads concurrency_minute for sealed minutes and computes only
+	// the unsealed tail. This is what the pipeline actually serves.
+	SourceServed CurveSource = "served"
+	// SourceExact re-runs the state machine over every event, scoped to the
+	// fleet's own sessions. Slower and narrower, and the only one that is an
+	// independent oracle.
+	SourceExact CurveSource = "exact"
+)
+
+// ServedCurve reads the materialised metric. It stops at the watermark.
 //
-// This is deliberately NOT internal/mock.Curve. That one is the session-independent
-// heartbeat-lease estimate, which peaks 37% above the exact answer on the tuning
-// extract; plotting it against the fleet's own record would show a gap that is an
-// artifact of the estimator rather than evidence about the pipeline. This runs the
-// real five-term predicate from concurrency/sql/010_recompute_sessions.sql:
-// started AND NOT end_seen AND foreground AND playing AND inside the lease.
+// It used to compute the unsealed tail on the fly, and that was measured at 7.3s
+// against 0.9s for the oracle it was supposed to be faster than — a serving layer
+// slower than the recomputation it replaces is not a serving layer. The cost is
+// structural, not a tuning problem: the tail is scoped by dimension, so it cannot
+// prune on session_key the way the oracle does, and an unscoped derivation has to
+// scan the whole state lookback however small the output window is.
 //
-// Scope comes from fleet_sessions, not from a list of ids in the query text.
+// So it does not compute anything. Sealed minutes are a GROUP BY over
+// pre-aggregated rows and the answer arrives in milliseconds; the newest couple of
+// minutes are simply not served yet, which is what `sealed_through` reports and
+// what every real analytics pipeline does. The fleet's own line still runs to now,
+// so the distance between the two lines at the right-hand edge IS the pipeline's
+// lag, displayed rather than hidden.
 //
-// It used to be the list, which forced a 2,000-session cap: 65 bytes per id
-// against ClickHouse's 256 KB max_query_size, and a "narrow the filter to compare
-// exactly" warning once you exceeded it. That ceiling was an artifact of the
-// mechanism, not of the problem — the fleet's sessions are already a table, so the
-// scope is a subquery and the cap disappears with it.
+// Scoped by DIMENSION, not by session. concurrency_minute is a metric over all
+// traffic — that is what makes it a serving layer rather than a fleet feature — so
+// an unfiltered read counts every session active in the window, whoever produced
+// it. Where that distinction matters, ExactFleetCurve is the session-scoped answer.
 //
-// The dimension filter is applied here too, against the same columns the registry
-// filters on. Two expressions of one Filter is a drift risk worth naming, so they
-// are kept literally parallel: same fields, same equality semantics, and every
-// value bound as a parameter rather than interpolated.
 // db is passed rather than read off the client so the dataset picker can point
 // this graph at another database without a second connection. It arrives from
 // resolveDatabase, so it is an allowlisted literal and never request text.
-func FleetCurve(ctx context.Context, c *chx.Client, db string, f fleet.Filter,
+func ServedCurve(ctx context.Context, c *chx.Client, sealer *Sealer, db string, f fleet.Filter,
+	from, to time.Time) ([]fleet.CurvePoint, time.Time, error) {
+
+	sealed, err := sealer.Watermark(ctx, db)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	// Never read sealed rows past the requested window, and never below its start.
+	cut := sealed
+	if cut.After(to) {
+		cut = to
+	}
+	if cut.Before(from) {
+		cut = from
+	}
+
+	if !cut.After(from) {
+		return []fleet.CurvePoint{}, sealed, nil
+	}
+	pts, err := readSealed(ctx, c, db, f, from, cut)
+	return pts, sealed, err
+}
+
+// dimPredicate filters by dimension. Empty fields match everything, which is what
+// lets one query serve the filtered and unfiltered graph.
+//
+// Written once and used by both halves of ServedCurve: if the sealed half and the
+// live half disagreed about what a filter means, the curve would step at the
+// watermark and the step would look like a pipeline defect.
+const dimPredicate = `
+      ({content_id:Int64}   = 0  OR content_id  = {content_id:Int64})
+  AND ({video_type:String}  = '' OR video_type  = {video_type:String})
+  AND ({platform:String}    = '' OR platform    = {platform:String})
+  AND ({app_version:String} = '' OR app_version = {app_version:String})
+  AND ({country:String}     = '' OR country     = {country:String})`
+
+func dimParams(f fleet.Filter, extra map[string]string) clickhouse.Parameters {
+	p := clickhouse.Parameters{
+		"content_id":  fmt.Sprint(f.ContentID),
+		"video_type":  f.VideoType,
+		"platform":    f.Platform,
+		"app_version": f.AppVersion,
+		"country":     f.Country,
+	}
+	for k, v := range extra {
+		p[k] = v
+	}
+	return p
+}
+
+// readSealed serves pre-aggregated minutes.
+//
+// sum(sessions) across dimension buckets is exact, not an approximation: a
+// session's dimensions are fixed for its life, so it lands in exactly one bucket
+// and is counted once.
+func readSealed(ctx context.Context, c *chx.Client, db string, f fleet.Filter,
+	from, to time.Time) ([]fleet.CurvePoint, error) {
+
+	q := fmt.Sprintf(`
+		SELECT minute,
+		       toUInt64(sum(sessions))  AS sessions,
+		       toInt64(sum(active_ms))  AS active_ms
+		FROM %s.concurrency_minute
+		WHERE minute >= {from:DateTime} AND minute < {to:DateTime}
+		  AND %s
+		GROUP BY minute ORDER BY minute`, db, dimPredicate)
+
+	qctx := clickhouse.Context(ctx, clickhouse.WithParameters(dimParams(f, map[string]string{
+		"from": from.Format("2006-01-02 15:04:05"),
+		"to":   to.Format("2006-01-02 15:04:05"),
+	})))
+	return scanCurve(c.Conn.Query(qctx, q))
+}
+
+// ExactFleetCurve is the oracle: the full state machine, scoped to the fleet's own
+// sessions rather than to a dimension.
+//
+// Kept alongside the served path deliberately. The served metric is what the
+// pipeline answers with, and a metric cannot validate itself — this is the
+// independent derivation the comparison graph checks it against, and the only one
+// that can prove the fleet and ClickHouse agree on a specific set of sessions.
+func ExactFleetCurve(ctx context.Context, c *chx.Client, db string, f fleet.Filter,
 	from, to time.Time, timeoutMS int64) ([]fleet.CurvePoint, error) {
 
-	sql := fmt.Sprintf(`
-WITH
-    {timeout:Int64}                          AS timeout_ms,
-    toDateTime64({from:String}, 3, 'UTC')    AS w_from,
-    toDateTime64({to:String},   3, 'UTC')    AS w_to,
-    -- The scope: every fleet session the filter admits. Hashing happens
-    -- server-side and stays on events_dedup's leading sort-key column, so this is
-    -- a key condition rather than a scan — and reimplementing ClickHouse's SipHash
-    -- in Go would be a second definition that could disagree with this one.
-    --
-    -- Empty filter fields match everything, which is what makes one query serve
-    -- both the unfiltered and the filtered graph.
-    keys AS (
-        SELECT sipHash64(video_session_id) AS session_key
-        FROM %[1]s.fleet_sessions FINAL
-        WHERE removed = false
-          AND ({content_id:Int64}   = 0  OR content_id  = {content_id:Int64})
-          AND ({video_type:String}  = '' OR video_type  = {video_type:String})
-          AND ({platform:String}    = '' OR platform    = {platform:String})
-          AND ({app_version:String} = '' OR app_version = {app_version:String})
-          AND ({country:String}     = '' OR country     = {country:String})
-    ),
-    scoped AS (
-        SELECT session_key, event_ts, signal,
-               signal IN ('play','resume','liveness') AS is_liveness
-        FROM %[1]s.events_dedup
-        WHERE session_key IN (SELECT session_key FROM keys) AND event_ts <= w_to
-    ),
-    -- Collapse the millisecond first. events_dedup yields one row per
-    -- (session, ts, type, event), so a single instant can still carry a background
-    -- and a pause together.
-    instants AS (
-        SELECT session_key, event_ts,
-               max(signal = 'session_start')    AS has_start,
-               max(signal = 'session_end')      AS has_end,
-               max(signal = 'background')       AS has_background,
-               max(signal = 'foreground')       AS has_foreground,
-               max(signal IN ('pause','error')) AS has_play_stop,
-               max(signal IN ('play','resume')) AS has_play_start,
-               max(is_liveness)                 AS has_liveness
-        FROM scoped GROUP BY session_key, event_ts
-    ),
-    -- Stop-wins precedence within an instant: -1 beats +1.
-    setters AS (
-        SELECT *,
-               multiIf(has_end OR has_background, toInt8(-1),
-                       has_start OR has_foreground, toInt8(1), toInt8(0)) AS fg_setter,
-               multiIf(has_end OR has_play_stop, toInt8(-1),
-                       has_play_start, toInt8(1), toInt8(0))              AS play_setter
-        FROM instants
-    ),
-    stated AS (
-        SELECT *,
-               max(has_start) OVER w                                    AS started,
-               max(has_end)   OVER w                                    AS end_seen,
-               argMaxIf(fg_setter,   event_ts, fg_setter   != 0) OVER w  AS fg_state,
-               argMaxIf(play_setter, event_ts, play_setter != 0) OVER w  AS play_state
-        FROM setters
-        WINDOW w AS (PARTITION BY session_key ORDER BY event_ts
-                     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-    ),
-    leased AS (
-        SELECT *,
-               maxIf(event_ts, has_liveness AND started = 1 AND end_seen = 0
-                     AND fg_state = 1 AND play_state = 1) OVER
-                   (PARTITION BY session_key ORDER BY event_ts
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS last_eligible,
-               leadInFrame(event_ts, 1, w_to + toIntervalMillisecond(timeout_ms)) OVER
-                   (PARTITION BY session_key ORDER BY event_ts
-                    ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS next_ts
-        FROM stated
-    ),
-    segments AS (
-        SELECT session_key, event_ts AS s,
-               least(next_ts, last_eligible + toIntervalMillisecond(timeout_ms)) AS e
-        FROM leased
-        WHERE started = 1 AND end_seen = 0 AND fg_state = 1 AND play_state = 1
-          AND last_eligible > toDateTime64(0, 3, 'UTC')
-          AND event_ts < last_eligible + toIntervalMillisecond(timeout_ms)
-    ),
-    -- Segments provably cannot overlap within a session: a segment's end is at most
-    -- the next event's timestamp. So island detection is a lag comparison rather
-    -- than a running maximum.
-    marked AS (
-        SELECT *, s > lagInFrame(e, 1, toDateTime64(0, 3, 'UTC')) OVER
-            (PARTITION BY session_key ORDER BY s, e
-             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS new_island
-        FROM segments WHERE e > s
-    ),
-    numbered AS (
-        SELECT *, sum(new_island) OVER
-            (PARTITION BY session_key ORDER BY s, e
-             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS island
-        FROM marked
-    ),
-    islands AS (
-        SELECT session_key,
-               greatest(min(s), w_from) AS start_time,
-               least(max(e),   w_to)    AS end_time
-        FROM numbered GROUP BY session_key, island
-        HAVING end_time > start_time
-    ),
-    -- Explode each island into the minutes it touches. The last minute is derived
-    -- from end_time minus one millisecond because intervals are half-open: an
-    -- island ending exactly at 10:02:00.000 must not appear in the 10:02 minute.
-    exploded AS (
-        SELECT session_key, start_time, end_time,
-               arrayJoin(range(
-                   toUInt32(toUnixTimestamp(toStartOfMinute(start_time))),
-                   toUInt32(toUnixTimestamp(toStartOfMinute(
-                       end_time - toIntervalMillisecond(1)))) + 60,
-                   60)) AS m
-        FROM islands
-    )
--- uniqExact, NOT count(): a session can have several active islands inside one
--- minute (pause and resume within the same minute produces two), and this counts
--- sessions rather than islands. count() reported 21 for a fleet of 20.
-SELECT toDateTime(m, 'UTC')   AS minute,
-       uniqExact(session_key) AS sessions,
-       sum(dateDiff('millisecond',
-             greatest(start_time, toDateTime64(m, 3, 'UTC')),
-             least(end_time,      toDateTime64(m + 60, 3, 'UTC')))) AS active_ms
-FROM exploded
-WHERE toDateTime64(m, 3, 'UTC') < w_to
-  AND toDateTime64(m + 60, 3, 'UTC') > w_from
-GROUP BY m ORDER BY m`, db)
+	scope := `session_key IN (
+	        SELECT sipHash64(video_session_id)
+	        FROM %[1]s.fleet_sessions FINAL
+	        WHERE video_session_id NOT IN (
+	            SELECT video_session_id FROM %[1]s.fleet_sessions WHERE removed
+	        )
+	          AND ({content_id:Int64}   = 0  OR content_id  = {content_id:Int64})
+	          AND ({video_type:String}  = '' OR video_type  = {video_type:String})
+	          AND ({platform:String}    = '' OR platform    = {platform:String})
+	          AND ({app_version:String} = '' OR app_version = {app_version:String})
+	          AND ({country:String}     = '' OR country     = {country:String})
+	    ) AND event_ts <= w_to`
 
-	rows, err := c.Conn.Query(ctx, sql,
-		clickhouse.Named("content_id", f.ContentID),
-		clickhouse.Named("video_type", f.VideoType),
-		clickhouse.Named("platform", f.Platform),
-		clickhouse.Named("app_version", f.AppVersion),
-		clickhouse.Named("country", f.Country),
-		clickhouse.Named("timeout", timeoutMS),
-		clickhouse.Named("from", from.UTC().Format("2006-01-02 15:04:05.000")),
-		clickhouse.Named("to", to.UTC().Format("2006-01-02 15:04:05.000")))
+	q := fmt.Sprintf(`
+WITH
+    {timeout:Int64}                       AS timeout_ms,
+    toDateTime64({from:String}, 3, 'UTC') AS w_from,
+    toDateTime64({to:String},   3, 'UTC') AS w_to,
+`+derivationCTE+`
+SELECT toDateTime(m, 'UTC') AS minute,
+`+minuteAggregate+`
+FROM exploded
+WHERE toDateTime64(m, 3, 'UTC') <  w_to
+  AND toDateTime64(m + 60, 3, 'UTC') > w_from
+GROUP BY minute ORDER BY minute`,
+		db, fmt.Sprintf(scope, db))
+
+	qctx := clickhouse.Context(ctx, clickhouse.WithParameters(dimParams(f, map[string]string{
+		"timeout": fmt.Sprint(timeoutMS),
+		"from":    from.Format("2006-01-02 15:04:05.000"),
+		"to":      to.Format("2006-01-02 15:04:05.000"),
+	})))
+	return scanCurve(c.Conn.Query(qctx, q))
+}
+
+func scanCurve(rows driverRows, err error) ([]fleet.CurvePoint, error) {
 	if err != nil {
-		return nil, fmt.Errorf("fleet curve: %w", err)
+		return nil, fmt.Errorf("curve query: %w", err)
 	}
 	defer rows.Close()
 
@@ -188,10 +182,18 @@ GROUP BY m ORDER BY m`, db)
 			activeMS int64
 		)
 		if err := rows.Scan(&p.Minute, &sessions, &activeMS); err != nil {
-			return nil, fmt.Errorf("scan fleet curve point: %w", err)
+			return nil, fmt.Errorf("scan curve point: %w", err)
 		}
 		p.Sessions, p.ActiveMS = sessions, activeMS
 		out = append(out, p)
 	}
 	return out, rows.Err()
+}
+
+// driverRows is the subset of the ClickHouse rows interface scanCurve needs.
+type driverRows interface {
+	Next() bool
+	Scan(...any) error
+	Close() error
+	Err() error
 }

@@ -55,10 +55,10 @@ type Options struct {
 	// AllowUnauthenticated is set.
 	Token string
 	// AllowUnauthenticated permits an empty Token, serving open writes. Only
-	// defensible where the network is the boundary -- a host with no public
-	// address, reachable over a private path. It is a flag rather than an
-	// inferred default so the decision is visible wherever the service is
-	// launched.
+	// defensible where the network is genuinely the boundary -- a listen port no
+	// security group admits from outside. Do not lean on the host lacking a
+	// public address; it may well have one. It is a flag rather than an inferred
+	// default so the decision is visible wherever the service is launched.
 	AllowUnauthenticated bool
 
 	// BatchSize caps rows per chunk. It also keeps _batch_row_seq inside the 20

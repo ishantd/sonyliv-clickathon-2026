@@ -252,6 +252,10 @@ export interface FleetCurveResponse {
   /** Set when the comparison query failed. The generator line still renders. */
   clickhouse_error?: string;
   scoped_sessions: number;
+  /** "served" reads the materialised metric; "exact" re-derives, fleet-scoped. */
+  source: "served" | "exact";
+  /** The metric is complete below this instant. Absent on the exact path. */
+  sealed_through?: string;
   timeout_ms: number;
 }
 

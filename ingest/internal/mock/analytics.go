@@ -95,11 +95,11 @@ type database struct {
 // preferredDefault is the dataset the UI opens on.
 //
 // `sonyliv` is the submission's own database: the pipeline's DDL, the interval
-// tier and the serving tier all target it, and it is what the README and the
-// deck quote figures from. `sonyliv_prod` is a separate, diverged deployment
-// that happens to live on the same service — it is the server's WRITE target,
-// which is why it used to be the default here, but defaulting a READ to it means
-// the dashboard opens on numbers that agree with nothing else we publish.
+// tier and the serving tier all target it, and it is what the README, the deck
+// and the benchmark quote figures from. The server's own configured database is
+// `sonyliv_demo`, which is the right WRITE target and the wrong thing to open a
+// READ on — the dashboard would show numbers that agree with nothing else we
+// publish.
 //
 // Falls back to the server's configured database when `sonyliv` is not present,
 // so this is a preference rather than a requirement.
@@ -111,14 +111,23 @@ const preferredDefault = "sonyliv"
 // importantly — the windows, because the interesting hour is a fact about the
 // data that no query can infer a good LABEL for. A discovered database that is
 // not listed here still appears, with windows derived from its own contents.
+//
+// THE ONE ASYMMETRY worth knowing, and it is not fixed by anything here:
+// /live's served line reads `concurrency_minute`, which is written ONLY by the
+// in-process sealer, and the sealer writes to the server's own database. So a
+// dataset other than the configured one has no sealed rows and /live's
+// ClickHouse line is empty for it — correctly, not by failure. /analytics reads
+// the minute serving tier instead, which every dataset below has, so it is the
+// surface that works for all of them.
 var curated = map[string]database{
 	preferredDefault: {
 		Name:     preferredDefault,
 		Label:    "Submission pipeline",
 		Writable: false,
 		Note: "The submission's own database: every table, view and materialized view built by " +
-			"pipeline/sql, loaded through scripts/bootstrap.sh. This is the dataset the README, the " +
-			"deck and the benchmark all quote, and what every panel here opens on.",
+			"pipeline/sql, loaded through scripts/bootstrap.sh. 6,911,308 events for 2026-07-31, " +
+			"peaking at 14,506 at 11:15. This is the dataset the README, the deck and the benchmark " +
+			"all quote, and what every panel here opens on.",
 		// The FIRST window is what the page opens on, so it is the one that has to
 		// show the shape of the day rather than the most quotable number in it.
 		//
@@ -127,36 +136,53 @@ var curated = map[string]database{
 		// digits by 11:32 — the events simply stop there. An 11:00–12:00 window
 		// therefore spends half its width on the drain and opens on a curve that
 		// falls off a cliff, which reads as a broken pipeline rather than as the
-		// end of a match. 10:00–11:35 is the event: ramp, peak and fall, which is
+		// end of a match. 10:20–11:35 is the event: ramp, peak and fall, which is
 		// what "one full window of interest, with visible peaks and ramps" means.
 		Windows: []window{
 			{Key: "event", Label: "Match window (31 Jul)", From: "2026-07-31 10:20:00", To: "2026-07-31 11:35:00"},
 			{Key: "peak", Label: "Peak hour", From: "2026-07-31 11:00:00", To: "2026-07-31 12:00:00"},
 			{Key: "day", Label: "Whole day", From: "2026-07-31 00:00:00", To: "2026-08-01 00:00:00"},
-			{Key: "all", Label: "Everything published", From: "2026-07-26 00:00:00", To: "2026-08-05 00:00:00"},
+			{Key: "span", Label: "Everything loaded", From: "2026-07-29 00:00:00", To: "2026-08-01 00:00:00"},
 			{Key: "1h", Label: "Last hour", RelMinutes: 60},
+		},
+	},
+	"sonyliv_demo": {
+		Name:     "sonyliv_demo",
+		Label:    "Live demo",
+		Writable: true,
+		Note: "What the generator, fleet and API write as you drive them. This is the server's " +
+			"configured database, so it is the only dataset the simulator writes into, and the only " +
+			"one /live can chart a served curve for — the sealer materialises concurrency_minute " +
+			"here and nowhere else.",
+		// Relative windows only, and that is a property of the dataset rather than
+		// a shortcut: this one has no fixed interesting hour, because its contents
+		// are whatever was driven into it in the last few minutes.
+		Windows: []window{
+			{Key: "1h", Label: "Last hour", RelMinutes: 60},
+			{Key: "6h", Label: "Last 6 hours", RelMinutes: 360},
+			{Key: "24h", Label: "Last 24 hours", RelMinutes: 1440},
 		},
 	},
 	"sonyliv_prod": {
 		Name:     "sonyliv_prod",
 		Label:    "Mock ingestion",
-		Writable: true,
-		Note: "The graded July extract plus everything the generator, fleet and API have written since. " +
-			"Writable, and the only dataset the simulator writes into. The hot hour reproduces the " +
-			"canonical 2,305 / 855.578199.",
+		Writable: false,
+		Note: "The graded July extract plus everything an earlier deployment wrote into it. A " +
+			"diverged deployment that happens to share this service: its hot hour reproduces the " +
+			"canonical 2,305 / 855.578199, and nothing else here should be reconciled against it.",
 		Windows: []window{
 			{Key: "hot", Label: "Hot hour (26 Jul)", From: "2026-07-26 10:00:00", To: "2026-07-26 11:00:00"},
 			{Key: "extract", Label: "Whole extract", From: "2026-07-14 00:00:00", To: "2026-07-27 00:00:00"},
 			{Key: "1h", Label: "Last hour", RelMinutes: 60},
-			{Key: "6h", Label: "Last 6 hours", RelMinutes: 360},
 		},
 	},
 	"sonyliv_unseen": {
 		Name:     "sonyliv_unseen",
-		Label:    "Evaluation set — 31 Jul",
+		Label:    "Unseen-day load",
 		Writable: false,
-		Note: "7,000,000 events for 2026-07-31, loaded through the same pipeline. Read-only here: the " +
-			"simulator will not write into it, so it stays exactly as it was loaded. Peak 14,506 at 11:15.",
+		Note: "An earlier load of 2026-07-31 through the same pipeline. Kept selectable because it " +
+			"is a second, independent path to the same day — if it and `sonyliv` disagree, one of " +
+			"the two loads is wrong and that is worth knowing.",
 		Windows: []window{
 			{Key: "peak", Label: "Peak hour (31 Jul)", From: "2026-07-31 11:00:00", To: "2026-07-31 12:00:00"},
 			{Key: "day", Label: "Whole day", From: "2026-07-31 00:00:00", To: "2026-08-01 00:00:00"},

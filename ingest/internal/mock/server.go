@@ -34,6 +34,7 @@ type Server struct {
 	runner     *Runner
 	manual     *Manual
 	fleet      *fleet.Fleet
+	sealer     *Sealer
 	token      string
 	corsOrigin string
 	timeoutMS  int64
@@ -59,6 +60,7 @@ func NewServer(client *chx.Client, token, corsOrigin, selfURL string, timeoutMS 
 		corsOrigin: corsOrigin,
 		timeoutMS:  timeoutMS,
 	}
+	s.sealer = NewSealer(client, timeoutMS)
 	// The fleet evaluates the same lease the stepper and the pipeline do. Passing
 	// timeoutMS rather than a constant is what keeps its graph comparable to
 	// ClickHouse's: a mismatch here would show up as a permanent gap between the two
@@ -77,7 +79,13 @@ func NewServer(client *chx.Client, token, corsOrigin, selfURL string, timeoutMS 
 // Separate from Handler because the fleet keeps emitting events whether or not
 // anyone is looking at the dashboard — that is what makes it a simulator rather
 // than a UI.
-func (s *Server) Run(ctx context.Context) { s.fleet.Run(ctx) }
+func (s *Server) Run(ctx context.Context) {
+	// The sealer materialises closed minutes into concurrency_minute so reads do
+	// not re-derive history. It runs for the process lifetime alongside the fleet,
+	// and independently of it: the metric covers all traffic, not just the fleet's.
+	go s.sealer.Run(ctx)
+	s.fleet.Run(ctx)
+}
 
 // ReconcileFleet restores persisted sessions and catches them up. Call before Run.
 //

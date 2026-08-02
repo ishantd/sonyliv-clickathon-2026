@@ -128,9 +128,9 @@ func (f *Fleet) ClearEnded(ctx context.Context) (int, error) {
 	if len(ids) == 0 || f.store == nil {
 		return len(ids), nil
 	}
-	if err := f.store.Save(ctx, removedRows(ids, time.Now().UTC())); err != nil {
-		log.Printf("fleet: tombstone %d cleared sessions: %v", len(ids), err)
-		return len(ids), fmt.Errorf("cleared %d sessions in memory but the tombstones did not land, "+
+	if err := f.store.Clear(ctx, ids); err != nil {
+		log.Printf("fleet: mark %d sessions cleared: %v", len(ids), err)
+		return len(ids), fmt.Errorf("cleared %d sessions in memory but the markers did not land, "+
 			"so they will return on restart: %w", len(ids), err)
 	}
 	return len(ids), nil
